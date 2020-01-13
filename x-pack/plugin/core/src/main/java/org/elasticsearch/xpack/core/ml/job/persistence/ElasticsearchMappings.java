@@ -23,6 +23,7 @@ import org.elasticsearch.common.collect.ImmutableOpenMap;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.plugins.MapperPlugin;
+import org.elasticsearch.xpack.core.ml.categorization.CategorizationConfig;
 import org.elasticsearch.xpack.core.ml.datafeed.ChunkingConfig;
 import org.elasticsearch.xpack.core.ml.datafeed.DatafeedConfig;
 import org.elasticsearch.xpack.core.ml.datafeed.DatafeedTimingStats;
@@ -160,6 +161,7 @@ public class ElasticsearchMappings {
         addJobConfigFields(builder);
         addDatafeedConfigFields(builder);
         addDataFrameAnalyticsFields(builder);
+        addCategorizationFields(builder);
 
         builder.endObject()
                .endObject()
@@ -518,6 +520,26 @@ public class ElasticsearchMappings {
         .endObject();
     }
 
+    public static void addCategorizationFields(XContentBuilder builder) throws IOException {
+        builder.startObject(CategorizationConfig.ID.getPreferredName())
+            .field(TYPE, KEYWORD)
+            .endObject()
+            .startObject(CategorizationConfig.OVERRIDES.getPreferredName())
+            .field(ENABLED, false)
+            .endObject()
+            .startObject(CategorizationConfig.CATEGORIES.getPreferredName())
+            .field(ENABLED, false)
+            .endObject()
+            .startObject(CategorizationConfig.UPDATE_TIME.getPreferredName())
+            .field(TYPE, DATE)
+            .endObject()
+            .startObject(CategorizationConfig.CATEGORIZATION_ANALYZER.getPreferredName())
+            .field(ENABLED, false)
+            .endObject()
+            .startObject(CategorizationConfig.CATEGORIZATION_FILTERS.getPreferredName())
+            .field(TYPE, KEYWORD)
+            .endObject();
+    }
     /**
      * Creates a default mapping which has a dynamic template that
      * treats all dynamically added fields as keywords. This is needed

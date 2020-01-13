@@ -84,7 +84,7 @@ public class CategorizationAnalyzerConfig implements ToXContentFragment, Writeab
      *
      * The parser is strict when parsing config and lenient when parsing cluster state.
      */
-    static CategorizationAnalyzerConfig buildFromXContentFragment(XContentParser parser, boolean ignoreUnknownFields) throws IOException {
+    public static CategorizationAnalyzerConfig buildFromXContentFragment(XContentParser parser, boolean ignoreUnknownFields) throws IOException {
 
         CategorizationAnalyzerConfig.Builder builder = new CategorizationAnalyzerConfig.Builder();
 

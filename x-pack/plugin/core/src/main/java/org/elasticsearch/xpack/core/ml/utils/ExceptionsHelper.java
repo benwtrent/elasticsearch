@@ -47,6 +47,10 @@ public class ExceptionsHelper {
         return new ResourceNotFoundException("No known trained model with model_id [{}]", modelId);
     }
 
+    public static ResourceNotFoundException missingCategorizationConfig(String categorizationConfigId) {
+        return new ResourceNotFoundException("No known categorization config with id [{}]", categorizationConfigId);
+    }
+
     public static ElasticsearchException serverError(String msg) {
         return new ElasticsearchException(msg);
     }

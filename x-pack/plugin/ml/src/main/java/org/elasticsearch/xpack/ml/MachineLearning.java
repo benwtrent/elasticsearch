@@ -65,6 +65,7 @@ import org.elasticsearch.xpack.core.action.XPackInfoFeatureAction;
 import org.elasticsearch.xpack.core.action.XPackUsageFeatureAction;
 import org.elasticsearch.xpack.core.ml.MachineLearningField;
 import org.elasticsearch.xpack.core.ml.MlMetaIndex;
+import org.elasticsearch.xpack.core.ml.action.CategorizeTextAction;
 import org.elasticsearch.xpack.core.ml.action.CloseJobAction;
 import org.elasticsearch.xpack.core.ml.action.ExplainDataFrameAnalyticsAction;
 import org.elasticsearch.xpack.core.ml.action.DeleteCalendarAction;
@@ -86,6 +87,7 @@ import org.elasticsearch.xpack.core.ml.action.GetBucketsAction;
 import org.elasticsearch.xpack.core.ml.action.GetCalendarEventsAction;
 import org.elasticsearch.xpack.core.ml.action.GetCalendarsAction;
 import org.elasticsearch.xpack.core.ml.action.GetCategoriesAction;
+import org.elasticsearch.xpack.core.ml.action.GetCategorizationConfigsAction;
 import org.elasticsearch.xpack.core.ml.action.GetDataFrameAnalyticsAction;
 import org.elasticsearch.xpack.core.ml.action.GetDataFrameAnalyticsStatsAction;
 import org.elasticsearch.xpack.core.ml.action.GetDatafeedsAction;
@@ -109,6 +111,7 @@ import org.elasticsearch.xpack.core.ml.action.PostCalendarEventsAction;
 import org.elasticsearch.xpack.core.ml.action.PostDataAction;
 import org.elasticsearch.xpack.core.ml.action.PreviewDatafeedAction;
 import org.elasticsearch.xpack.core.ml.action.PutCalendarAction;
+import org.elasticsearch.xpack.core.ml.action.PutCategorizationConfigAction;
 import org.elasticsearch.xpack.core.ml.action.PutDataFrameAnalyticsAction;
 import org.elasticsearch.xpack.core.ml.action.PutDatafeedAction;
 import org.elasticsearch.xpack.core.ml.action.PutFilterAction;
@@ -137,6 +140,7 @@ import org.elasticsearch.xpack.core.ml.job.persistence.AnomalyDetectorsIndexFiel
 import org.elasticsearch.xpack.core.ml.job.persistence.ElasticsearchMappings;
 import org.elasticsearch.xpack.core.ml.notifications.AuditorField;
 import org.elasticsearch.xpack.core.template.TemplateUtils;
+import org.elasticsearch.xpack.ml.action.TransportCategorizeTextAction;
 import org.elasticsearch.xpack.ml.action.TransportCloseJobAction;
 import org.elasticsearch.xpack.ml.action.TransportExplainDataFrameAnalyticsAction;
 import org.elasticsearch.xpack.ml.action.TransportDeleteCalendarAction;
@@ -158,6 +162,7 @@ import org.elasticsearch.xpack.ml.action.TransportGetBucketsAction;
 import org.elasticsearch.xpack.ml.action.TransportGetCalendarEventsAction;
 import org.elasticsearch.xpack.ml.action.TransportGetCalendarsAction;
 import org.elasticsearch.xpack.ml.action.TransportGetCategoriesAction;
+import org.elasticsearch.xpack.ml.action.TransportGetCategorizationConfigsAction;
 import org.elasticsearch.xpack.ml.action.TransportGetDataFrameAnalyticsAction;
 import org.elasticsearch.xpack.ml.action.TransportGetDataFrameAnalyticsStatsAction;
 import org.elasticsearch.xpack.ml.action.TransportGetDatafeedsAction;
@@ -181,6 +186,7 @@ import org.elasticsearch.xpack.ml.action.TransportPostCalendarEventsAction;
 import org.elasticsearch.xpack.ml.action.TransportPostDataAction;
 import org.elasticsearch.xpack.ml.action.TransportPreviewDatafeedAction;
 import org.elasticsearch.xpack.ml.action.TransportPutCalendarAction;
+import org.elasticsearch.xpack.ml.action.TransportPutCategorizationConfigAction;
 import org.elasticsearch.xpack.ml.action.TransportPutDataFrameAnalyticsAction;
 import org.elasticsearch.xpack.ml.action.TransportPutDatafeedAction;
 import org.elasticsearch.xpack.ml.action.TransportPutFilterAction;
@@ -200,6 +206,7 @@ import org.elasticsearch.xpack.ml.action.TransportUpdateModelSnapshotAction;
 import org.elasticsearch.xpack.ml.action.TransportUpdateProcessAction;
 import org.elasticsearch.xpack.ml.action.TransportValidateDetectorAction;
 import org.elasticsearch.xpack.ml.action.TransportValidateJobConfigAction;
+import org.elasticsearch.xpack.ml.categorization.persistence.CategorizationProvider;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedJobBuilder;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedManager;
 import org.elasticsearch.xpack.ml.datafeed.persistence.DatafeedConfigProvider;
@@ -255,6 +262,9 @@ import org.elasticsearch.xpack.ml.rest.calendar.RestGetCalendarsAction;
 import org.elasticsearch.xpack.ml.rest.calendar.RestPostCalendarEventAction;
 import org.elasticsearch.xpack.ml.rest.calendar.RestPutCalendarAction;
 import org.elasticsearch.xpack.ml.rest.calendar.RestPutCalendarJobAction;
+import org.elasticsearch.xpack.ml.rest.categorization.RestCategorizeTextAction;
+import org.elasticsearch.xpack.ml.rest.categorization.RestGetCategorizationConfigsAction;
+import org.elasticsearch.xpack.ml.rest.categorization.RestPutCategorizationConfigAction;
 import org.elasticsearch.xpack.ml.rest.datafeeds.RestDeleteDatafeedAction;
 import org.elasticsearch.xpack.ml.rest.datafeeds.RestGetDatafeedStatsAction;
 import org.elasticsearch.xpack.ml.rest.datafeeds.RestGetDatafeedsAction;
@@ -655,6 +665,9 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
         // Perform node startup operations
         nativeStorageProvider.cleanupLocalTmpStorageInCaseOfUncleanShutdown();
 
+        // Categorization components
+        CategorizationProvider categorizationProvider = new CategorizationProvider(client);
+
         return Arrays.asList(
                 mlLifeCycleService,
                 new MlControllerHolder(mlController),
@@ -678,7 +691,8 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
                 dataFrameAnalyticsConfigProvider,
                 nativeStorageProvider,
                 modelLoadingService,
-                trainedModelProvider
+                trainedModelProvider,
+                categorizationProvider
         );
     }
 
@@ -765,7 +779,10 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
             new RestGetTrainedModelsAction(restController),
             new RestDeleteTrainedModelAction(restController),
             new RestGetTrainedModelsStatsAction(restController),
-            new RestPutTrainedModelAction(restController)
+            new RestPutTrainedModelAction(restController),
+            new RestGetCategorizationConfigsAction(restController),
+            new RestPutCategorizationConfigAction(restController),
+            new RestCategorizeTextAction(restController)
         );
     }
 
@@ -842,6 +859,9 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
                 new ActionHandler<>(DeleteTrainedModelAction.INSTANCE, TransportDeleteTrainedModelAction.class),
                 new ActionHandler<>(GetTrainedModelsStatsAction.INSTANCE, TransportGetTrainedModelsStatsAction.class),
                 new ActionHandler<>(PutTrainedModelAction.INSTANCE, TransportPutTrainedModelAction.class),
+                new ActionHandler<>(GetCategorizationConfigsAction.INSTANCE, TransportGetCategorizationConfigsAction.class),
+                new ActionHandler<>(PutCategorizationConfigAction.INSTANCE, TransportPutCategorizationConfigAction.class),
+                new ActionHandler<>(CategorizeTextAction.INSTANCE, TransportCategorizeTextAction.class),
                 usageAction,
                 infoAction);
     }
