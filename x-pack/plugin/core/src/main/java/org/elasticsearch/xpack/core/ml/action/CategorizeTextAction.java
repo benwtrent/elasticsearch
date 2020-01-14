@@ -17,6 +17,7 @@ import org.elasticsearch.common.xcontent.ConstructingObjectParser;
 import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.ingest.IngestDocument;
 import org.elasticsearch.xpack.core.ml.categorization.CategorizationConfig;
 import org.elasticsearch.xpack.core.ml.job.messages.Messages;
 import org.elasticsearch.xpack.core.ml.job.results.CategoryDefinition;
@@ -56,6 +57,8 @@ public class CategorizeTextAction extends ActionType<CategorizeTextAction.Respon
 
         private String text;
         private String categorizationConfigId;
+        //TODO remove
+        private boolean cacheCategorization;
 
         public Request(String text, String categorizationConfigId) {
             this.text = text;
@@ -69,6 +72,7 @@ public class CategorizeTextAction extends ActionType<CategorizeTextAction.Respon
             super(in);
             this.text = in.readString();
             this.categorizationConfigId = in.readString();
+            this.cacheCategorization = in.readBoolean();
         }
 
         public String getText() {
@@ -83,6 +87,14 @@ public class CategorizeTextAction extends ActionType<CategorizeTextAction.Respon
             this.categorizationConfigId = categorizationConfigId;
         }
 
+        public boolean isCacheCategorization() {
+            return cacheCategorization;
+        }
+
+        public void setCacheCategorization(boolean cacheCategorization) {
+            this.cacheCategorization = cacheCategorization;
+        }
+
         @Override
         public ActionRequestValidationException validate() {
             return null;
@@ -93,6 +105,7 @@ public class CategorizeTextAction extends ActionType<CategorizeTextAction.Respon
             super.writeTo(out);
             out.writeString(categorizationConfigId);
             out.writeString(text);
+            out.writeBoolean(cacheCategorization);
         }
 
         @Override
@@ -167,6 +180,12 @@ public class CategorizeTextAction extends ActionType<CategorizeTextAction.Respon
         @Override
         public int hashCode() {
             return Objects.hash(categoryDefinition);
+        }
+
+        public void writeToDoc(String fieldPrefix, IngestDocument document) {
+            document.setFieldValue(fieldPrefix + ".category_id", categoryDefinition.getCategoryId());
+            document.setFieldValue(fieldPrefix + ".grok", categoryDefinition.getGrokPattern());
+            document.appendFieldValue(fieldPrefix + ".terms", categoryDefinition.getTerms().split(" "));
         }
     }
 }

@@ -206,6 +206,7 @@ import org.elasticsearch.xpack.ml.action.TransportUpdateModelSnapshotAction;
 import org.elasticsearch.xpack.ml.action.TransportUpdateProcessAction;
 import org.elasticsearch.xpack.ml.action.TransportValidateDetectorAction;
 import org.elasticsearch.xpack.ml.action.TransportValidateJobConfigAction;
+import org.elasticsearch.xpack.ml.categorization.ingest.CategorizationProcessor;
 import org.elasticsearch.xpack.ml.categorization.persistence.CategorizationProvider;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedJobBuilder;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedManager;
@@ -321,6 +322,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -365,7 +367,10 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
             this.settings,
             parameters.ingestService);
         parameters.ingestService.addIngestClusterStateListener(inferenceFactory);
-        return Collections.singletonMap(InferenceProcessor.TYPE, inferenceFactory);
+        Map<String, Processor.Factory> factories = new HashMap<>();
+        factories.put(InferenceProcessor.TYPE, inferenceFactory);
+        factories.put(CategorizationProcessor.TYPE, new CategorizationProcessor.Factory(parameters.client));
+        return factories;
     }
 
     @Override

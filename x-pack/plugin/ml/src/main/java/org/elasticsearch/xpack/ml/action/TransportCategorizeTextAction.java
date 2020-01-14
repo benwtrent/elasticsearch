@@ -28,6 +28,8 @@ import org.elasticsearch.xpack.ml.categorization.Categorizer;
 import org.elasticsearch.xpack.ml.job.categorization.CategorizationAnalyzer;
 
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
 import static org.elasticsearch.xpack.core.ClientHelper.executeAsyncWithOrigin;
@@ -39,6 +41,8 @@ public class TransportCategorizeTextAction extends HandledTransportAction<Reques
     private final XPackLicenseState licenseState;
     private final Client client;
     private final AnalysisRegistry analysisRegistry;
+
+    private final Map<String, Categorizer> dumbCache = new HashMap<>();
 
     @Inject
     public TransportCategorizeTextAction(TransportService transportService, ActionFilters actionFilters,
@@ -54,10 +58,17 @@ public class TransportCategorizeTextAction extends HandledTransportAction<Reques
         if (licenseState.isMachineLearningAllowed() == false) {
             listener.onFailure(LicenseUtils.newComplianceException(XPackField.MACHINE_LEARNING));
         }
+        if (request.isCacheCategorization() && dumbCache.containsKey(request.getCategorizationConfigId())) {
+            listener.onResponse(new Response(dumbCache.get(request.getCategorizationConfigId()).getCategory(request.getText())));
+            return;
+        }
         ActionListener<GetCategorizationConfigsAction.Response> categorizationConfigListener = ActionListener.wrap(
             categorizationConfig -> {
                 CategorizationConfig config = categorizationConfig.getResources().results().get(0);
                 Categorizer categorizer = new Categorizer(config.getCategories(), createCategorizationAnalyzer(config, analysisRegistry));
+                if (request.isCacheCategorization()) {
+                    dumbCache.put(request.getCategorizationConfigId(), categorizer);
+                }
                 listener.onResponse(new Response(categorizer.getCategory(request.getText())));
             },
             listener::onFailure
