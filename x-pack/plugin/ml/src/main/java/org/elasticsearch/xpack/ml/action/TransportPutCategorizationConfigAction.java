@@ -81,9 +81,7 @@ public class TransportPutCategorizationConfigAction extends TransportMasterNodeA
     @Override
     protected void masterOperation(Task task, Request request, ClusterState state, ActionListener<Response> listener) {
 
-        final CategorizationConfig config = request.getCategorizationConfig();
-        final CategorizationConfig.Builder builder = new CategorizationConfig.Builder(config).setCreateTime(Instant.now());
-
+        final CategorizationConfig.Builder builder = new CategorizationConfig.Builder(request.getCategorizationConfig());
         ActionListener<Boolean> storeConfigListener = ActionListener.wrap(
             r -> listener.onResponse(new Response(builder.build())),
             listener::onFailure
@@ -92,7 +90,7 @@ public class TransportPutCategorizationConfigAction extends TransportMasterNodeA
         ActionListener<List<CategoryDefinition>> getCategoriesListener = ActionListener.wrap(
             categories -> {
                 builder.setCategories(categories);
-                configProvider.storeCategorizationConfig(builder.build(), storeConfigListener);
+                configProvider.storeCategorizationConfig(builder.build(Instant.now()), storeConfigListener);
             },
             listener::onFailure
         );
@@ -116,7 +114,7 @@ public class TransportPutCategorizationConfigAction extends TransportMasterNodeA
             listener::onFailure
         );
         // TODO handle custom categories and analysis (allow JobID to be null)
-        jobConfigProvider.getJob(config.getJobId(), getJobListener);
+        jobConfigProvider.getJob(request.getCategorizationConfig().getJobId(), getJobListener);
     }
 
     @Override

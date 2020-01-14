@@ -126,9 +126,14 @@ public final class GrokPatternCreator {
             // always the empty string
             overallGrokPatternBuilder.append(fixedRegexBits[inBetweenBitNum]);
             appendBestGrokMatchForStrings(fieldNameCountStore, overallGrokPatternBuilder, inBetweenBitNum == 0,
-                    inBetweenBitNum == fixedRegexBits.length - 1, groupsMatchesFromExamples.get(inBetweenBitNum));
+                    inBetweenBitNum == fixedRegexBits.length - 1, groupsMatchesFromExamples.get(inBetweenBitNum), 0);
         }
         return overallGrokPatternBuilder.toString();
+    }
+
+    static void appendBestGrokMatchForStrings(Map<String, Integer> fieldNameCountStore, StringBuilder overallGrokPatternBuilder,
+                                              boolean isFirst, boolean isLast, Collection<String> mustMatchStrings) {
+        appendBestGrokMatchForStrings(fieldNameCountStore, overallGrokPatternBuilder, isFirst, isLast, mustMatchStrings, 0);
     }
 
     /**
@@ -137,7 +142,7 @@ public final class GrokPatternCreator {
      * onto the supplied string builder.
      */
     static void appendBestGrokMatchForStrings(Map<String, Integer> fieldNameCountStore, StringBuilder overallGrokPatternBuilder,
-                                              boolean isFirst, boolean isLast, Collection<String> mustMatchStrings) {
+                                              boolean isFirst, boolean isLast, Collection<String> mustMatchStrings, int currentRecurse) {
 
         GrokPatternCandidate bestCandidate = null;
         if (mustMatchStrings.isEmpty() == false) {
@@ -149,7 +154,7 @@ public final class GrokPatternCreator {
             }
         }
 
-        if (bestCandidate == null) {
+        if (bestCandidate == null || currentRecurse >= 10) {
             if (isLast) {
                 overallGrokPatternBuilder.append(".*");
             } else if (isFirst || mustMatchStrings.stream().anyMatch(String::isEmpty)) {
@@ -161,10 +166,10 @@ public final class GrokPatternCreator {
             Collection<String> prefaces = new ArrayList<>();
             Collection<String> epilogues = new ArrayList<>();
             populatePrefacesAndEpilogues(mustMatchStrings, bestCandidate.grok, prefaces, epilogues);
-            appendBestGrokMatchForStrings(fieldNameCountStore, overallGrokPatternBuilder, isFirst, false, prefaces);
+            appendBestGrokMatchForStrings(fieldNameCountStore, overallGrokPatternBuilder, isFirst, false, prefaces, currentRecurse + 1);
             overallGrokPatternBuilder.append("%{").append(bestCandidate.grokPatternName).append(':')
                     .append(buildFieldName(fieldNameCountStore, bestCandidate.fieldName)).append('}');
-            appendBestGrokMatchForStrings(fieldNameCountStore, overallGrokPatternBuilder, false, isLast, epilogues);
+            appendBestGrokMatchForStrings(fieldNameCountStore, overallGrokPatternBuilder, false, isLast, epilogues, currentRecurse + 1);
         }
     }
 

@@ -13,6 +13,7 @@ import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.xcontent.ConstructingObjectParser;
 import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
@@ -23,8 +24,11 @@ import org.elasticsearch.xpack.core.ml.job.messages.Messages;
 import org.elasticsearch.xpack.core.ml.job.results.CategoryDefinition;
 
 import java.io.IOException;
+import java.lang.reflect.Array;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 public class CategorizeTextAction extends ActionType<CategorizeTextAction.Response> {
 
@@ -139,34 +143,42 @@ public class CategorizeTextAction extends ActionType<CategorizeTextAction.Respon
 
     public static class Response extends ActionResponse implements ToXContentObject {
 
-        private final CategoryDefinition categoryDefinition;
+        private final String categoryName;
+        private final long[] categoryIds;
+        private final String[] terms;
+        private final Map<String, Object> grokedData;
 
-        public Response(CategoryDefinition categoryDefinition) {
-            this.categoryDefinition = categoryDefinition;
+        public Response(String categoryName, long[] categoryIds, String[] terms, Map<String, Object> grokedData) {
+            this.categoryName = categoryName;
+            this.categoryIds = categoryIds;
+            this.terms = terms;
+            this.grokedData = grokedData;
         }
 
         public Response(StreamInput in) throws IOException {
             super(in);
-            categoryDefinition = in.readBoolean() ? new CategoryDefinition(in) : null;
-        }
-
-        public CategoryDefinition getResponse() {
-            return categoryDefinition;
+            categoryName = in.readString();
+            categoryIds = in.readLongArray();
+            terms = in.readStringArray();
+            grokedData = in.readMap();
         }
 
         @Override
         public void writeTo(StreamOutput out) throws IOException {
-            out.writeBoolean(categoryDefinition != null);
-            if (categoryDefinition != null) {
-                categoryDefinition.writeTo(out);
-            }
+            out.writeString(categoryName);
+            out.writeLongArray(categoryIds);
+            out.writeStringArray(terms);
+            out.writeMap(grokedData);
         }
 
         @Override
         public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-            if (categoryDefinition != null) {
-                categoryDefinition.toXContent(builder, params);
-            }
+            builder.startObject();
+            builder.field("category_name", categoryName);
+            builder.field("category_ids", categoryIds);
+            builder.field("terms", terms);
+            builder.field("groked_data", grokedData);
+            builder.endObject();
             return builder;
         }
 
@@ -175,18 +187,24 @@ public class CategorizeTextAction extends ActionType<CategorizeTextAction.Respon
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
             Response response = (Response) o;
-            return Objects.equals(categoryDefinition, response.categoryDefinition);
+            return Objects.equals(categoryName, response.categoryName)
+                && Arrays.equals(categoryIds, response.categoryIds)
+                && Arrays.equals(terms, response.terms)
+                && Objects.equals(grokedData, response.grokedData);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(categoryDefinition);
+            return Objects.hash(Arrays.hashCode(categoryIds), Arrays.hashCode(terms), grokedData, categoryName);
         }
 
         public void writeToDoc(String fieldPrefix, IngestDocument document) {
-            document.setFieldValue(fieldPrefix + ".category_id", categoryDefinition.getCategoryId());
-            document.setFieldValue(fieldPrefix + ".grok", categoryDefinition.getGrokPattern());
-            document.appendFieldValue(fieldPrefix + ".terms", Arrays.asList(categoryDefinition.getTerms().split(" ")));
+            document.setFieldValue(fieldPrefix + ".category_ids", Arrays.stream(categoryIds).boxed().collect(Collectors.toList()));
+            document.setFieldValue(fieldPrefix + ".name", categoryName);
+            document.setFieldValue(fieldPrefix + ".terms", Arrays.asList(terms));
+            if (grokedData != null) {
+                document.setFieldValue(fieldPrefix + ".groked", grokedData);
+            }
         }
     }
 }

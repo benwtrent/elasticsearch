@@ -100,6 +100,8 @@ public final class Messages {
     public static final String INFERENCE_TAGS_AND_MODEL_IDS_UNIQUE = "The provided tags {0} must not match existing model_ids.";
     public static final String INFERENCE_MODEL_ID_AND_TAGS_UNIQUE = "The provided model_id {0} must not match existing tags.";
 
+    public static final String CATEGORIZATION_CONFIG_OVERLAPPING_OVERRIDES = "Overrides [{0}] and [{1}] have category_ids {2} in common. " +
+        "Overrides must not have overlapping category_ids";
     public static final String JOB_AUDIT_DATAFEED_DATA_SEEN_AGAIN = "Datafeed has started retrieving data again";
     public static final String JOB_AUDIT_CREATED = "Job created";
     public static final String JOB_AUDIT_UPDATED = "Job updated: {0}";

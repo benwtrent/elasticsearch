@@ -2,6 +2,8 @@ package org.elasticsearch.xpack.ml.categorization;
 
 import org.elasticsearch.grok.Grok;
 import org.elasticsearch.protocol.xpack.XPackInfoRequest;
+import org.elasticsearch.xpack.core.ml.action.CategorizeTextAction;
+import org.elasticsearch.xpack.core.ml.categorization.CategorizationConfig;
 import org.elasticsearch.xpack.core.ml.job.results.CategoryDefinition;
 import org.elasticsearch.xpack.ml.job.categorization.CategorizationAnalyzer;
 
@@ -24,12 +26,12 @@ public class Categorizer {
     private final List<SearchableCategoryDefinition> searchableCategoryDefinitions;
     private final CategorizationAnalyzer analyzer;
 
-    public Categorizer(List<CategoryDefinition> categories, CategorizationAnalyzer analyzer) {
+    public Categorizer(CategorizationConfig config, CategorizationAnalyzer analyzer) {
         this.searchableCategoryDefinitions = categories.stream().map(SearchableCategoryDefinition::new).collect(Collectors.toList());
         this.analyzer = analyzer;
     }
 
-    public CategoryDefinition getCategory(String text) {
+    public CategorizeTextAction.Response getCategory(String text) {
         Set<String> tokens = new HashSet<>(analyzer.tokenizeField("categorization_analyzer", text));
         for (SearchableCategoryDefinition searchableCategoryDefinition : searchableCategoryDefinitions) {
             if (searchableCategoryDefinition.maxLength >= text.length() && tokens.containsAll(searchableCategoryDefinition.terms)) {
@@ -48,7 +50,6 @@ public class Categorizer {
         private final long maxLength;
         private final long categoryId;
         private final Pattern compiledPattern;
-        private final CategoryDefinition definition;
 
         public SearchableCategoryDefinition(CategoryDefinition definition) {
             this.terms = new LinkedHashSet<>(Arrays.asList(definition.getTerms().split(" ")));

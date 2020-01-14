@@ -1,3 +1,8 @@
+/*
+ * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
+ * or more contributor license agreements. Licensed under the Elastic License;
+ * you may not use this file except in compliance with the Elastic License.
+ */
 package org.elasticsearch.xpack.core.ml.categorization;
 
 import org.elasticsearch.common.ParseField;
@@ -11,12 +16,15 @@ import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.xpack.core.common.time.TimeUtils;
 import org.elasticsearch.xpack.core.ml.job.config.CategorizationAnalyzerConfig;
 import org.elasticsearch.xpack.core.ml.job.results.CategoryDefinition;
+import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 public class CategorizationConfig implements ToXContentObject, Writeable {
 
@@ -224,43 +232,6 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
         return new Builder();
     }
 
-    public static class CategorizationOverride implements ToXContentObject, Writeable {
-
-        public static final ObjectParser<CategorizationOverride.Builder, Void> LENIENT_PARSER = createParser(true);
-        public static final ObjectParser<CategorizationOverride.Builder, Void> STRICT_PARSER = createParser(false);
-
-        private static ObjectParser<Builder, Void> createParser(boolean ignoreUnknownFields) {
-            ObjectParser<CategorizationOverride.Builder, Void> parser = new ObjectParser<>(NAME,
-                ignoreUnknownFields,
-                CategorizationOverride.Builder::new);
-            return parser;
-        }
-
-        public CategorizationOverride() { }
-
-        public CategorizationOverride(StreamInput in) {
-
-        }
-
-
-        @Override
-        public void writeTo(StreamOutput out) throws IOException {
-
-        }
-
-        @Override
-        public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-            return null;
-        }
-
-        public static class Builder {
-
-            public CategorizationOverride build() {
-                return new CategorizationOverride();
-            }
-        }
-    }
-
     public static class Builder {
         private String categorizationConfigId;
         private String jobId;
@@ -333,6 +304,26 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
         public Builder setCategorizationFilters(List<String> categorizationFilters) {
             this.categorizationFilters = categorizationFilters;
             return this;
+        }
+
+        public CategorizationConfig build(Instant createTime) {
+            this.createTime = createTime;
+            Set<Long> categoryIds = categories.stream().map(CategoryDefinition::getCategoryId).collect(Collectors.toSet());
+            if (categoryIds.size() != categories.size()) {
+                throw ExceptionsHelper.badRequestException("[{}] categories must all have unique ids", categorizationConfigId);
+            }
+            if (overrides != null) {
+                List<String> overridesMissingCategories = overrides.stream()
+                    .filter(override -> categoryIds.containsAll(override.getCategoryIds()))
+                    .map(CategorizationOverride::getName)
+                    .collect(Collectors.toList());
+                if (overridesMissingCategories.isEmpty() == false) {
+                    throw ExceptionsHelper.badRequestException("[{}] overrides contain category ids that do not exist {}",
+                        categorizationConfigId,
+                        overridesMissingCategories);
+                }
+            }
+            return new CategorizationConfig(categorizationConfigId, jobId, overrides, categories, description, createTime, updateTime, categorizationAnalyzerConfig, categorizationFilters);
         }
 
         public CategorizationConfig build() {
