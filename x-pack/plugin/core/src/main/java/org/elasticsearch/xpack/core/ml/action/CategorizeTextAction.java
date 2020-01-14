@@ -23,6 +23,7 @@ import org.elasticsearch.xpack.core.ml.job.messages.Messages;
 import org.elasticsearch.xpack.core.ml.job.results.CategoryDefinition;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Objects;
 
 public class CategorizeTextAction extends ActionType<CategorizeTextAction.Response> {
@@ -185,7 +186,7 @@ public class CategorizeTextAction extends ActionType<CategorizeTextAction.Respon
         public void writeToDoc(String fieldPrefix, IngestDocument document) {
             document.setFieldValue(fieldPrefix + ".category_id", categoryDefinition.getCategoryId());
             document.setFieldValue(fieldPrefix + ".grok", categoryDefinition.getGrokPattern());
-            document.appendFieldValue(fieldPrefix + ".terms", categoryDefinition.getTerms().split(" "));
+            document.appendFieldValue(fieldPrefix + ".terms", Arrays.asList(categoryDefinition.getTerms().split(" ")));
         }
     }
 }
