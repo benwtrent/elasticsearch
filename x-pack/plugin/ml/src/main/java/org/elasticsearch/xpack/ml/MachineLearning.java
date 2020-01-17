@@ -206,6 +206,7 @@ import org.elasticsearch.xpack.ml.action.TransportUpdateModelSnapshotAction;
 import org.elasticsearch.xpack.ml.action.TransportUpdateProcessAction;
 import org.elasticsearch.xpack.ml.action.TransportValidateDetectorAction;
 import org.elasticsearch.xpack.ml.action.TransportValidateJobConfigAction;
+import org.elasticsearch.xpack.ml.categorization.CategorizerLoadingService;
 import org.elasticsearch.xpack.ml.categorization.ingest.CategorizationProcessor;
 import org.elasticsearch.xpack.ml.categorization.persistence.CategorizationProvider;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedJobBuilder;
@@ -672,6 +673,7 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
 
         // Categorization components
         CategorizationProvider categorizationProvider = new CategorizationProvider(client);
+        CategorizerLoadingService categorizerLoadingService = new CategorizerLoadingService(categorizationProvider, threadPool);
 
         return Arrays.asList(
                 mlLifeCycleService,
@@ -697,7 +699,8 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
                 nativeStorageProvider,
                 modelLoadingService,
                 trainedModelProvider,
-                categorizationProvider
+                categorizationProvider,
+                categorizerLoadingService
         );
     }
 

@@ -20,8 +20,11 @@ import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -37,6 +40,7 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
     public static final ParseField DESCRIPTION = new ParseField("description");
     public static final ParseField CREATE_TIME = new ParseField("create_time");
     public static final ParseField UPDATE_TIME = new ParseField("update_time");
+    public static final ParseField CUSTOM_GROK_PATTERNS = new ParseField("custom_grok_patterns");
     public static final ParseField CATEGORIZATION_ANALYZER = CategorizationAnalyzerConfig.CATEGORIZATION_ANALYZER;
     public static final ParseField CATEGORIZATION_FILTERS = new ParseField("categorization_filters");
 
@@ -64,6 +68,10 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
             (p, c) -> TimeUtils.parseTimeFieldToInstant(p, UPDATE_TIME.getPreferredName()),
             UPDATE_TIME,
             ObjectParser.ValueType.VALUE);
+        parser.declareField(CategorizationConfig.Builder::setCustomGrokPatterns,
+            (p, c) -> p.mapStrings(),
+            CUSTOM_GROK_PATTERNS,
+            ObjectParser.ValueType.OBJECT);
         parser.declareStringArray(CategorizationConfig.Builder::setCategorizationFilters, CATEGORIZATION_FILTERS);
         // This one is nasty - the syntax for analyzers takes either names or objects at many levels, hence it's not
         // possible to simply declare whether the field is a string or object and a completely custom parser is required
@@ -86,6 +94,7 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
     private final Instant updateTime;
     private final CategorizationAnalyzerConfig categorizationAnalyzerConfig;
     private final List<String> categorizationFilters;
+    private final Map<String, String> customGrokPatterns;
 
     public CategorizationConfig(String categorizationConfigId,
                                 String jobId,
@@ -94,6 +103,7 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
                                 String description,
                                 Instant createTime,
                                 Instant updateTime,
+                                Map<String, String> customGrokPatterns,
                                 CategorizationAnalyzerConfig categorizationAnalyzerConfig,
                                 List<String> categorizationFilters) {
         this.categorizationConfigId = categorizationConfigId;
@@ -103,6 +113,7 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
         this.description = description;
         this.createTime = createTime == null ? null : Instant.ofEpochMilli(createTime.toEpochMilli());
         this.updateTime = updateTime == null ? null : Instant.ofEpochMilli(updateTime.toEpochMilli());
+        this.customGrokPatterns = customGrokPatterns == null ? Collections.emptyMap() : Collections.unmodifiableMap(customGrokPatterns);
         this.categorizationAnalyzerConfig = categorizationAnalyzerConfig;
         this.categorizationFilters = categorizationFilters == null ? Collections.emptyList() : Collections.unmodifiableList(categorizationFilters);
     }
@@ -115,6 +126,7 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
         this.description = in.readOptionalString();
         this.createTime = in.readOptionalInstant();
         this.updateTime = in.readOptionalInstant();
+        this.customGrokPatterns = in.readMap(StreamInput::readString, StreamInput::readString);
         this.categorizationAnalyzerConfig = in.readBoolean() ? new CategorizationAnalyzerConfig(in) : null;
         this.categorizationFilters = in.readStringList();
     }
@@ -155,6 +167,10 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
         return updateTime;
     }
 
+    public Map<String, String> getCustomGrokPatterns() {
+        return customGrokPatterns;
+    }
+
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         out.writeString(this.categorizationConfigId);
@@ -164,6 +180,7 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
         out.writeOptionalString(description);
         out.writeOptionalInstant(createTime);
         out.writeOptionalInstant(updateTime);
+        out.writeMap(customGrokPatterns, StreamOutput::writeString, StreamOutput::writeString);
         out.writeBoolean(categorizationAnalyzerConfig != null);
         if (categorizationAnalyzerConfig != null) {
             categorizationAnalyzerConfig.writeTo(out);
@@ -189,6 +206,7 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
         if (updateTime != null) {
             builder.timeField(UPDATE_TIME.getPreferredName(), UPDATE_TIME.getPreferredName() + "_string", updateTime.toEpochMilli());
         }
+        builder.field(CUSTOM_GROK_PATTERNS.getPreferredName(), customGrokPatterns);
         if (categorizationAnalyzerConfig != null) {
             categorizationAnalyzerConfig.toXContent(builder, params);
         }
@@ -209,6 +227,7 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
             Objects.equals(createTime, that.createTime) &&
             Objects.equals(updateTime, that.updateTime) &&
             Objects.equals(description, that.description) &&
+            Objects.equals(customGrokPatterns, that.customGrokPatterns) &&
             Objects.equals(categories, that.categories) &&
             Objects.equals(categorizationAnalyzerConfig, that.categorizationAnalyzerConfig) &&
             Objects.equals(categorizationFilters, that.categorizationFilters);
@@ -223,6 +242,7 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
             updateTime,
             description,
             overrides,
+            customGrokPatterns,
             categories,
             categorizationAnalyzerConfig,
             categorizationFilters);
@@ -240,6 +260,7 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
         private String description;
         private Instant createTime;
         private Instant updateTime;
+        private Map<String, String> customGrokPatterns;
         private CategorizationAnalyzerConfig categorizationAnalyzerConfig;
         private List<String> categorizationFilters;
 
@@ -248,13 +269,14 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
         public Builder(CategorizationConfig config) {
             this.categorizationConfigId = config.getCategorizationConfigId();
             this.jobId = config.getJobId();
-            this.overrides = config.overrides;
-            this.categories = config.categories;
+            this.overrides = config.overrides == null ? null : new ArrayList<>(config.overrides);
+            this.categories = config.categories == null ? null : new ArrayList<>(config.categories);
             this.description = config.description;
             this.createTime = config.createTime;
             this.updateTime = config.updateTime;
+            this.customGrokPatterns = config.customGrokPatterns == null ? null : new HashMap<>(config.customGrokPatterns);
             this.categorizationAnalyzerConfig = config.categorizationAnalyzerConfig;
-            this.categorizationFilters = config.categorizationFilters;
+            this.categorizationFilters = config.categorizationFilters == null ? null : new ArrayList<>(config.categorizationFilters);
         }
 
         public Builder setCategorizationConfigId(String categorizationConfigId) {
@@ -296,6 +318,11 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
             return this;
         }
 
+        public Builder setCustomGrokPatterns(Map<String, String> customGrokPatterns) {
+            this.customGrokPatterns = customGrokPatterns;
+            return this;
+        }
+
         public Builder setCategorizationAnalyzerConfig(CategorizationAnalyzerConfig categorizationAnalyzerConfig) {
             this.categorizationAnalyzerConfig = categorizationAnalyzerConfig;
             return this;
@@ -314,7 +341,7 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
             }
             if (overrides != null) {
                 List<String> overridesMissingCategories = overrides.stream()
-                    .filter(override -> categoryIds.containsAll(override.getCategoryIds()))
+                    .filter(override -> categoryIds.containsAll(override.getCategoryIds()) == false)
                     .map(CategorizationOverride::getName)
                     .collect(Collectors.toList());
                 if (overridesMissingCategories.isEmpty() == false) {
@@ -323,11 +350,11 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
                         overridesMissingCategories);
                 }
             }
-            return new CategorizationConfig(categorizationConfigId, jobId, overrides, categories, description, createTime, updateTime, categorizationAnalyzerConfig, categorizationFilters);
+            return new CategorizationConfig(categorizationConfigId, jobId, overrides, categories, description, createTime, updateTime, customGrokPatterns, categorizationAnalyzerConfig, categorizationFilters);
         }
 
         public CategorizationConfig build() {
-            return new CategorizationConfig(categorizationConfigId, jobId, overrides, categories, description, createTime, updateTime, categorizationAnalyzerConfig, categorizationFilters);
+            return new CategorizationConfig(categorizationConfigId, jobId, overrides, categories, description, createTime, updateTime, customGrokPatterns, categorizationAnalyzerConfig, categorizationFilters);
         }
     }
 }

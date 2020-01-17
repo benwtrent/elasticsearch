@@ -88,6 +88,11 @@ public final class GrokPatternCreator {
         //
         // E.g., ".*?cat.+?sat.+?mat.*" -> [ "", "cat", "sat", "mat" ]
         String[] fixedRegexBits = regex.split("\\.[*+]\\??");
+        // If there are no "in between" bits, there is no way to build a good grok pattern with the current logic
+        // Exit early with a match all grok pattern
+        if (fixedRegexBits.length == 0) {
+            return ".*";
+        }
 
         // Create a pattern that will capture the bits in between the fixed parts of the regex
         //

@@ -25,6 +25,7 @@ import org.elasticsearch.xpack.core.ml.action.CategorizeTextAction.Response;
 import org.elasticsearch.xpack.core.ml.categorization.CategorizationConfig;
 import org.elasticsearch.xpack.core.ml.job.config.CategorizationAnalyzerConfig;
 import org.elasticsearch.xpack.ml.categorization.Categorizer;
+import org.elasticsearch.xpack.ml.categorization.CategorizerLoadingService;
 import org.elasticsearch.xpack.ml.job.categorization.CategorizationAnalyzer;
 
 import java.io.IOException;
@@ -39,18 +40,17 @@ public class TransportCategorizeTextAction extends HandledTransportAction<Reques
     private static final Logger logger = LogManager.getLogger(TransportCategorizeTextAction.class);
 
     private final XPackLicenseState licenseState;
-    private final Client client;
     private final AnalysisRegistry analysisRegistry;
-
-    private final Map<String, Categorizer> dumbCache = new HashMap<>();
+    private final CategorizerLoadingService categorizerLoadingService;
 
     @Inject
     public TransportCategorizeTextAction(TransportService transportService, ActionFilters actionFilters,
-                                         XPackLicenseState licenseState, Client client, AnalysisRegistry analysisRegistry) {
+                                         XPackLicenseState licenseState, AnalysisRegistry analysisRegistry,
+                                         CategorizerLoadingService categorizerLoadingService) {
         super(CategorizeTextAction.NAME, transportService, actionFilters, Request::new);
         this.licenseState = licenseState;
-        this.client = client;
         this.analysisRegistry = analysisRegistry;
+        this.categorizerLoadingService = categorizerLoadingService;
     }
 
     @Override
@@ -58,31 +58,12 @@ public class TransportCategorizeTextAction extends HandledTransportAction<Reques
         if (licenseState.isMachineLearningAllowed() == false) {
             listener.onFailure(LicenseUtils.newComplianceException(XPackField.MACHINE_LEARNING));
         }
-        if (request.isCacheCategorization() && dumbCache.containsKey(request.getCategorizationConfigId())) {
-            listener.onResponse(new Response(dumbCache.get(request.getCategorizationConfigId()).getCategory(request.getText())));
-            return;
-        }
-        ActionListener<GetCategorizationConfigsAction.Response> categorizationConfigListener = ActionListener.wrap(
-            categorizationConfig -> {
-                CategorizationConfig config = categorizationConfig.getResources().results().get(0);
-                Categorizer categorizer = new Categorizer(config.getCategories(), createCategorizationAnalyzer(config, analysisRegistry));
-                if (request.isCacheCategorization()) {
-                    dumbCache.put(request.getCategorizationConfigId(), categorizer);
-                }
-                listener.onResponse(new Response(categorizer.getCategory(request.getText())));
-            },
+        ActionListener<Categorizer> getCategorizer = ActionListener.wrap(
+            categorizer -> listener.onResponse(categorizer.getCategory(request.getText(), request.isIncludeGrok())),
             listener::onFailure
         );
 
-        executeAsyncWithOrigin(client, ML_ORIGIN, GetCategorizationConfigsAction.INSTANCE, new GetCategorizationConfigsAction.Request(request.getCategorizationConfigId()), categorizationConfigListener);
+        this.categorizerLoadingService.getCategorizer(request.getCategorizationConfigId(), analysisRegistry, getCategorizer);
     }
 
-    private static CategorizationAnalyzer createCategorizationAnalyzer(CategorizationConfig config, AnalysisRegistry analysisRegistry) throws IOException {
-        CategorizationAnalyzerConfig categorizationAnalyzerConfig = config.getCategorizationAnalyzerConfig();
-        if (categorizationAnalyzerConfig == null) {
-            categorizationAnalyzerConfig =
-                CategorizationAnalyzerConfig.buildDefaultCategorizationAnalyzer(config.getCategorizationFilters());
-        }
-        return new CategorizationAnalyzer(analysisRegistry, categorizationAnalyzerConfig);
-    }
 }

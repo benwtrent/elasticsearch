@@ -15,7 +15,7 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 
 import java.io.IOException;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -25,48 +25,49 @@ public class CategorizationOverride implements ToXContentObject, Writeable {
     public static final String NAME = "categorization_override";
 
     public static final ParseField CATEGORY_IDS = new ParseField("category_ids");
-    public static final ParseField TERMS = new ParseField("terms");
     public static final ParseField GROK_PATTERN = new ParseField("grok_pattern");
+    public static final ParseField REGEX = new ParseField("regex");
+    public static final ParseField TERMS = new ParseField("terms");
     public static final ParseField CATEGORY_NAME = new ParseField("category_name");
     public static final ObjectParser<Builder, Void> LENIENT_PARSER = createParser(true);
     public static final ObjectParser<Builder, Void> STRICT_PARSER = createParser(false);
 
     private final Set<Long> categoryIds;
-    private final String[] terms;
     private final String grokPattern;
     private final String name;
+    private final String regex;
+    private final Set<String> terms;
 
     private static ObjectParser<CategorizationOverride.Builder, Void> createParser(boolean ignoreUnknownFields) {
         ObjectParser<Builder, Void> parser = new ObjectParser<>(NAME,
             ignoreUnknownFields,
             CategorizationOverride.Builder::new);
-        parser.declareLongArray(Builder::setCategoryIds, TERMS);
+        parser.declareLongArray(Builder::setCategoryIds, CATEGORY_IDS);
         parser.declareString(Builder::setGrokPattern, GROK_PATTERN);
-        parser.declareStringArray(Builder::setTerms, TERMS);
         parser.declareString(Builder::setName, CATEGORY_NAME);
+        parser.declareString(Builder::setRegex, REGEX);
+        parser.declareStringArray(Builder::setTerms, TERMS);
         return parser;
     }
 
-    public CategorizationOverride(String name, Set<Long> categoryIds, String[] terms, String grokPattern) {
+    public CategorizationOverride(String name, Set<Long> categoryIds, String grokPattern, String regex, Set<String> terms) {
         this.name = ExceptionsHelper.requireNonNull(name, CATEGORY_NAME);
         this.categoryIds = ExceptionsHelper.requireNonNull(categoryIds, CATEGORY_IDS);
-        this.terms = terms;
         this.grokPattern = grokPattern;
+        this.regex = regex;
+        this.terms = terms == null ? null : Collections.unmodifiableSet(terms);
     }
 
     public CategorizationOverride(StreamInput in) throws IOException {
         this.name = in.readString();
         this.categoryIds = in.readSet(StreamInput::readLong);
         this.grokPattern = in.readOptionalString();
-        this.terms = in.readOptionalStringArray();
+        this.regex = in.readOptionalString();
+        this.terms = in.readBoolean() ? Collections.unmodifiableSet(in.readSet(StreamInput::readString)) : null;
     }
 
     public Set<Long> getCategoryIds() {
         return categoryIds;
-    }
-
-    public String[] getTerms() {
-        return terms;
     }
 
     public String getGrokPattern() {
@@ -77,12 +78,24 @@ public class CategorizationOverride implements ToXContentObject, Writeable {
         return name;
     }
 
+    public Set<String> getTerms() {
+        return terms;
+    }
+
+    public String getRegex() {
+        return regex;
+    }
+
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         out.writeString(name);
         out.writeCollection(categoryIds, StreamOutput::writeLong);
         out.writeOptionalString(grokPattern);
-        out.writeOptionalStringArray(terms);
+        out.writeOptionalString(regex);
+        out.writeBoolean(terms != null);
+        if (terms != null) {
+            out.writeCollection(terms, StreamOutput::writeString);
+        }
     }
 
     @Override
@@ -92,6 +105,9 @@ public class CategorizationOverride implements ToXContentObject, Writeable {
         builder.field(CATEGORY_IDS.getPreferredName(), categoryIds);
         if(grokPattern != null) {
             builder.field(GROK_PATTERN.getPreferredName(), grokPattern);
+        }
+        if (regex != null) {
+            builder.field(REGEX.getPreferredName(), regex);
         }
         if (terms != null) {
             builder.field(TERMS.getPreferredName(), terms);
@@ -108,19 +124,21 @@ public class CategorizationOverride implements ToXContentObject, Writeable {
         return Objects.equals(categoryIds, that.categoryIds) &&
             Objects.equals(name, that.name) &&
             Objects.equals(grokPattern, that.grokPattern) &&
-            Arrays.equals(terms, that.terms);
+            Objects.equals(regex, that.regex) &&
+            Objects.equals(terms, that.terms);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(categoryIds, name, grokPattern, Arrays.hashCode(terms));
+        return Objects.hash(categoryIds, name, grokPattern, regex, terms);
     }
 
     public static class Builder {
         private Set<Long> categoryIds;
-        private String[] terms;
         private String grokPattern;
         private String name;
+        private String regex;
+        private Set<String> terms;
 
         private Builder setCategoryIds(List<Long> categoryIds) {
             return setCategoryIds(new HashSet<>(categoryIds));
@@ -128,15 +146,6 @@ public class CategorizationOverride implements ToXContentObject, Writeable {
 
         public Builder setCategoryIds(Set<Long> categoryIds) {
             this.categoryIds = categoryIds;
-            return this;
-        }
-
-        private Builder setTerms(List<String> terms) {
-            return setTerms(terms.toArray(new String[0]));
-        }
-
-        public Builder setTerms(String[] terms) {
-            this.terms = terms;
             return this;
         }
 
@@ -150,8 +159,22 @@ public class CategorizationOverride implements ToXContentObject, Writeable {
             return this;
         }
 
+        public Builder setRegex(String regex) {
+            this.regex = regex;
+            return this;
+        }
+
+        private Builder setTerms(List<String> terms) {
+            return setTerms(new HashSet<>(terms));
+        }
+
+        public Builder setTerms(Set<String> terms) {
+            this.terms = terms;
+            return this;
+        }
+
         public CategorizationOverride build() {
-            return new CategorizationOverride(name, categoryIds, terms, grokPattern);
+            return new CategorizationOverride(name, categoryIds, grokPattern, regex, terms);
         }
     }
 }

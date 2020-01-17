@@ -22,8 +22,11 @@ import org.elasticsearch.xpack.core.ml.job.messages.Messages;
 import org.elasticsearch.xpack.core.ml.utils.MlStrings;
 
 import java.io.IOException;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.elasticsearch.action.ValidateActions.addValidationError;
 
@@ -84,17 +87,23 @@ public class PutCategorizationConfigAction extends ActionType<PutCategorizationC
                     categorizationConfig.getCategorizationConfigId(),
                     MlStrings.ID_LENGTH_LIMIT), validationException);
             }
-            for (int i = 0; i < categorizationConfig.getOverrides().size() - 1; i++) {
-                CategorizationOverride override = categorizationConfig.getOverrides().get(i);
-                for (int j = i; j < categorizationConfig.getOverrides().size(); j++) {
-                    Set<Long> commonCategories = Sets.intersection(override.getCategoryIds(),
-                        categorizationConfig.getOverrides().get(j).getCategoryIds());
-                    if (commonCategories.isEmpty() == false) {
-                        validationException = addValidationError(Messages.getMessage(Messages.CATEGORIZATION_CONFIG_OVERLAPPING_OVERRIDES,
-                            override.getName(),
-                            categorizationConfig.getOverrides().get(j).getName(),
-                            commonCategories), validationException);
+            if (categorizationConfig.getOverrides().isEmpty() == false) {
+                List<CategorizationOverride> overrides = categorizationConfig.getOverrides();
+                for (int i = 0; i < overrides.size() - 1; i++) {
+                    CategorizationOverride override = overrides.get(i);
+                    for (int j = i + 1; j < overrides.size(); j++) {
+                        Set<Long> commonCategories = Sets.intersection(override.getCategoryIds(),
+                            overrides.get(j).getCategoryIds());
+                        if (commonCategories.isEmpty() == false) {
+                            validationException = addValidationError(Messages.getMessage(Messages.CATEGORIZATION_CONFIG_OVERLAPPING_OVERRIDES,
+                                override.getName(),
+                                overrides.get(j).getName(),
+                                commonCategories), validationException);
+                        }
                     }
+                }
+                if (overrides.stream().map(CategorizationOverride::getName).collect(Collectors.toSet()).size() < overrides.size()) {
+                    validationException = addValidationError("[overrides.category_name] entries must be unique", validationException);
                 }
             }
             return validationException;

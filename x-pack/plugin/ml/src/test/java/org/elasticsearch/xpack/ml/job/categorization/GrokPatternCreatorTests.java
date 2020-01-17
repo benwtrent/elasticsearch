@@ -14,7 +14,10 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.nullValue;
 
 public class GrokPatternCreatorTests extends ESTestCase {
 
@@ -274,5 +277,16 @@ public class GrokPatternCreatorTests extends ESTestCase {
         assertEquals(".*?%{NUMBER:field}.+?%{TIMESTAMP_ISO8601:timestamp}.+?%{TIMESTAMP_ISO8601:timestamp2}.+?%{NUMBER:field2}.+?" +
                 "%{IP:ipaddress}.+?Authpriv.+?Info.+?sshd.+?subsystem.+?request.+?for.+?sftp.*",
             GrokPatternCreator.findBestGrokMatchFromExamples("foo", regex, examples));
+    }
+
+    public void testFindBestGrokMatchFromExamplesGivenMatchAllRegex() {
+        String regex = ".*";
+        // Two timestamps: one local, one UTC
+        Collection<String> examples = Arrays.asList(
+            "Killing job [count_tweets]",
+            "Killing job [tweets_by_location]",
+            "[count_tweets] Killing job",
+            "[tweets_by_location] Killing job");
+        assertThat(GrokPatternCreator.findBestGrokMatchFromExamples("foo", regex, examples), equalTo(".*"));
     }
 }

@@ -64,20 +64,20 @@ public class CategorizationProcessor extends AbstractProcessor {
 
     private final String targetField;
     private final String textField;
-    private final boolean cache;
+    private final boolean includeGrok;
 
     public CategorizationProcessor(Client client,
                                    String tag,
                                    String targetField,
                                    String categorizationConfigId,
                                    String textField,
-                                   boolean cache) {
+                                   boolean includeGrok) {
         super(tag);
         this.client = ExceptionsHelper.requireNonNull(client, "client");
         this.targetField = ExceptionsHelper.requireNonNull(targetField, TARGET_FIELD);
         this.categorizationConfigId = ExceptionsHelper.requireNonNull(categorizationConfigId, CATEGORIZATION_CONFIG_ID);
         this.textField = ExceptionsHelper.requireNonNull(textField, TEXT_FIELD);
-        this.cache = cache;
+        this.includeGrok = includeGrok;
     }
 
     @Override
@@ -98,15 +98,11 @@ public class CategorizationProcessor extends AbstractProcessor {
     CategorizeTextAction.Request buildRequest(IngestDocument ingestDocument) {
         Map<String, Object> fields = new HashMap<>(ingestDocument.getSourceAndMetadata());
         String textField = MapHelper.dig(this.textField, fields).toString();
-        CategorizeTextAction.Request request = new CategorizeTextAction.Request(textField, categorizationConfigId);
-        request.setCacheCategorization(cache);
+        CategorizeTextAction.Request request = new CategorizeTextAction.Request(textField, categorizationConfigId, includeGrok);
         return request;
     }
 
     void mutateDocument(CategorizeTextAction.Response response, IngestDocument ingestDocument) {
-        if (response.getResponse().getCategoryId() == -1L) {
-            throw new ElasticsearchStatusException("Unexpected empty category response", RestStatus.INTERNAL_SERVER_ERROR);
-        }
         response.writeToDoc(targetField, ingestDocument);
     }
 
@@ -132,18 +128,17 @@ public class CategorizationProcessor extends AbstractProcessor {
 
         @Override
         public CategorizationProcessor create(Map<String, Processor.Factory> processorFactories, String tag, Map<String, Object> config) {
-
             String categorizationConfigId = ConfigurationUtils.readStringProperty(TYPE, tag, config, CATEGORIZATION_CONFIG_ID);
             String defaultTargetField = tag == null ? DEFAULT_TARGET_FIELD : DEFAULT_TARGET_FIELD + "." + tag;
             String targetField = ConfigurationUtils.readStringProperty(TYPE, tag, config, TARGET_FIELD, defaultTargetField);
             String textField = ConfigurationUtils.readStringProperty(TYPE, tag, config, TEXT_FIELD, "text");
-            boolean cache = ConfigurationUtils.readBooleanProperty(TYPE, tag, config, "cache", false);
+            boolean includeGrok = ConfigurationUtils.readBooleanProperty(TYPE, tag, config, "include_grok", false);
             return new CategorizationProcessor(client,
                 tag,
                 targetField,
                 categorizationConfigId,
                 textField,
-                cache);
+                includeGrok);
         }
     }
 }
