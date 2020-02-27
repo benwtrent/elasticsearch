@@ -99,6 +99,7 @@ import org.elasticsearch.xpack.core.ml.action.GetTrainedModelsStatsAction;
 import org.elasticsearch.xpack.core.ml.action.InternalInferModelAction;
 import org.elasticsearch.xpack.core.ml.action.IsolateDatafeedAction;
 import org.elasticsearch.xpack.core.ml.action.KillProcessAction;
+import org.elasticsearch.xpack.core.ml.action.LtrFeatureExtractionAction;
 import org.elasticsearch.xpack.core.ml.action.MlInfoAction;
 import org.elasticsearch.xpack.core.ml.action.OpenJobAction;
 import org.elasticsearch.xpack.core.ml.action.PersistJobAction;
@@ -170,6 +171,7 @@ import org.elasticsearch.xpack.ml.action.TransportGetTrainedModelsStatsAction;
 import org.elasticsearch.xpack.ml.action.TransportInternalInferModelAction;
 import org.elasticsearch.xpack.ml.action.TransportIsolateDatafeedAction;
 import org.elasticsearch.xpack.ml.action.TransportKillProcessAction;
+import org.elasticsearch.xpack.ml.action.TransportLtrFeatureExtractionAction;
 import org.elasticsearch.xpack.ml.action.TransportMlInfoAction;
 import org.elasticsearch.xpack.ml.action.TransportOpenJobAction;
 import org.elasticsearch.xpack.ml.action.TransportPersistJobAction;
@@ -289,6 +291,7 @@ import org.elasticsearch.xpack.ml.rest.job.RestOpenJobAction;
 import org.elasticsearch.xpack.ml.rest.job.RestPostDataAction;
 import org.elasticsearch.xpack.ml.rest.job.RestPostJobUpdateAction;
 import org.elasticsearch.xpack.ml.rest.job.RestPutJobAction;
+import org.elasticsearch.xpack.ml.rest.ltr.RestLtfFeatureExtractionAction;
 import org.elasticsearch.xpack.ml.rest.modelsnapshots.RestDeleteModelSnapshotAction;
 import org.elasticsearch.xpack.ml.rest.modelsnapshots.RestGetModelSnapshotsAction;
 import org.elasticsearch.xpack.ml.rest.modelsnapshots.RestRevertModelSnapshotAction;
@@ -771,6 +774,7 @@ public class MachineLearning extends Plugin implements SystemIndexPlugin, Analys
             new RestDeleteTrainedModelAction(),
             new RestGetTrainedModelsStatsAction(),
             new RestPutTrainedModelAction(),
+            new RestLtfFeatureExtractionAction(),
             // CAT Handlers
             new RestCatJobsAction(),
             new RestCatTrainedModelsAction(),
@@ -852,6 +856,7 @@ public class MachineLearning extends Plugin implements SystemIndexPlugin, Analys
                 new ActionHandler<>(DeleteTrainedModelAction.INSTANCE, TransportDeleteTrainedModelAction.class),
                 new ActionHandler<>(GetTrainedModelsStatsAction.INSTANCE, TransportGetTrainedModelsStatsAction.class),
                 new ActionHandler<>(PutTrainedModelAction.INSTANCE, TransportPutTrainedModelAction.class),
+                new ActionHandler<>(LtrFeatureExtractionAction.INSTANCE, TransportLtrFeatureExtractionAction.class),
                 usageAction,
                 infoAction);
     }

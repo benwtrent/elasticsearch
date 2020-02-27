@@ -106,6 +106,7 @@ import org.elasticsearch.xpack.core.ml.action.GetTrainedModelsStatsAction;
 import org.elasticsearch.xpack.core.ml.action.InternalInferModelAction;
 import org.elasticsearch.xpack.core.ml.action.IsolateDatafeedAction;
 import org.elasticsearch.xpack.core.ml.action.KillProcessAction;
+import org.elasticsearch.xpack.core.ml.action.LtrFeatureExtractionAction;
 import org.elasticsearch.xpack.core.ml.action.MlInfoAction;
 import org.elasticsearch.xpack.core.ml.action.OpenJobAction;
 import org.elasticsearch.xpack.core.ml.action.PersistJobAction;
@@ -345,6 +346,7 @@ public class XPackClientPlugin extends Plugin implements ActionPlugin, NetworkPl
                 DeleteTrainedModelAction.INSTANCE,
                 GetTrainedModelsStatsAction.INSTANCE,
                 PutTrainedModelAction.INSTANCE,
+                LtrFeatureExtractionAction.INSTANCE,
                 // security
                 ClearRealmCacheAction.INSTANCE,
                 ClearRolesCacheAction.INSTANCE,
