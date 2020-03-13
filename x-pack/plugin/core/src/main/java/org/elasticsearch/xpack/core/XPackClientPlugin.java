@@ -34,6 +34,7 @@ import org.elasticsearch.xpack.ccr.CCRInfoTransportAction;
 import org.elasticsearch.xpack.core.action.XPackInfoAction;
 import org.elasticsearch.xpack.core.action.XPackUsageAction;
 import org.elasticsearch.xpack.core.analytics.AnalyticsFeatureSetUsage;
+import org.elasticsearch.xpack.core.ml.inference.trainedmodel.tf.FrozenTensorGraph;
 import org.elasticsearch.xpack.core.search.action.DeleteAsyncSearchAction;
 import org.elasticsearch.xpack.core.search.action.GetAsyncSearchAction;
 import org.elasticsearch.xpack.core.search.action.SubmitAsyncSearchAction;
@@ -470,6 +471,7 @@ public class XPackClientPlugin extends Plugin implements ActionPlugin, NetworkPl
                 new NamedWriteableRegistry.Entry(TrainedModel.class,
                     LangIdentNeuralNetwork.NAME.getPreferredName(),
                     LangIdentNeuralNetwork::new),
+                new NamedWriteableRegistry.Entry(TrainedModel.class, FrozenTensorGraph.NAME.getPreferredName(), FrozenTensorGraph::new),
                 // ML - Inference aggregators
                 new NamedWriteableRegistry.Entry(OutputAggregator.class, WeightedSum.NAME.getPreferredName(), WeightedSum::new),
                 new NamedWriteableRegistry.Entry(OutputAggregator.class, WeightedMode.NAME.getPreferredName(), WeightedMode::new),
