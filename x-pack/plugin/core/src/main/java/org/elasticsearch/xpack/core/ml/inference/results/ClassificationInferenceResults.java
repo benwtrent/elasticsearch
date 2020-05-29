@@ -146,6 +146,17 @@ public class ClassificationInferenceResults extends SingleValueInferenceResults 
     }
 
     @Override
+    public String toString() {
+        return "ClassificationInferenceResults{" +
+            "topNumClassesField='" + topNumClassesField + '\'' +
+            ", resultsField='" + resultsField + '\'' +
+            ", classificationLabel='" + classificationLabel + '\'' +
+            ", topClasses=" + topClasses +
+            ", predictionFieldType=" + predictionFieldType +
+            '}';
+    }
+
+    @Override
     public String getWriteableName() {
         return NAME;
     }

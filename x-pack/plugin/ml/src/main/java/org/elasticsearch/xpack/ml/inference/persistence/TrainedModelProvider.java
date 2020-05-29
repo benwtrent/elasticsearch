@@ -94,9 +94,9 @@ import static org.elasticsearch.xpack.core.ml.job.messages.Messages.INFERENCE_FA
 
 public class TrainedModelProvider {
 
-    public static final Set<String> MODELS_STORED_AS_RESOURCE = Collections.singleton("lang_ident_model_1");
-    private static final String MODEL_RESOURCE_PATH = "/org/elasticsearch/xpack/ml/inference/persistence/";
-    private static final String MODEL_RESOURCE_FILE_EXT = ".json";
+    public static final Set<String> MODELS_STORED_AS_RESOURCE = Set.of("lang_ident_model_1", "dga_big_model");
+    public static final String MODEL_RESOURCE_PATH = "/org/elasticsearch/xpack/ml/inference/persistence/";
+    public static final String MODEL_RESOURCE_FILE_EXT = ".json";
     private static final int COMPRESSED_STRING_CHUNK_SIZE = 16 * 1024 * 1024;
     private static final int MAX_NUM_DEFINITION_DOCS = 100;
     private static final int MAX_COMPRESSED_STRING_SIZE = COMPRESSED_STRING_CHUNK_SIZE * MAX_NUM_DEFINITION_DOCS;

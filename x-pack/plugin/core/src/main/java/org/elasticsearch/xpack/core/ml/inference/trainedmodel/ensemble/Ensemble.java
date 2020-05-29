@@ -330,6 +330,30 @@ public class Ensemble implements LenientlyParsedTrainedModel, StrictlyParsedTrai
         return decodeFeatureImportances(featureDecoder, collapsed);
     }
 
+    public List<String> getFeatureNames() {
+        return featureNames;
+    }
+
+    public List<TrainedModel> getModels() {
+        return models;
+    }
+
+    public OutputAggregator getOutputAggregator() {
+        return outputAggregator;
+    }
+
+    public TargetType getTargetType() {
+        return targetType;
+    }
+
+    public List<String> getClassificationLabels() {
+        return classificationLabels;
+    }
+
+    public double[] getClassificationWeights() {
+        return classificationWeights;
+    }
+
     private static Map<String, double[]> mergeFeatureImportances(List<Map<String, double[]>> featureImportances) {
         return featureImportances.stream()
             .collect(HashMap::new,

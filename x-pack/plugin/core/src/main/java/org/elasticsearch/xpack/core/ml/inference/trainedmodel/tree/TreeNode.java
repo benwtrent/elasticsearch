@@ -82,7 +82,6 @@ public class TreeNode implements ToXContentObject, Writeable, Accountable {
     private final int rightChild;
     private final long numberSamples;
 
-
     private TreeNode(Operator operator,
                      Double threshold,
                      Integer splitFeature,
@@ -174,19 +173,19 @@ public class TreeNode implements ToXContentObject, Writeable, Accountable {
         return numberSamples;
     }
 
-    public int compare(List<Double> features) {
+    public int compare(double[] features) {
         if (isLeaf()) {
             throw new IllegalArgumentException("cannot call compare against a leaf node.");
         }
-        Double feature = features.get(splitFeature);
+        double feature = features[splitFeature];
         if (isMissing(feature)) {
             return defaultLeft ? leftChild : rightChild;
         }
         return operator.test(feature, threshold) ? leftChild : rightChild;
     }
 
-    private boolean isMissing(Double feature) {
-        return feature == null;
+    private boolean isMissing(double feature) {
+        return Numbers.isValidDouble(feature) == false;
     }
 
     @Override

@@ -85,9 +85,9 @@ public class TreeNodeTests extends AbstractSerializingTestCase<TreeNode> {
 
     public void testCompare() {
         expectThrows(IllegalArgumentException.class,
-            () -> createRandomLeafNode(randomDouble()).compare(Collections.singletonList(randomDouble())));
+            () -> createRandomLeafNode(randomDouble()).compare(new double[]{randomDouble()}));
 
-        List<Double> featureValues = Arrays.asList(0.1, null);
+        double[] featureValues = new double[]{0.1, Double.NaN};
         assertThat(createRandom(0, 2, 3, 0.0, 0, null).build().compare(featureValues),
             equalTo(3));
         assertThat(createRandom(0, 2, 3, 0.0, 0, Operator.GT).build().compare(featureValues),
