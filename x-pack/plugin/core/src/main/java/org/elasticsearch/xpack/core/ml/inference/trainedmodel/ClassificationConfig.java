@@ -24,6 +24,7 @@ public class ClassificationConfig implements LenientlyParsedInferenceConfig, Str
     public static final String DEFAULT_RESULTS_FIELD = "predicted_value";
 
     public static final ParseField RESULTS_FIELD = new ParseField("results_field");
+    public static final ParseField NUM_THREADS = new ParseField("num_threads");
     public static final ParseField NUM_TOP_CLASSES = new ParseField("num_top_classes");
     public static final ParseField TOP_CLASSES_RESULTS_FIELD = new ParseField("top_classes_results_field");
     public static final ParseField NUM_TOP_FEATURE_IMPORTANCE_VALUES = new ParseField("num_top_feature_importance_values");
@@ -38,6 +39,7 @@ public class ClassificationConfig implements LenientlyParsedInferenceConfig, Str
     private final String resultsField;
     private final int numTopFeatureImportanceValues;
     private final PredictionFieldType predictionFieldType;
+    private final int numThreads;
 
     private static final ObjectParser<ClassificationConfig.Builder, Void> LENIENT_PARSER = createParser(true);
     private static final ObjectParser<ClassificationConfig.Builder, Void> STRICT_PARSER = createParser(false);
@@ -62,6 +64,7 @@ public class ClassificationConfig implements LenientlyParsedInferenceConfig, Str
                 throw iae;
             }
         }, PREDICTION_FIELD_TYPE, ObjectParser.ValueType.STRING);
+        parser.declareInt(ClassificationConfig.Builder::setNumThreads, NUM_THREADS);
         return parser;
     }
 
@@ -82,6 +85,15 @@ public class ClassificationConfig implements LenientlyParsedInferenceConfig, Str
                                 String topClassesResultsField,
                                 Integer featureImportance,
                                 PredictionFieldType predictionFieldType) {
+        this(numTopClasses, resultsField, topClassesResultsField, featureImportance, predictionFieldType, 1);
+    }
+
+    public ClassificationConfig(Integer numTopClasses,
+                                String resultsField,
+                                String topClassesResultsField,
+                                Integer featureImportance,
+                                PredictionFieldType predictionFieldType,
+                                int numThreads) {
         this.numTopClasses = numTopClasses == null ? 0 : numTopClasses;
         this.topClassesResultsField = topClassesResultsField == null ? DEFAULT_TOP_CLASSES_RESULTS_FIELD : topClassesResultsField;
         this.resultsField = resultsField == null ? DEFAULT_RESULTS_FIELD : resultsField;
@@ -91,6 +103,7 @@ public class ClassificationConfig implements LenientlyParsedInferenceConfig, Str
         }
         this.numTopFeatureImportanceValues = featureImportance == null ? 0 : featureImportance;
         this.predictionFieldType = predictionFieldType == null ? PredictionFieldType.STRING : predictionFieldType;
+        this.numThreads = numThreads;
     }
 
     public ClassificationConfig(StreamInput in) throws IOException {
@@ -107,6 +120,7 @@ public class ClassificationConfig implements LenientlyParsedInferenceConfig, Str
         } else {
             this.predictionFieldType = PredictionFieldType.STRING;
         }
+        this.numThreads = in.readVInt();
     }
 
     public int getNumTopClasses() {
@@ -132,6 +146,11 @@ public class ClassificationConfig implements LenientlyParsedInferenceConfig, Str
     @Override
     public boolean requestingImportance() {
         return numTopFeatureImportanceValues > 0;
+    }
+
+    @Override
+    public int getThreadCount() {
+        return numThreads;
     }
 
     @Override
@@ -206,6 +225,7 @@ public class ClassificationConfig implements LenientlyParsedInferenceConfig, Str
         private String resultsField;
         private PredictionFieldType predictionFieldType;
         private Integer numTopFeatureImportanceValues;
+        private int numThreads = 1;
 
         Builder() {}
 
@@ -240,6 +260,11 @@ public class ClassificationConfig implements LenientlyParsedInferenceConfig, Str
         public Builder setPredictionFieldType(PredictionFieldType predictionFieldType) {
             this.predictionFieldType = predictionFieldType;
             return this;
+        }
+
+        public Builder setNumThreads(int numThreads) {
+             this.numThreads = numThreads;
+             return this;
         }
 
         public ClassificationConfig build() {

@@ -21,12 +21,17 @@ package org.elasticsearch.benchmark.ml;
 
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.Streams;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.util.concurrent.EsExecutors;
+import org.elasticsearch.common.util.concurrent.ThreadContext;
 import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.common.xcontent.json.JsonXContent;
+import org.elasticsearch.threadpool.ScalingExecutorBuilder;
 import org.elasticsearch.xpack.core.ml.inference.InferenceToXContentCompressor;
 import org.elasticsearch.xpack.core.ml.inference.MlInferenceNamedXContentProvider;
 import org.elasticsearch.xpack.core.ml.inference.TrainedModelConfig;
@@ -41,9 +46,11 @@ import org.openjdk.jmh.annotations.Level;
 import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
+import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
@@ -53,14 +60,22 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
+import static org.elasticsearch.xpack.core.ml.inference.trainedmodel.ClassificationConfig.DEFAULT_RESULTS_FIELD;
+import static org.elasticsearch.xpack.core.ml.inference.trainedmodel.ClassificationConfig.DEFAULT_TOP_CLASSES_RESULTS_FIELD;
+import static org.elasticsearch.xpack.ml.MachineLearning.UTILITY_THREAD_POOL_NAME;
 
-@Warmup(iterations = 10)
-@Measurement(iterations = 20)
+
+@Warmup(iterations = 5)
+@Measurement(iterations = 5)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
-@Fork(3)
+@Fork(2)
 @State(Scope.Benchmark)
 @SuppressWarnings("unused")
 public class DGABenchmark {
@@ -73,12 +88,29 @@ public class DGABenchmark {
     private static List<Map<String, Object>> preprocessedData;
     private static List<Map<String, Object>> inferenceData;
     private static InferenceConfig inferenceConfig;
+    private static ExecutorService executor;
 
     @Setup(Level.Iteration)
     public void setup() throws IOException {
         modelDefinition = loadModelFromResource("dga_big_model");
         inferenceData = getInferenceObjects();
-        inferenceConfig = ClassificationConfig.EMPTY_PARAMS;
+        new ScalingExecutorBuilder(UTILITY_THREAD_POOL_NAME,
+            1, 1_000, TimeValue.timeValueMinutes(10), "xpack.ml.utility_thread_pool");
+        final ThreadFactory threadFactory = EsExecutors.daemonThreadFactory(EsExecutors.threadName("test", "doop"));
+        executor = EsExecutors.newScaling(
+            "doop",
+            1,
+            100,
+            TimeValue.timeValueMinutes(10).millis(),
+            TimeUnit.MILLISECONDS,
+            threadFactory,
+            new ThreadContext(Settings.EMPTY));
+        inferenceConfig = ClassificationConfig.EMPTY_PARAMS; //(0, DEFAULT_RESULTS_FIELD, DEFAULT_TOP_CLASSES_RESULTS_FIELD, null, null, numThreads);
+    }
+
+    @TearDown(Level.Iteration)
+    public void tearDown() {
+        executor.shutdown();
     }
 
     /*@Benchmark
@@ -94,17 +126,22 @@ public class DGABenchmark {
             modelDefinition.getPreProcessors().forEach(p -> p.process(datum));
         }
         bh.consume(inferenceData);
-    }
+    }*/
 
     @Benchmark
     public void inferAndPreProcess(Blackhole bh) {
-        for (int i = 0; i < 100000; ++i) {
-            for (var datum : inferenceData) {
-                bh.consume(modelDefinition.infer(datum, inferenceConfig));
-            }
+        for (var datum : inferenceData) {
+            bh.consume(modelDefinition.infer(datum, inferenceConfig, executor));
         }
     }
-    */
+
+    @Benchmark
+    public void inferAndPreProcessNoThreads(Blackhole bh) {
+        for (var datum : inferenceData) {
+            bh.consume(modelDefinition.infer(datum, inferenceConfig));
+        }
+    }
+    /*
     @Benchmark
     public void infer_1105142(Blackhole bh) {
         bh.consume(modelDefinition.infer(inferenceData.get(0), inferenceConfig));
@@ -154,6 +191,7 @@ public class DGABenchmark {
     public void infer_1286491(Blackhole bh) {
         bh.consume(modelDefinition.infer(inferenceData.get(9), inferenceConfig));
     }
+    */
 
     private InferenceDefinition loadModelFromResource(String modelId) throws IOException {
         URL resource = getClass().getResource(MODEL_RESOURCE_PATH + modelId + MODEL_RESOURCE_FILE_EXT);

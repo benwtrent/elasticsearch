@@ -21,6 +21,7 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
     public static final ParseField NAME = new ParseField("regression");
     private static final Version MIN_SUPPORTED_VERSION = Version.V_7_6_0;
     public static final ParseField RESULTS_FIELD = new ParseField("results_field");
+    public static final ParseField NUM_THREADS = new ParseField("num_threads");
     public static final ParseField NUM_TOP_FEATURE_IMPORTANCE_VALUES = new ParseField("num_top_feature_importance_values");
     public static final String DEFAULT_RESULTS_FIELD = "predicted_value";
 
@@ -36,6 +37,7 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
             RegressionConfig.Builder::new);
         parser.declareString(RegressionConfig.Builder::setResultsField, RESULTS_FIELD);
         parser.declareInt(RegressionConfig.Builder::setNumTopFeatureImportanceValues, NUM_TOP_FEATURE_IMPORTANCE_VALUES);
+        parser.declareInt(RegressionConfig.Builder::setNumThreads, NUM_THREADS);
         return parser;
     }
 
@@ -49,18 +51,24 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
 
     private final String resultsField;
     private final int numTopFeatureImportanceValues;
+    private final int numThreads;
 
     public RegressionConfig(String resultsField) {
         this(resultsField, 0);
     }
 
     public RegressionConfig(String resultsField, Integer numTopFeatureImportanceValues) {
+        this(resultsField, numTopFeatureImportanceValues, 1);
+    }
+
+    public RegressionConfig(String resultsField, Integer numTopFeatureImportanceValues, int numThreads) {
         this.resultsField = resultsField == null ? DEFAULT_RESULTS_FIELD : resultsField;
         if (numTopFeatureImportanceValues != null && numTopFeatureImportanceValues < 0) {
             throw new IllegalArgumentException("[" + NUM_TOP_FEATURE_IMPORTANCE_VALUES.getPreferredName() +
                 "] must be greater than or equal to 0");
         }
         this.numTopFeatureImportanceValues = numTopFeatureImportanceValues == null ? 0 : numTopFeatureImportanceValues;
+        this.numThreads = numThreads;
     }
 
     public RegressionConfig(StreamInput in) throws IOException {
@@ -70,6 +78,7 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
         } else {
             this.numTopFeatureImportanceValues = 0;
         }
+        this.numThreads = in.readVInt();
     }
 
     public int getNumTopFeatureImportanceValues() {
@@ -83,6 +92,11 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
     @Override
     public boolean requestingImportance() {
         return numTopFeatureImportanceValues > 0;
+    }
+
+    @Override
+    public int getThreadCount() {
+        return numThreads;
     }
 
     @Override
@@ -143,6 +157,7 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
     public static class Builder {
         private String resultsField;
         private Integer numTopFeatureImportanceValues;
+        private int numThreads = 1;
 
         Builder() {}
 
@@ -161,8 +176,13 @@ public class RegressionConfig implements LenientlyParsedInferenceConfig, Strictl
             return this;
         }
 
+        public Builder setNumThreads(int numThreads) {
+            this.numThreads = numThreads;
+            return this;
+        }
+
         public RegressionConfig build() {
-            return new RegressionConfig(resultsField, numTopFeatureImportanceValues);
+            return new RegressionConfig(resultsField, numTopFeatureImportanceValues, numThreads);
         }
     }
 }

@@ -9,6 +9,7 @@ package org.elasticsearch.xpack.core.ml.inference.trainedmodel.inference;
 import org.apache.lucene.util.RamUsageEstimator;
 import org.elasticsearch.common.xcontent.ObjectParser;
 import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.xpack.core.ml.inference.preprocessing.LenientlyParsedPreProcessor;
 import org.elasticsearch.xpack.core.ml.inference.preprocessing.PreProcessor;
 import org.elasticsearch.xpack.core.ml.inference.results.InferenceResults;
@@ -20,6 +21,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 import static org.elasticsearch.xpack.core.ml.inference.TrainedModelDefinition.PREPROCESSORS;
 import static org.elasticsearch.xpack.core.ml.inference.TrainedModelDefinition.TRAINED_MODEL;
@@ -80,6 +82,20 @@ public class InferenceDefinition {
         return trainedModel.infer(fields,
             config,
             config.requestingImportance() ? getDecoderMap() : Collections.emptyMap());
+    }
+
+    public InferenceResults infer(Map<String, Object> fields, InferenceConfig config, Executor executor) {
+        preProcess(fields);
+        if (config.requestingImportance() && trainedModel.supportsFeatureImportance() == false) {
+            throw ExceptionsHelper.badRequestException(
+                "Feature importance is not supported for the configured model of type [{}]",
+                trainedModel.getName());
+        }
+        EnsembleInferenceModel model = (EnsembleInferenceModel)trainedModel;
+        return model.infer(fields,
+            config,
+            config.requestingImportance() ? getDecoderMap() : Collections.emptyMap(),
+            executor);
     }
 
     public TargetType getTargetType() {

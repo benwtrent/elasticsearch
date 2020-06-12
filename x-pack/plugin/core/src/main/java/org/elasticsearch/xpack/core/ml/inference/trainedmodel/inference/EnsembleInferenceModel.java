@@ -23,12 +23,18 @@ import org.elasticsearch.xpack.core.ml.inference.trainedmodel.ensemble.Leniently
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.ensemble.OutputAggregator;
 import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Vector;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -47,6 +53,7 @@ import static org.elasticsearch.xpack.core.ml.inference.trainedmodel.ensemble.En
 
 public class EnsembleInferenceModel implements InferenceModel {
 
+    static final ExecutorService threads = Executors.newFixedThreadPool(2);
     public static final long SHALLOW_SIZE = RamUsageEstimator.shallowSizeOfInstance(EnsembleInferenceModel.class);
 
     @SuppressWarnings("unchecked")
@@ -130,13 +137,17 @@ public class EnsembleInferenceModel implements InferenceModel {
         return innerInfer(features, config, Collections.emptyMap());
     }
 
+    public InferenceResults infer(Map<String, Object> fields, InferenceConfig config, Map<String, String> featureDecoderMap, Executor executor) {
+        return innerInfer(getFeatures(fields), config, featureDecoderMap, executor);
+    }
+
     private InferenceResults innerInfer(double[] features, InferenceConfig config, Map<String, String> featureDecoderMap) {
         if (config.isTargetTypeSupported(targetType) == false) {
             throw ExceptionsHelper.badRequestException(
                 "Cannot infer using configuration for [{}] when model target_type is [{}]", config.getName(), targetType.toString());
         }
-        double[][] inferenceResults = new double[this.models.size()][];
-        double[][] featureInfluence = new double[features.length][];
+        final double[][] inferenceResults = new double[this.models.size()][];
+        final double[][] featureInfluence = new double[features.length][];
         int i = 0;
         NullInferenceConfig subModelInferenceConfig = new NullInferenceConfig(config.requestingImportance());
         for (InferenceModel model : models) {
@@ -155,6 +166,60 @@ public class EnsembleInferenceModel implements InferenceModel {
                 }
             }
         }
+        double[] processed = outputAggregator.processValues(inferenceResults);
+        return buildResults(processed, featureInfluence, featureDecoderMap, config);
+    }
+
+    private InferenceResults innerInfer(double[] features, InferenceConfig config, Map<String, String> featureDecoderMap, Executor executor) {
+        if (config.isTargetTypeSupported(targetType) == false) {
+            throw ExceptionsHelper.badRequestException(
+                "Cannot infer using configuration for [{}] when model target_type is [{}]", config.getName(), targetType.toString());
+        }
+        final double[][] inferenceResults = new double[this.models.size()][];
+        final double[][] featureInfluence = new double[features.length][];
+        int i = 0;
+        NullInferenceConfig subModelInferenceConfig = new NullInferenceConfig(config.requestingImportance());
+        try
+        {
+            final CountDownLatch latch = new CountDownLatch(this.models.size());
+            for (final InferenceModel model : models) {
+                final int j = i++;
+                executor.execute(() -> {
+                    try {
+                        InferenceResults result = model.infer(features, subModelInferenceConfig);
+                        assert result instanceof RawInferenceResults;
+                        RawInferenceResults inferenceResult = (RawInferenceResults) result;
+                        inferenceResults[j] = inferenceResult.getValue();
+                    } finally {
+                        latch.countDown();
+                    }
+                });
+            }
+            latch.await();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+        /*for (InferenceModel model : models) {
+            InferenceResults result = model.infer(features, subModelInferenceConfig);
+            assert result instanceof RawInferenceResults;
+            RawInferenceResults inferenceResult = (RawInferenceResults) result;
+            inferenceResults[i++] = inferenceResult.getValue();
+            *//*if (config.requestingImportance()) {
+                double[][] modelFeatureImportance = inferenceResult.getFeatureImportance();
+                assert modelFeatureImportance.length == featureInfluence.length;
+                for (int j = 0; j < modelFeatureImportance.length; j++) {
+                    if (featureInfluence[j] == null) {
+                        featureInfluence[j] = new double[modelFeatureImportance[j].length];
+                    }
+                    featureInfluence[j] = sumDoubleArrays(featureInfluence[j], modelFeatureImportance[j]);
+                }
+            }*//*
+        }*/
+        /*double[][] inferenceResults = new double[inferenceResultsList.size()][];
+        int j = 0;
+        for (double[] val : inferenceResultsList) {
+            inferenceResults[j++] = val;
+        }*/
         double[] processed = outputAggregator.processValues(inferenceResults);
         return buildResults(processed, featureInfluence, featureDecoderMap, config);
     }

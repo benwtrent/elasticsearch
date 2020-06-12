@@ -57,4 +57,9 @@ public class NullInferenceConfig implements InferenceConfig {
     public boolean requestingImportance() {
         return requestingFeatureImportance;
     }
+
+    @Override
+    public int getThreadCount() {
+        return 1;
+    }
 }
