@@ -175,21 +175,24 @@ public class EnsembleInferenceModel implements InferenceModel {
             throw ExceptionsHelper.badRequestException(
                 "Cannot infer using configuration for [{}] when model target_type is [{}]", config.getName(), targetType.toString());
         }
+        final int batchSize = 64;
         final double[][] inferenceResults = new double[this.models.size()][];
         final double[][] featureInfluence = new double[features.length][];
-        int i = 0;
         NullInferenceConfig subModelInferenceConfig = new NullInferenceConfig(config.requestingImportance());
         try
         {
-            final CountDownLatch latch = new CountDownLatch(this.models.size());
-            for (final InferenceModel model : models) {
-                final int j = i++;
+            final CountDownLatch latch = new CountDownLatch((int)Math.ceil(models.size()/(double)batchSize));
+            for (int i = 0; i < models.size(); i += batchSize) {
+                final int start = i;
+                final int end = Math.min(models.size(), i + batchSize);
                 executor.execute(() -> {
                     try {
-                        InferenceResults result = model.infer(features, subModelInferenceConfig);
-                        assert result instanceof RawInferenceResults;
-                        RawInferenceResults inferenceResult = (RawInferenceResults) result;
-                        inferenceResults[j] = inferenceResult.getValue();
+                        for(int j = start; j < end; ++j) {
+                            InferenceResults result = models.get(j).infer(features, subModelInferenceConfig);
+                            assert result instanceof RawInferenceResults;
+                            RawInferenceResults inferenceResult = (RawInferenceResults) result;
+                            inferenceResults[j] = inferenceResult.getValue();
+                        }
                     } finally {
                         latch.countDown();
                     }
@@ -199,27 +202,6 @@ public class EnsembleInferenceModel implements InferenceModel {
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
         }
-        /*for (InferenceModel model : models) {
-            InferenceResults result = model.infer(features, subModelInferenceConfig);
-            assert result instanceof RawInferenceResults;
-            RawInferenceResults inferenceResult = (RawInferenceResults) result;
-            inferenceResults[i++] = inferenceResult.getValue();
-            *//*if (config.requestingImportance()) {
-                double[][] modelFeatureImportance = inferenceResult.getFeatureImportance();
-                assert modelFeatureImportance.length == featureInfluence.length;
-                for (int j = 0; j < modelFeatureImportance.length; j++) {
-                    if (featureInfluence[j] == null) {
-                        featureInfluence[j] = new double[modelFeatureImportance[j].length];
-                    }
-                    featureInfluence[j] = sumDoubleArrays(featureInfluence[j], modelFeatureImportance[j]);
-                }
-            }*//*
-        }*/
-        /*double[][] inferenceResults = new double[inferenceResultsList.size()][];
-        int j = 0;
-        for (double[] val : inferenceResultsList) {
-            inferenceResults[j++] = val;
-        }*/
         double[] processed = outputAggregator.processValues(inferenceResults);
         return buildResults(processed, featureInfluence, featureDecoderMap, config);
     }
