@@ -128,6 +128,7 @@ public class DGABenchmark {
         bh.consume(inferenceData);
     }*/
 
+    /*
     @Benchmark
     public void inferAndPreProcess(Blackhole bh) {
         for (var datum : inferenceData) {
@@ -141,57 +142,107 @@ public class DGABenchmark {
             bh.consume(modelDefinition.infer(datum, inferenceConfig));
         }
     }
-    /*
+
+     */
     @Benchmark
     public void infer_1105142(Blackhole bh) {
-        bh.consume(modelDefinition.infer(inferenceData.get(0), inferenceConfig));
+        bh.consume(modelDefinition.infer(inferenceData.get(0), inferenceConfig, executor));
     }
 
     @Benchmark
     public void infer_182200(Blackhole bh) {
-        bh.consume(modelDefinition.infer(inferenceData.get(1), inferenceConfig));
+        bh.consume(modelDefinition.infer(inferenceData.get(1), inferenceConfig, executor));
     }
 
     @Benchmark
     public void infer_1274687(Blackhole bh) {
-        bh.consume(modelDefinition.infer(inferenceData.get(2), inferenceConfig));
+        bh.consume(modelDefinition.infer(inferenceData.get(2), inferenceConfig, executor));
     }
 
     @Benchmark
     public void infer_1329864(Blackhole bh) {
-        bh.consume(modelDefinition.infer(inferenceData.get(3), inferenceConfig));
+        bh.consume(modelDefinition.infer(inferenceData.get(3), inferenceConfig, executor));
     }
 
     @Benchmark
     public void infer_672407(Blackhole bh) {
-        bh.consume(modelDefinition.infer(inferenceData.get(4), inferenceConfig));
+        bh.consume(modelDefinition.infer(inferenceData.get(4), inferenceConfig, executor));
     }
 
     @Benchmark
     public void infer_424703(Blackhole bh) {
-        bh.consume(modelDefinition.infer(inferenceData.get(5), inferenceConfig));
+        bh.consume(modelDefinition.infer(inferenceData.get(5), inferenceConfig, executor));
     }
 
     @Benchmark
     public void infer_147975(Blackhole bh) {
-        bh.consume(modelDefinition.infer(inferenceData.get(6), inferenceConfig));
+        bh.consume(modelDefinition.infer(inferenceData.get(6), inferenceConfig, executor));
     }
 
     @Benchmark
     public void infer_1163199(Blackhole bh) {
-        bh.consume(modelDefinition.infer(inferenceData.get(7), inferenceConfig));
+        bh.consume(modelDefinition.infer(inferenceData.get(7), inferenceConfig, executor));
     }
 
     @Benchmark
     public void infer_1345914(Blackhole bh) {
-        bh.consume(modelDefinition.infer(inferenceData.get(8), inferenceConfig));
+        bh.consume(modelDefinition.infer(inferenceData.get(8), inferenceConfig, executor));
     }
 
     @Benchmark
     public void infer_1286491(Blackhole bh) {
+        bh.consume(modelDefinition.infer(inferenceData.get(9), inferenceConfig, executor));
+    }
+
+    @Benchmark
+    public void infer_1105142NoThreads(Blackhole bh) {
+        bh.consume(modelDefinition.infer(inferenceData.get(0), inferenceConfig));
+    }
+
+    @Benchmark
+    public void infer_182200NoThreads(Blackhole bh) {
+        bh.consume(modelDefinition.infer(inferenceData.get(1), inferenceConfig));
+    }
+
+    @Benchmark
+    public void infer_1274687NoThreads(Blackhole bh) {
+        bh.consume(modelDefinition.infer(inferenceData.get(2), inferenceConfig));
+    }
+
+    @Benchmark
+    public void infer_1329864NoThreads(Blackhole bh) {
+        bh.consume(modelDefinition.infer(inferenceData.get(3), inferenceConfig));
+    }
+
+    @Benchmark
+    public void infer_672407NoThreads(Blackhole bh) {
+        bh.consume(modelDefinition.infer(inferenceData.get(4), inferenceConfig));
+    }
+
+    @Benchmark
+    public void infer_424703NoThreads(Blackhole bh) {
+        bh.consume(modelDefinition.infer(inferenceData.get(5), inferenceConfig));
+    }
+
+    @Benchmark
+    public void infer_147975NoThreads(Blackhole bh) {
+        bh.consume(modelDefinition.infer(inferenceData.get(6), inferenceConfig));
+    }
+
+    @Benchmark
+    public void infer_1163199NoThreads(Blackhole bh) {
+        bh.consume(modelDefinition.infer(inferenceData.get(7), inferenceConfig));
+    }
+
+    @Benchmark
+    public void infer_1345914NoThreads(Blackhole bh) {
+        bh.consume(modelDefinition.infer(inferenceData.get(8), inferenceConfig));
+    }
+
+    @Benchmark
+    public void infer_1286491NoThreads(Blackhole bh) {
         bh.consume(modelDefinition.infer(inferenceData.get(9), inferenceConfig));
     }
-    */
 
     private InferenceDefinition loadModelFromResource(String modelId) throws IOException {
         URL resource = getClass().getResource(MODEL_RESOURCE_PATH + modelId + MODEL_RESOURCE_FILE_EXT);
