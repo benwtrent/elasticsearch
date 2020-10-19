@@ -16,13 +16,19 @@ import org.elasticsearch.xpack.core.ml.categorization.CategorizationConfig;
 import org.elasticsearch.xpack.ml.MachineLearning;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
+
+import static org.elasticsearch.rest.RestRequest.Method.GET;
 
 public class RestPutCategorizationConfigAction extends BaseRestHandler {
 
-    public RestPutCategorizationConfigAction(RestController controller) {
-        controller.registerHandler(RestRequest.Method.PUT,
-            MachineLearning.BASE_PATH + "categorization/{" + CategorizationConfig.ID.getPreferredName() + "}",
-            this);
+    @Override
+    public List<Route> routes() {
+        return Arrays.asList(
+            new Route(RestRequest.Method.PUT,
+                MachineLearning.BASE_PATH + "categorization/{" + CategorizationConfig.ID.getPreferredName() + "}")
+        );
     }
 
     @Override

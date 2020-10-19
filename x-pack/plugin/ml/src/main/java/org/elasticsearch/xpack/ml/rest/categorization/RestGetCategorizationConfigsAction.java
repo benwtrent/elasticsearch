@@ -6,10 +6,9 @@
 package org.elasticsearch.xpack.ml.rest.categorization;
 
 import org.elasticsearch.client.node.NodeClient;
-import org.elasticsearch.cluster.metadata.MetaData;
+import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.rest.BaseRestHandler;
-import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.action.RestToXContentListener;
 import org.elasticsearch.xpack.core.action.util.PageParams;
@@ -18,16 +17,20 @@ import org.elasticsearch.xpack.core.ml.categorization.CategorizationConfig;
 import org.elasticsearch.xpack.ml.MachineLearning;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 
 import static org.elasticsearch.rest.RestRequest.Method.GET;
 import static org.elasticsearch.xpack.core.ml.action.GetCategorizationConfigsAction.Request.ALLOW_NO_MATCH;
 
 public class RestGetCategorizationConfigsAction extends BaseRestHandler {
 
-    public RestGetCategorizationConfigsAction(RestController controller) {
-        controller.registerHandler(
-            GET, MachineLearning.BASE_PATH + "categorization/{" + CategorizationConfig.ID.getPreferredName() + "}", this);
-        controller.registerHandler(GET, MachineLearning.BASE_PATH + "categorization", this);
+    @Override
+    public List<Route> routes() {
+        return Arrays.asList(
+            new Route(GET, MachineLearning.BASE_PATH + "categorization/{" + CategorizationConfig.ID.getPreferredName() + "}"),
+            new Route(GET, MachineLearning.BASE_PATH + "categorization")
+        );
     }
 
     @Override
@@ -39,7 +42,7 @@ public class RestGetCategorizationConfigsAction extends BaseRestHandler {
     protected RestChannelConsumer prepareRequest(RestRequest restRequest, NodeClient client) throws IOException {
         String categorizationId = restRequest.param(CategorizationConfig.ID.getPreferredName());
         if (Strings.isNullOrEmpty(categorizationId)) {
-            categorizationId = MetaData.ALL;
+            categorizationId = Metadata.ALL;
         }
         GetCategorizationConfigsAction.Request request = new GetCategorizationConfigsAction.Request(categorizationId);
         if (restRequest.hasParam(PageParams.FROM.getPreferredName()) || restRequest.hasParam(PageParams.SIZE.getPreferredName())) {
