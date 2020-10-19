@@ -27,12 +27,12 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ContextPreservingActionListener;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.common.Strings;
-import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.AbstractRunnable;
+import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
 import org.elasticsearch.threadpool.ThreadPool;
 
 import java.io.Closeable;
@@ -49,7 +49,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -89,6 +88,10 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
             return numberOfChannels;
         }
 
+        public Supplier<Stream<Setting.AffixSetting<?>>> getEnablementSettings() {
+            return enablementSettings;
+        }
+
         public Writeable.Reader<RemoteConnectionInfo.ModeInfo> getReader() {
             return reader.get();
         }
@@ -102,10 +105,14 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
             Setting.Property.NodeScope,
             Setting.Property.Dynamic));
 
+    // this setting is intentionally not registered, it is only used in tests
+    public static final Setting<Integer> REMOTE_MAX_PENDING_CONNECTION_LISTENERS =
+        Setting.intSetting("cluster.remote.max_pending_connection_listeners", 1000, Setting.Property.NodeScope);
 
-    private static final Logger logger = LogManager.getLogger(RemoteConnectionStrategy.class);
+    private final int maxPendingConnectionListeners;
 
-    private static final int MAX_LISTENERS = 100;
+    protected final Logger logger = LogManager.getLogger(getClass());
+
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final Object mutex = new Object();
     private List<ActionListener<Void>> listeners = new ArrayList<>();
@@ -114,11 +121,13 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
     protected final RemoteConnectionManager connectionManager;
     protected final String clusterAlias;
 
-    RemoteConnectionStrategy(String clusterAlias, TransportService transportService, RemoteConnectionManager connectionManager) {
+    RemoteConnectionStrategy(String clusterAlias, TransportService transportService, RemoteConnectionManager connectionManager,
+                             Settings settings) {
         this.clusterAlias = clusterAlias;
         this.transportService = transportService;
         this.connectionManager = connectionManager;
-        connectionManager.getConnectionManager().addListener(this);
+        this.maxPendingConnectionListeners = REMOTE_MAX_PENDING_CONNECTION_LISTENERS.get(settings);
+        connectionManager.addListener(this);
     }
 
     static ConnectionProfile buildConnectionProfile(String clusterAlias, Settings settings) {
@@ -129,9 +138,8 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
             .setCompressionEnabled(RemoteClusterService.REMOTE_CLUSTER_COMPRESS.getConcreteSettingForNamespace(clusterAlias).get(settings))
             .setPingInterval(RemoteClusterService.REMOTE_CLUSTER_PING_SCHEDULE.getConcreteSettingForNamespace(clusterAlias).get(settings))
             .addConnections(0, TransportRequestOptions.Type.BULK, TransportRequestOptions.Type.STATE,
-                TransportRequestOptions.Type.RECOVERY)
-            // TODO: Evaluate if we actually need PING channels?
-            .addConnections(mode.numberOfChannels, TransportRequestOptions.Type.REG, TransportRequestOptions.Type.PING);
+                TransportRequestOptions.Type.RECOVERY, TransportRequestOptions.Type.PING)
+            .addConnections(mode.numberOfChannels, TransportRequestOptions.Type.REG);
         return builder.build();
     }
 
@@ -150,7 +158,7 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
 
     static Set<String> getRemoteClusters(Settings settings) {
         final Stream<Setting.AffixSetting<?>> enablementSettings = Arrays.stream(ConnectionStrategy.values())
-            .flatMap(strategy -> strategy.enablementSettings.get());
+            .flatMap(strategy -> strategy.getEnablementSettings().get());
         return enablementSettings.flatMap(s -> getClusterAlias(settings, s)).collect(Collectors.toSet());
     }
 
@@ -160,7 +168,21 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
             List<String> seeds = SniffConnectionStrategy.REMOTE_CLUSTER_SEEDS.getConcreteSettingForNamespace(clusterAlias).get(settings);
             return seeds.isEmpty() == false;
         } else {
-            String address = ProxyConnectionStrategy.REMOTE_CLUSTER_ADDRESSES.getConcreteSettingForNamespace(clusterAlias).get(settings);
+            String address = ProxyConnectionStrategy.PROXY_ADDRESS.getConcreteSettingForNamespace(clusterAlias).get(settings);
+            return Strings.isEmpty(address) == false;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public static boolean isConnectionEnabled(String clusterAlias, Map<Setting<?>, Object> settings) {
+        ConnectionStrategy mode = (ConnectionStrategy) settings.get(REMOTE_CONNECTION_MODE.getConcreteSettingForNamespace(clusterAlias));
+        if (mode.equals(ConnectionStrategy.SNIFF)) {
+            List<String> seeds = (List<String>) settings.get(SniffConnectionStrategy.REMOTE_CLUSTER_SEEDS
+                .getConcreteSettingForNamespace(clusterAlias));
+            return seeds.isEmpty() == false;
+        } else {
+            String address = (String) settings.get(ProxyConnectionStrategy.PROXY_ADDRESS
+                .getConcreteSettingForNamespace(clusterAlias));
             return Strings.isEmpty(address) == false;
         }
     }
@@ -170,11 +192,9 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
         return allConcreteSettings.map(affixSetting::getNamespace);
     }
 
-    static InetSocketAddress parseConfiguredAddress(String remoteHost) {
-        final Tuple<String, Integer> hostPort = parseHostPort(remoteHost);
-        final String host = hostPort.v1();
-        assert hostPort.v2() != null : remoteHost;
-        final int port = hostPort.v2();
+    static InetSocketAddress parseConfiguredAddress(String configuredAddress) {
+        final String host = parseHost(configuredAddress);
+        final int port = parsePort(configuredAddress);
         InetAddress hostAddress;
         try {
             hostAddress = InetAddress.getByName(host);
@@ -184,15 +204,13 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
         return new InetSocketAddress(hostAddress, port);
     }
 
-    private static Tuple<String, Integer> parseHostPort(final String remoteHost) {
-        final String host = remoteHost.substring(0, indexOfPortSeparator(remoteHost));
-        final int port = parsePort(remoteHost);
-        return Tuple.tuple(host, port);
+    static String parseHost(final String configuredAddress) {
+        return configuredAddress.substring(0, indexOfPortSeparator(configuredAddress));
     }
 
     static int parsePort(String remoteHost) {
         try {
-            int port = Integer.valueOf(remoteHost.substring(indexOfPortSeparator(remoteHost) + 1));
+            int port = Integer.parseInt(remoteHost.substring(indexOfPortSeparator(remoteHost) + 1));
             if (port <= 0) {
                 throw new IllegalArgumentException("port number must be > 0 but was: [" + port + "]");
             }
@@ -224,9 +242,9 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
             if (closed) {
                 assert listeners.isEmpty();
             } else {
-                if (listeners.size() >= MAX_LISTENERS) {
-                    assert listeners.size() == MAX_LISTENERS;
-                    listener.onFailure(new RejectedExecutionException("connect listener queue is full"));
+                if (listeners.size() >= maxPendingConnectionListeners) {
+                    assert listeners.size() == maxPendingConnectionListeners;
+                    listener.onFailure(new EsRejectedExecutionException("connect listener queue is full"));
                     return;
                 } else {
                     listeners.add(listener);
@@ -276,7 +294,7 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
                 .getConcreteSettingForNamespace(clusterAlias)
                 .get(newSettings);
 
-            ConnectionProfile oldProfile = connectionManager.getConnectionManager().getConnectionProfile();
+            ConnectionProfile oldProfile = connectionManager.getConnectionProfile();
             ConnectionProfile.Builder builder = new ConnectionProfile.Builder(oldProfile);
             builder.setCompressionEnabled(compressionEnabled);
             builder.setPingInterval(pingSchedule);
@@ -294,8 +312,8 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
         if (shouldOpenMoreConnections()) {
             // try to reconnect and fill up the slot of the disconnected node
             connect(ActionListener.wrap(
-                ignore -> logger.trace("successfully connected after disconnect of {}", node),
-                e -> logger.trace(() -> new ParameterizedMessage("failed to connect after disconnect of {}", node), e)));
+                ignore -> logger.trace("[{}] successfully connected after disconnect of {}", clusterAlias, node),
+                e -> logger.debug(() -> new ParameterizedMessage("[{}] failed to connect after disconnect of {}", clusterAlias, node), e)));
         }
     }
 
@@ -304,7 +322,7 @@ public abstract class RemoteConnectionStrategy implements TransportConnectionLis
         final List<ActionListener<Void>> toNotify;
         synchronized (mutex) {
             if (closed.compareAndSet(false, true)) {
-                connectionManager.getConnectionManager().removeListener(this);
+                connectionManager.removeListener(this);
                 toNotify = listeners;
                 listeners = Collections.emptyList();
             } else {

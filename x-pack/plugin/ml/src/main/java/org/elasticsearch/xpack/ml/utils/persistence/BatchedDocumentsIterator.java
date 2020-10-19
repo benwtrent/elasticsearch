@@ -10,7 +10,7 @@ import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.SearchScrollRequest;
-import org.elasticsearch.client.Client;
+import org.elasticsearch.client.OriginSettingClient;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
@@ -28,20 +28,20 @@ import java.util.Objects;
  * An iterator useful to fetch a big number of documents of type T
  * and iterate through them in batches.
  */
-public abstract class BatchedDocumentsIterator<T>  {
+public abstract class BatchedDocumentsIterator<T> implements BatchedIterator<T>  {
     private static final Logger LOGGER = LogManager.getLogger(BatchedDocumentsIterator.class);
 
     private static final String CONTEXT_ALIVE_DURATION = "5m";
     private static final int BATCH_SIZE = 10000;
 
-    private final Client client;
+    private final OriginSettingClient client;
     private final String index;
     private volatile long count;
     private volatile long totalHits;
     private volatile String scrollId;
     private volatile boolean isScrollInitialised;
 
-    protected BatchedDocumentsIterator(Client client, String index) {
+    protected BatchedDocumentsIterator(OriginSettingClient client, String index) {
         this.client = Objects.requireNonNull(client);
         this.index = Objects.requireNonNull(index);
         this.totalHits = 0;
@@ -56,6 +56,7 @@ public abstract class BatchedDocumentsIterator<T>  {
      *
      * @return {@code true} if the iteration has more elements
      */
+    @Override
     public boolean hasNext() {
         return !isScrollInitialised || count != totalHits;
     }
@@ -70,6 +71,7 @@ public abstract class BatchedDocumentsIterator<T>  {
      * @return a {@code Deque} with the next batch of documents
      * @throws NoSuchElementException if the iteration has no more elements
      */
+    @Override
     public Deque<T> next() {
         if (!hasNext()) {
             throw new NoSuchElementException();

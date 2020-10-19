@@ -14,6 +14,7 @@ import org.elasticsearch.xpack.ml.extractor.ExtractedFields;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -27,7 +28,9 @@ public class TimeBasedExtractedFields extends ExtractedFields {
     private final ExtractedField timeField;
 
     public TimeBasedExtractedFields(ExtractedField timeField, List<ExtractedField> allFields) {
-        super(allFields);
+        super(allFields,
+            Collections.emptyList(),
+            Collections.emptyMap());
         if (!allFields.contains(timeField)) {
             throw new IllegalArgumentException("timeField should also be contained in allFields");
         }
@@ -61,7 +64,7 @@ public class TimeBasedExtractedFields extends ExtractedFields {
         List<String> remainingFields = job.allInputFields().stream().filter(f -> !f.equals(timeField)).collect(Collectors.toList());
         List<ExtractedField> allExtractedFields = new ArrayList<>(remainingFields.size() + 1);
         allExtractedFields.add(timeExtractedField);
-        remainingFields.stream().forEach(field -> allExtractedFields.add(extractionMethodDetector.detect(field)));
+        remainingFields.forEach(field -> allExtractedFields.add(extractionMethodDetector.detect(field)));
 
         return new TimeBasedExtractedFields(timeExtractedField, allExtractedFields);
     }

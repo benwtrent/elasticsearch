@@ -76,7 +76,7 @@ public class SimulateExecutionServiceTests extends ESTestCase {
     }
 
     public void testExecuteVerboseItem() throws Exception {
-        TestProcessor processor = new TestProcessor("test-id", "mock", ingestDocument -> {});
+        TestProcessor processor = new TestProcessor("test-id", "mock", null, ingestDocument -> {});
         Pipeline pipeline = new Pipeline("_id", "_description", version, new CompoundProcessor(processor, processor));
 
         CountDownLatch latch = new CountDownLatch(1);
@@ -91,25 +91,19 @@ public class SimulateExecutionServiceTests extends ESTestCase {
         assertThat(actualItemResponse, instanceOf(SimulateDocumentVerboseResult.class));
         SimulateDocumentVerboseResult simulateDocumentVerboseResult = (SimulateDocumentVerboseResult) actualItemResponse;
         assertThat(simulateDocumentVerboseResult.getProcessorResults().size(), equalTo(2));
-        assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getProcessorTag(), equalTo("test-id"));
-        IngestDocument firstProcessorIngestDocument = simulateDocumentVerboseResult.getProcessorResults().get(0).getIngestDocument();
-        assertThat(firstProcessorIngestDocument, not(sameInstance(this.ingestDocument)));
-        assertIngestDocument(firstProcessorIngestDocument, this.ingestDocument);
-        assertThat(firstProcessorIngestDocument.getSourceAndMetadata(), not(sameInstance(this.ingestDocument.getSourceAndMetadata())));
 
+        assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getProcessorTag(), equalTo("test-id"));
+        assertVerboseResult(simulateDocumentVerboseResult.getProcessorResults().get(0), pipeline.getId(), ingestDocument);
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getFailure(), nullValue());
+
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(1).getProcessorTag(), equalTo("test-id"));
-        IngestDocument secondProcessorIngestDocument = simulateDocumentVerboseResult.getProcessorResults().get(1).getIngestDocument();
-        assertThat(secondProcessorIngestDocument, not(sameInstance(this.ingestDocument)));
-        assertIngestDocument(secondProcessorIngestDocument, this.ingestDocument);
-        assertThat(secondProcessorIngestDocument.getSourceAndMetadata(), not(sameInstance(this.ingestDocument.getSourceAndMetadata())));
-        assertThat(secondProcessorIngestDocument.getSourceAndMetadata(),
-            not(sameInstance(firstProcessorIngestDocument.getSourceAndMetadata())));
+        assertVerboseResult(simulateDocumentVerboseResult.getProcessorResults().get(1), pipeline.getId(), ingestDocument);
+        assertThat(simulateDocumentVerboseResult.getProcessorResults().get(1).getIngestDocument().getSourceAndMetadata(),
+            not(sameInstance(simulateDocumentVerboseResult.getProcessorResults().get(0).getIngestDocument().getSourceAndMetadata())));
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(1).getFailure(), nullValue());
     }
-
     public void testExecuteItem() throws Exception {
-        TestProcessor processor = new TestProcessor("processor_0", "mock", ingestDocument -> {});
+        TestProcessor processor = new TestProcessor("processor_0", "mock", null, ingestDocument -> {});
         Pipeline pipeline = new Pipeline("_id", "_description", version, new CompoundProcessor(processor, processor));
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<SimulateDocumentResult> holder = new AtomicReference<>();
@@ -127,9 +121,9 @@ public class SimulateExecutionServiceTests extends ESTestCase {
     }
 
     public void testExecuteVerboseItemExceptionWithoutOnFailure() throws Exception {
-        TestProcessor processor1 = new TestProcessor("processor_0", "mock", ingestDocument -> {});
-        TestProcessor processor2 = new TestProcessor("processor_1", "mock", new RuntimeException("processor failed"));
-        TestProcessor processor3 = new TestProcessor("processor_2", "mock", ingestDocument -> {});
+        TestProcessor processor1 = new TestProcessor("processor_0", "mock", null, ingestDocument -> {});
+        TestProcessor processor2 = new TestProcessor("processor_1", "mock", null, new RuntimeException("processor failed"));
+        TestProcessor processor3 = new TestProcessor("processor_2", "mock", null, ingestDocument -> {});
         Pipeline pipeline = new Pipeline("_id", "_description", version, new CompoundProcessor(processor1, processor2, processor3));
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<SimulateDocumentResult> holder = new AtomicReference<>();
@@ -147,10 +141,7 @@ public class SimulateExecutionServiceTests extends ESTestCase {
         assertThat(simulateDocumentVerboseResult.getProcessorResults().size(), equalTo(2));
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getProcessorTag(), equalTo("processor_0"));
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getFailure(), nullValue());
-        assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getIngestDocument(), not(sameInstance(ingestDocument)));
-        assertIngestDocument(simulateDocumentVerboseResult.getProcessorResults().get(0).getIngestDocument(), ingestDocument);
-        assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getIngestDocument().getSourceAndMetadata(),
-                not(sameInstance(ingestDocument.getSourceAndMetadata())));
+        assertVerboseResult(simulateDocumentVerboseResult.getProcessorResults().get(0), pipeline.getId(), ingestDocument);
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(1).getProcessorTag(), equalTo("processor_1"));
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(1).getIngestDocument(), nullValue());
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(1).getFailure(), instanceOf(RuntimeException.class));
@@ -159,9 +150,9 @@ public class SimulateExecutionServiceTests extends ESTestCase {
     }
 
     public void testExecuteVerboseItemWithOnFailure() throws Exception {
-        TestProcessor processor1 = new TestProcessor("processor_0", "mock", new RuntimeException("processor failed"));
-        TestProcessor processor2 = new TestProcessor("processor_1", "mock", ingestDocument -> {});
-        TestProcessor processor3 = new TestProcessor("processor_2", "mock", ingestDocument -> {});
+        TestProcessor processor1 = new TestProcessor("processor_0", "mock", null, new RuntimeException("processor failed"));
+        TestProcessor processor2 = new TestProcessor("processor_1", "mock", null, ingestDocument -> {});
+        TestProcessor processor3 = new TestProcessor("processor_2", "mock", null, ingestDocument -> {});
         Pipeline pipeline = new Pipeline("_id", "_description", version,
                 new CompoundProcessor(new CompoundProcessor(false, Collections.singletonList(processor1),
                                 Collections.singletonList(processor2)), processor3));
@@ -191,20 +182,18 @@ public class SimulateExecutionServiceTests extends ESTestCase {
         metadata.put(CompoundProcessor.ON_FAILURE_PROCESSOR_TYPE_FIELD, "mock");
         metadata.put(CompoundProcessor.ON_FAILURE_PROCESSOR_TAG_FIELD, "processor_0");
         metadata.put(CompoundProcessor.ON_FAILURE_MESSAGE_FIELD, "processor failed");
-        assertIngestDocument(simulateDocumentVerboseResult.getProcessorResults().get(1).getIngestDocument(),
-                ingestDocumentWithOnFailureMetadata);
-
+        assertVerboseResult(simulateDocumentVerboseResult.getProcessorResults().get(1), pipeline.getId(),
+            ingestDocumentWithOnFailureMetadata);
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(1).getFailure(), nullValue());
 
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(2).getProcessorTag(), equalTo("processor_2"));
-        assertThat(simulateDocumentVerboseResult.getProcessorResults().get(2).getIngestDocument(), not(sameInstance(ingestDocument)));
-        assertIngestDocument(simulateDocumentVerboseResult.getProcessorResults().get(2).getIngestDocument(), ingestDocument);
+        assertVerboseResult(simulateDocumentVerboseResult.getProcessorResults().get(2), pipeline.getId(), ingestDocument);
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(2).getFailure(), nullValue());
     }
 
     public void testExecuteVerboseItemExceptionWithIgnoreFailure() throws Exception {
         RuntimeException exception = new RuntimeException("processor failed");
-        TestProcessor testProcessor = new TestProcessor("processor_0", "mock", exception);
+        TestProcessor testProcessor = new TestProcessor("processor_0", "mock", null, exception);
         CompoundProcessor processor = new CompoundProcessor(true, Collections.singletonList(testProcessor), Collections.emptyList());
         Pipeline pipeline = new Pipeline("_id", "_description", version, new CompoundProcessor(processor));
         CountDownLatch latch = new CountDownLatch(1);
@@ -221,14 +210,11 @@ public class SimulateExecutionServiceTests extends ESTestCase {
         assertThat(simulateDocumentVerboseResult.getProcessorResults().size(), equalTo(1));
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getProcessorTag(), equalTo("processor_0"));
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getFailure(), sameInstance(exception));
-        assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getIngestDocument(), not(sameInstance(ingestDocument)));
-        assertIngestDocument(simulateDocumentVerboseResult.getProcessorResults().get(0).getIngestDocument(), ingestDocument);
-        assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getIngestDocument().getSourceAndMetadata(),
-                not(sameInstance(ingestDocument.getSourceAndMetadata())));
+        assertVerboseResult(simulateDocumentVerboseResult.getProcessorResults().get(0), pipeline.getId(), ingestDocument);
     }
 
     public void testExecuteVerboseItemWithoutExceptionAndWithIgnoreFailure() throws Exception {
-        TestProcessor testProcessor = new TestProcessor("processor_0", "mock", ingestDocument -> { });
+        TestProcessor testProcessor = new TestProcessor("processor_0", "mock", null, ingestDocument -> { });
         CompoundProcessor processor = new CompoundProcessor(true, Collections.singletonList(testProcessor), Collections.emptyList());
         Pipeline pipeline = new Pipeline("_id", "_description", version, new CompoundProcessor(processor));
         CountDownLatch latch = new CountDownLatch(1);
@@ -245,10 +231,7 @@ public class SimulateExecutionServiceTests extends ESTestCase {
         assertThat(simulateDocumentVerboseResult.getProcessorResults().size(), equalTo(1));
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getProcessorTag(), equalTo("processor_0"));
         assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getFailure(), nullValue());
-        assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getIngestDocument(), not(sameInstance(ingestDocument)));
-        assertIngestDocument(simulateDocumentVerboseResult.getProcessorResults().get(0).getIngestDocument(), ingestDocument);
-        assertThat(simulateDocumentVerboseResult.getProcessorResults().get(0).getIngestDocument().getSourceAndMetadata(),
-                not(sameInstance(ingestDocument.getSourceAndMetadata())));
+        assertVerboseResult(simulateDocumentVerboseResult.getProcessorResults().get(0), pipeline.getId(), ingestDocument);
     }
 
     public void testExecuteItemWithFailure() throws Exception {
@@ -274,7 +257,7 @@ public class SimulateExecutionServiceTests extends ESTestCase {
 
     public void testDropDocument() throws Exception {
         TestProcessor processor1 = new TestProcessor(ingestDocument -> ingestDocument.setFieldValue("field", "value"));
-        Processor processor2 = new DropProcessor.Factory().create(Map.of(), null, Map.of());
+        Processor processor2 = new DropProcessor.Factory().create(Map.of(), null, null, Map.of());
         Pipeline pipeline = new Pipeline("_id", "_description", version, new CompoundProcessor(processor1, processor2));
 
         CountDownLatch latch = new CountDownLatch(1);
@@ -294,7 +277,7 @@ public class SimulateExecutionServiceTests extends ESTestCase {
 
     public void testDropDocumentVerbose() throws Exception {
         TestProcessor processor1 = new TestProcessor(ingestDocument -> ingestDocument.setFieldValue("field", "value"));
-        Processor processor2 = new DropProcessor.Factory().create(Map.of(), null, Map.of());
+        Processor processor2 = new DropProcessor.Factory().create(Map.of(), null, null, Map.of());
         Pipeline pipeline = new Pipeline("_id", "_description", version, new CompoundProcessor(processor1, processor2));
 
         CountDownLatch latch = new CountDownLatch(1);
@@ -317,7 +300,7 @@ public class SimulateExecutionServiceTests extends ESTestCase {
 
     public void testDropDocumentVerboseExtraProcessor() throws Exception {
         TestProcessor processor1 = new TestProcessor(ingestDocument -> ingestDocument.setFieldValue("field1", "value"));
-        Processor processor2 = new DropProcessor.Factory().create(Map.of(), null, Map.of());
+        Processor processor2 = new DropProcessor.Factory().create(Map.of(), null, null, Map.of());
         TestProcessor processor3 = new TestProcessor(ingestDocument -> ingestDocument.setFieldValue("field2", "value"));
         Pipeline pipeline = new Pipeline("_id", "_description", version, new CompoundProcessor(processor1, processor2, processor3));
 
@@ -346,7 +329,7 @@ public class SimulateExecutionServiceTests extends ESTestCase {
         for (int id = 0; id < numDocs; id++) {
             documents.add(new IngestDocument("_index", Integer.toString(id), null, 0L, VersionType.INTERNAL, new HashMap<>()));
         }
-        Processor processor1 = new AbstractProcessor(null) {
+        Processor processor1 = new AbstractProcessor(null, null) {
 
             @Override
             public void execute(IngestDocument ingestDocument, BiConsumer<IngestDocument, Exception> handler) {
@@ -387,9 +370,24 @@ public class SimulateExecutionServiceTests extends ESTestCase {
 
         for (int id = 0; id < numDocs; id++) {
             SimulateDocumentBaseResult result = (SimulateDocumentBaseResult) response.getResults().get(id);
-            assertThat(result.getIngestDocument().getMetadata().get(IngestDocument.MetaData.ID), equalTo(Integer.toString(id)));
+            assertThat(result.getIngestDocument().getMetadata().get(IngestDocument.Metadata.ID), equalTo(Integer.toString(id)));
             assertThat(result.getIngestDocument().getSourceAndMetadata().get("processed"), is(true));
         }
+    }
+
+    private static void assertVerboseResult(SimulateProcessorResult result,
+                                            String expectedPipelineId,
+                                            IngestDocument expectedIngestDocument) {
+        IngestDocument simulateVerboseIngestDocument = result.getIngestDocument();
+        // Remove and compare pipeline key. It is always in the verbose result,
+        // since that is a snapshot of how the ingest doc looks during pipeline execution, but not in the final ingestDocument.
+        // The key gets added and removed during pipeline execution.
+        String actualPipelineId = (String) simulateVerboseIngestDocument.getIngestMetadata().remove("pipeline");
+        assertThat(actualPipelineId, equalTo(expectedPipelineId));
+
+        assertThat(simulateVerboseIngestDocument, not(sameInstance(expectedIngestDocument)));
+        assertIngestDocument(simulateVerboseIngestDocument, expectedIngestDocument);
+        assertThat(simulateVerboseIngestDocument.getSourceAndMetadata(), not(sameInstance(expectedIngestDocument.getSourceAndMetadata())));
     }
 
 }

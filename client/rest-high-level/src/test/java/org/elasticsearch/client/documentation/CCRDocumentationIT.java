@@ -54,6 +54,7 @@ import org.elasticsearch.client.core.BroadcastResponse;
 import org.elasticsearch.client.indices.CloseIndexRequest;
 import org.elasticsearch.client.indices.CreateIndexRequest;
 import org.elasticsearch.client.indices.CreateIndexResponse;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.test.rest.yaml.ObjectPath;
 import org.junit.Before;
 
@@ -80,7 +81,6 @@ public class CCRDocumentationIT extends ESRestHighLevelClientTestCase {
         {
             // Create leader index:
             CreateIndexRequest createIndexRequest = new CreateIndexRequest("leader");
-            createIndexRequest.settings(Collections.singletonMap("index.soft_deletes.enabled", true));
             CreateIndexResponse response = client.indices().create(createIndexRequest, RequestOptions.DEFAULT);
             assertThat(response.isAcknowledged(), is(true));
         }
@@ -92,6 +92,9 @@ public class CCRDocumentationIT extends ESRestHighLevelClientTestCase {
             "follower", // <3>
             ActiveShardCount.ONE // <4>
         );
+        Settings settings =
+            Settings.builder().put("index.number_of_replicas", 0L).build();
+        putFollowRequest.setSettings(settings); // <5>
         // end::ccr-put-follow-request
 
         // tag::ccr-put-follow-execute
@@ -161,7 +164,6 @@ public class CCRDocumentationIT extends ESRestHighLevelClientTestCase {
         {
             // Create leader index:
             CreateIndexRequest createIndexRequest = new CreateIndexRequest("leader");
-            createIndexRequest.settings(Collections.singletonMap("index.soft_deletes.enabled", true));
             CreateIndexResponse response = client.indices().create(createIndexRequest, RequestOptions.DEFAULT);
             assertThat(response.isAcknowledged(), is(true));
         }
@@ -227,7 +229,6 @@ public class CCRDocumentationIT extends ESRestHighLevelClientTestCase {
         {
             // Create leader index:
             CreateIndexRequest createIndexRequest = new CreateIndexRequest("leader");
-            createIndexRequest.settings(Collections.singletonMap("index.soft_deletes.enabled", true));
             CreateIndexResponse response = client.indices().create(createIndexRequest, RequestOptions.DEFAULT);
             assertThat(response.isAcknowledged(), is(true));
         }
@@ -303,7 +304,6 @@ public class CCRDocumentationIT extends ESRestHighLevelClientTestCase {
         {
             // Create leader index:
             CreateIndexRequest createIndexRequest = new CreateIndexRequest("leader");
-            createIndexRequest.settings(Collections.singletonMap("index.soft_deletes.enabled", true));
             CreateIndexResponse response = client.indices().create(createIndexRequest, RequestOptions.DEFAULT);
             assertThat(response.isAcknowledged(), is(true));
         }
@@ -392,7 +392,6 @@ public class CCRDocumentationIT extends ESRestHighLevelClientTestCase {
             final Map<String, String> settings = new HashMap<>(2);
             final int numberOfShards = randomIntBetween(1, 2);
             settings.put("index.number_of_shards", Integer.toString(numberOfShards));
-            settings.put("index.soft_deletes.enabled", Boolean.TRUE.toString());
             createIndexRequest.settings(settings);
             final CreateIndexResponse response = client.indices().create(createIndexRequest, RequestOptions.DEFAULT);
             assertThat(response.isAcknowledged(), is(true));
@@ -489,6 +488,9 @@ public class CCRDocumentationIT extends ESRestHighLevelClientTestCase {
                 Arrays.asList("logs-*", "metrics-*") // <3>
         );
         request.setFollowIndexNamePattern("copy-{{leader_index}}"); // <4>
+        Settings settings =
+            Settings.builder().put("index.number_of_replicas", 0L).build();
+        request.setSettings(settings); // <5>
         // end::ccr-put-auto-follow-pattern-request
 
         // tag::ccr-put-auto-follow-pattern-execute
@@ -837,7 +839,6 @@ public class CCRDocumentationIT extends ESRestHighLevelClientTestCase {
         {
             // Create leader index:
             CreateIndexRequest createIndexRequest = new CreateIndexRequest("leader");
-            createIndexRequest.settings(Collections.singletonMap("index.soft_deletes.enabled", true));
             CreateIndexResponse response = client.indices().create(createIndexRequest, RequestOptions.DEFAULT);
             assertThat(response.isAcknowledged(), is(true));
         }
@@ -905,7 +906,6 @@ public class CCRDocumentationIT extends ESRestHighLevelClientTestCase {
         {
             // Create leader index:
             CreateIndexRequest createIndexRequest = new CreateIndexRequest("leader");
-            createIndexRequest.settings(Collections.singletonMap("index.soft_deletes.enabled", true));
             CreateIndexResponse response = client.indices().create(createIndexRequest, RequestOptions.DEFAULT);
             assertThat(response.isAcknowledged(), is(true));
         }

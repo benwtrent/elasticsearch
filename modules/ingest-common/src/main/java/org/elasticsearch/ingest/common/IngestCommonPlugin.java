@@ -50,7 +50,6 @@ import static java.util.Map.entry;
 
 public class IngestCommonPlugin extends Plugin implements ActionPlugin, IngestPlugin {
 
-    static final Map<String, String> GROK_PATTERNS = Grok.getBuiltinPatterns();
     static final Setting<TimeValue> WATCHDOG_INTERVAL =
         Setting.timeSetting("ingest.grok.watchdog.interval", TimeValue.timeValueSeconds(1), Setting.Property.NodeScope);
     static final Setting<TimeValue> WATCHDOG_MAX_EXECUTION_TIME =
@@ -75,10 +74,10 @@ public class IngestCommonPlugin extends Plugin implements ActionPlugin, IngestPl
                 entry(ConvertProcessor.TYPE, new ConvertProcessor.Factory()),
                 entry(GsubProcessor.TYPE, new GsubProcessor.Factory()),
                 entry(FailProcessor.TYPE, new FailProcessor.Factory(parameters.scriptService)),
-                entry(ForEachProcessor.TYPE, new ForEachProcessor.Factory(parameters.scriptService, parameters.genericExecutor)),
+                entry(ForEachProcessor.TYPE, new ForEachProcessor.Factory(parameters.scriptService)),
                 entry(DateIndexNameProcessor.TYPE, new DateIndexNameProcessor.Factory(parameters.scriptService)),
                 entry(SortProcessor.TYPE, new SortProcessor.Factory()),
-                entry(GrokProcessor.TYPE, new GrokProcessor.Factory(GROK_PATTERNS, createGrokThreadWatchdog(parameters))),
+                entry(GrokProcessor.TYPE, new GrokProcessor.Factory(Grok.BUILTIN_PATTERNS, createGrokThreadWatchdog(parameters))),
                 entry(ScriptProcessor.TYPE, new ScriptProcessor.Factory(parameters.scriptService)),
                 entry(DotExpanderProcessor.TYPE, new DotExpanderProcessor.Factory()),
                 entry(JsonProcessor.TYPE, new JsonProcessor.Factory()),
@@ -103,7 +102,7 @@ public class IngestCommonPlugin extends Plugin implements ActionPlugin, IngestPl
                                              IndexScopedSettings indexScopedSettings, SettingsFilter settingsFilter,
                                              IndexNameExpressionResolver indexNameExpressionResolver,
                                              Supplier<DiscoveryNodes> nodesInCluster) {
-        return Arrays.asList(new GrokProcessorGetAction.RestAction(restController));
+        return Collections.singletonList(new GrokProcessorGetAction.RestAction());
     }
 
     @Override

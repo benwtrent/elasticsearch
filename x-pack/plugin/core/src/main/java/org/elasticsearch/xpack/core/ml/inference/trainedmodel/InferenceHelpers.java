@@ -6,13 +6,19 @@
 package org.elasticsearch.xpack.core.ml.inference.trainedmodel;
 
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.xpack.core.ml.inference.results.ClassificationInferenceResults;
+import org.elasticsearch.common.collect.Tuple;
+import org.elasticsearch.xpack.core.ml.inference.results.ClassificationFeatureImportance;
+import org.elasticsearch.xpack.core.ml.inference.results.RegressionFeatureImportance;
+import org.elasticsearch.xpack.core.ml.inference.results.TopClassEntry;
 import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -20,56 +26,73 @@ public final class InferenceHelpers {
 
     private InferenceHelpers() { }
 
-    public static List<ClassificationInferenceResults.TopClassEntry> topClasses(List<Double> probabilities,
+    /**
+     * @return Tuple of the highest scored index and the top classes
+     */
+    public static Tuple<TopClassificationValue, List<TopClassEntry>> topClasses(double[] probabilities,
                                                                                 List<String> classificationLabels,
-                                                                                int numToInclude) {
-        if (numToInclude == 0) {
-            return Collections.emptyList();
-        }
-        int[] sortedIndices = IntStream.range(0, probabilities.size())
-            .boxed()
-            .sorted(Comparator.comparing(probabilities::get).reversed())
-            .mapToInt(i -> i)
-            .toArray();
+                                                                                @Nullable double[] classificationWeights,
+                                                                                int numToInclude,
+                                                                                PredictionFieldType predictionFieldType) {
 
-        if (classificationLabels != null && probabilities.size() != classificationLabels.size()) {
+        if (classificationLabels != null && probabilities.length != classificationLabels.size()) {
             throw ExceptionsHelper
                 .serverError(
                     "model returned classification probabilities of size [{}] which is not equal to classification labels size [{}]",
                     null,
-                    probabilities.size(),
-                    classificationLabels);
+                    probabilities.length,
+                    classificationLabels.size());
+        }
+
+        double[] scores = classificationWeights == null ?
+            probabilities :
+            IntStream.range(0, probabilities.length)
+                .mapToDouble(i -> probabilities[i] * classificationWeights[i])
+                .toArray();
+
+        int[] sortedIndices = IntStream.range(0, scores.length)
+            .boxed()
+            .sorted(Comparator.comparing(i -> scores[(Integer)i]).reversed())
+            .mapToInt(i -> i)
+            .toArray();
+
+        final TopClassificationValue topClassificationValue = new TopClassificationValue(sortedIndices[0],
+            probabilities[sortedIndices[0]],
+            scores[sortedIndices[0]]);
+        if (numToInclude == 0) {
+            return Tuple.tuple(topClassificationValue, Collections.emptyList());
         }
 
         List<String> labels = classificationLabels == null ?
             // If we don't have the labels we should return the top classification values anyways, they will just be numeric
-            IntStream.range(0, probabilities.size()).boxed().map(String::valueOf).collect(Collectors.toList()) :
+            IntStream.range(0, probabilities.length).boxed().map(String::valueOf).collect(Collectors.toList()) :
             classificationLabels;
 
-        int count = numToInclude < 0 ? probabilities.size() : Math.min(numToInclude, probabilities.size());
-        List<ClassificationInferenceResults.TopClassEntry> topClassEntries = new ArrayList<>(count);
+        int count = numToInclude < 0 ? probabilities.length : Math.min(numToInclude, probabilities.length);
+        List<TopClassEntry> topClassEntries = new ArrayList<>(count);
         for(int i = 0; i < count; i++) {
             int idx = sortedIndices[i];
-            topClassEntries.add(new ClassificationInferenceResults.TopClassEntry(labels.get(idx), probabilities.get(idx)));
+            topClassEntries.add(new TopClassEntry(
+                predictionFieldType.transformPredictedValue((double)idx, labels.get(idx)),
+                probabilities[idx],
+                scores[idx]));
         }
 
-        return topClassEntries;
+        return Tuple.tuple(topClassificationValue, topClassEntries);
     }
 
-    public static String classificationLabel(double inferenceValue, @Nullable List<String> classificationLabels) {
-        assert inferenceValue == Math.rint(inferenceValue);
+    public static String classificationLabel(Integer inferenceValue, @Nullable List<String> classificationLabels) {
         if (classificationLabels == null) {
             return String.valueOf(inferenceValue);
         }
-        int label = Double.valueOf(inferenceValue).intValue();
-        if (label < 0 || label >= classificationLabels.size()) {
+        if (inferenceValue < 0 || inferenceValue >= classificationLabels.size()) {
             throw ExceptionsHelper.serverError(
                 "model returned classification value of [{}] which is not a valid index in classification labels [{}]",
                 null,
-                label,
+                inferenceValue,
                 classificationLabels);
         }
-        return classificationLabels.get(label);
+        return classificationLabels.get(inferenceValue);
     }
 
     public static Double toDouble(Object value) {
@@ -77,13 +100,114 @@ public final class InferenceHelpers {
             return ((Number)value).doubleValue();
         }
         if (value instanceof String) {
-            try {
-                return Double.valueOf((String)value);
-            } catch (NumberFormatException nfe) {
-                assert false : "value is not properly formatted double [" + value + "]";
-                return null;
-            }
+            return stringToDouble((String) value);
         }
         return null;
+    }
+
+    private static Double stringToDouble(String value) {
+        if (value.isEmpty()) {
+            return null;
+        }
+        try {
+            return Double.valueOf(value);
+        } catch (NumberFormatException nfe) {
+            assert false : "value is not properly formatted double [" + value + "]";
+            return null;
+        }
+    }
+
+    public static Map<String, double[]> decodeFeatureImportances(Map<String, String> processedFeatureToOriginalFeatureMap,
+                                                                 Map<String, double[]> featureImportances) {
+        if (processedFeatureToOriginalFeatureMap == null || processedFeatureToOriginalFeatureMap.isEmpty()) {
+            return featureImportances;
+        }
+
+        Map<String, double[]> originalFeatureImportance = new HashMap<>();
+        featureImportances.forEach((feature, importance) -> {
+            String featureName = processedFeatureToOriginalFeatureMap.getOrDefault(feature, feature);
+            originalFeatureImportance.compute(featureName, (f, v1) -> v1 == null ? importance : sumDoubleArrays(importance, v1));
+        });
+        return originalFeatureImportance;
+    }
+
+    public static List<RegressionFeatureImportance> transformFeatureImportanceRegression(Map<String, double[]> featureImportance) {
+        List<RegressionFeatureImportance> importances = new ArrayList<>(featureImportance.size());
+        featureImportance.forEach((k, v) -> importances.add(new RegressionFeatureImportance(k, v[0])));
+        return importances;
+    }
+
+    public static List<ClassificationFeatureImportance> transformFeatureImportanceClassification(
+            Map<String, double[]> featureImportance,
+            final int predictedValue,
+            @Nullable List<String> classificationLabels,
+            @Nullable PredictionFieldType predictionFieldType) {
+        List<ClassificationFeatureImportance> importances = new ArrayList<>(featureImportance.size());
+        final PredictionFieldType fieldType = predictionFieldType == null ? PredictionFieldType.STRING : predictionFieldType;
+        featureImportance.forEach((k, v) -> {
+            // This indicates logistic regression (binary classification)
+            // If the length > 1, we assume multi-class classification.
+            if (v.length == 1) {
+                assert predictedValue == 1 || predictedValue == 0;
+                // If predicted value is `1`, then the other class is `0`
+                // If predicted value is `0`, then the other class is `1`
+                final int otherClass = 1 - predictedValue;
+                String predictedLabel = classificationLabels == null ? null : classificationLabels.get(predictedValue);
+                String otherLabel = classificationLabels == null ? null : classificationLabels.get(otherClass);
+                importances.add(new ClassificationFeatureImportance(k,
+                    Arrays.asList(
+                        new ClassificationFeatureImportance.ClassImportance(
+                            fieldType.transformPredictedValue((double)predictedValue, predictedLabel),
+                            v[0]),
+                        new ClassificationFeatureImportance.ClassImportance(
+                            fieldType.transformPredictedValue((double)otherClass, otherLabel),
+                            -v[0])
+                    )));
+            } else {
+                List<ClassificationFeatureImportance.ClassImportance> classImportance = new ArrayList<>(v.length);
+                // If the classificationLabels exist, their length must match leaf_value length
+                assert classificationLabels == null || classificationLabels.size() == v.length;
+                for (int i = 0; i < v.length; i++) {
+                    String label = classificationLabels == null ? null : classificationLabels.get(i);
+                    classImportance.add(new ClassificationFeatureImportance.ClassImportance(
+                        fieldType.transformPredictedValue((double)i, label),
+                        v[i]));
+                }
+                importances.add(new ClassificationFeatureImportance(k, classImportance));
+            }
+        });
+        return importances;
+    }
+
+    public static double[] sumDoubleArrays(double[] sumTo, double[] inc) {
+        assert sumTo != null && inc != null && sumTo.length == inc.length;
+        for (int i = 0; i < inc.length; i++) {
+            sumTo[i] += inc[i];
+        }
+        return sumTo;
+    }
+
+    public static class TopClassificationValue {
+        private final int value;
+        private final double probability;
+        private final double score;
+
+        TopClassificationValue(int value, double probability, double score) {
+            this.value = value;
+            this.probability = probability;
+            this.score = score;
+        }
+
+        public int getValue() {
+            return value;
+        }
+
+        public double getProbability() {
+            return probability;
+        }
+
+        public double getScore() {
+            return score;
+        }
     }
 }

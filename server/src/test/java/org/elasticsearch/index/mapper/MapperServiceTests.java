@@ -20,7 +20,7 @@
 package org.elasticsearch.index.mapper;
 
 import org.apache.lucene.analysis.TokenStream;
-import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.compress.CompressedXContent;
@@ -36,10 +36,7 @@ import org.elasticsearch.index.analysis.IndexAnalyzers;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
 import org.elasticsearch.index.analysis.ReloadableCustomAnalyzer;
 import org.elasticsearch.index.analysis.TokenFilterFactory;
-import org.elasticsearch.index.mapper.KeywordFieldMapper.KeywordFieldType;
 import org.elasticsearch.index.mapper.MapperService.MergeReason;
-import org.elasticsearch.index.mapper.NumberFieldMapper.NumberFieldType;
-import org.elasticsearch.indices.InvalidTypeNameException;
 import org.elasticsearch.indices.analysis.AnalysisModule.AnalysisProvider;
 import org.elasticsearch.plugins.AnalysisPlugin;
 import org.elasticsearch.plugins.Plugin;
@@ -53,7 +50,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.hamcrest.CoreMatchers.containsString;
-import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
@@ -64,23 +60,13 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
         return List.of(InternalSettingsPlugin.class, ReloadableFilterPlugin.class);
     }
 
-    public void testTypeValidation() {
-        InvalidTypeNameException e = expectThrows(InvalidTypeNameException.class, () -> MapperService.validateTypeName("_type"));
-        assertEquals("mapping type name [_type] can't start with '_' unless it is called [_doc]", e.getMessage());
-
-        e = expectThrows(InvalidTypeNameException.class, () -> MapperService.validateTypeName("_document"));
-        assertEquals("mapping type name [_document] can't start with '_' unless it is called [_doc]", e.getMessage());
-
-        MapperService.validateTypeName("_doc"); // no exception
-    }
-
     public void testPreflightUpdateDoesNotChangeMapping() throws Throwable {
         final MapperService mapperService = createIndex("test1").mapperService();
         final CompressedXContent mapping = createMappingSpecifyingNumberOfFields(1);
         mapperService.merge("type", mapping, MergeReason.MAPPING_UPDATE_PREFLIGHT);
-        assertThat("field was not created by preflight check", mapperService.fullName("field0"), nullValue());
+        assertThat("field was not created by preflight check", mapperService.fieldType("field0"), nullValue());
         mapperService.merge("type", mapping, MergeReason.MAPPING_UPDATE);
-        assertThat("field was not created by mapping update", mapperService.fullName("field0"), notNullValue());
+        assertThat("field was not created by mapping update", mapperService.fieldType("field0"), notNullValue());
     }
 
     /**
@@ -100,7 +86,7 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
                 createMappingSpecifyingNumberOfFields(totalFieldsLimit + 1), updateOrPreflight());
         });
         assertTrue(e.getMessage(),
-                e.getMessage().contains("Limit of total fields [" + totalFieldsLimit + "] in index [test2] has been exceeded"));
+                e.getMessage().contains("Limit of total fields [" + totalFieldsLimit + "] has been exceeded"));
     }
 
     private CompressedXContent createMappingSpecifyingNumberOfFields(int numberOfFields) throws IOException {
@@ -134,13 +120,7 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
 
         IllegalArgumentException e = expectThrows(IllegalArgumentException.class,
                 () -> indexService1.mapperService().merge("type", objectMapping, updateOrPreflight()));
-        assertThat(e.getMessage(), containsString("Limit of mapping depth [1] in index [test1] has been exceeded"));
-    }
-
-    public void testUnmappedFieldType() {
-        MapperService mapperService = createIndex("index").mapperService();
-        assertThat(mapperService.unmappedFieldType("keyword"), instanceOf(KeywordFieldType.class));
-        assertThat(mapperService.unmappedFieldType("long"), instanceOf(NumberFieldType.class));
+        assertThat(e.getMessage(), containsString("Limit of mapping depth [1] has been exceeded"));
     }
 
     public void testPartitionedConstraints() {
@@ -247,7 +227,7 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
                     Settings.builder().put(MapperService.INDEX_MAPPING_TOTAL_FIELDS_LIMIT_SETTING.getKey(), numberOfNonAliasFields).build())
                             .mapperService().merge("type", new CompressedXContent(mapping), updateOrPreflight());
         });
-        assertEquals("Limit of total fields [" + numberOfNonAliasFields + "] in index [test2] has been exceeded", e.getMessage());
+        assertEquals("Limit of total fields [" + numberOfNonAliasFields + "] has been exceeded", e.getMessage());
     }
 
     public void testFieldNameLengthLimit() throws Throwable {
@@ -281,9 +261,8 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
             mapperService.merge("type", mappingUpdate, updateOrPreflight());
         });
 
-        assertEquals("Field name [" + testString + "] in index [test1] is too long. " +
-            "The limit is set to [" + maxFieldNameLength + "] characters but was ["
-            + testString.length() + "] characters", e.getMessage());
+        assertEquals("Field name [" + testString + "] is longer than the limit of [" + maxFieldNameLength + "] characters",
+            e.getMessage());
     }
 
     public void testObjectNameLengthLimit() throws Throwable {
@@ -306,9 +285,8 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
             mapperService.merge("type", mapping, updateOrPreflight());
         });
 
-        assertEquals("Field name [" + testString + "] in index [test1] is too long. " +
-            "The limit is set to [" + maxFieldNameLength + "] characters but was ["
-            + testString.length() + "] characters", e.getMessage());
+        assertEquals("Field name [" + testString + "] is longer than the limit of [" + maxFieldNameLength + "] characters",
+            e.getMessage());
     }
 
     public void testAliasFieldNameLengthLimit() throws Throwable {
@@ -335,9 +313,8 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
             mapperService.merge("type", mapping, updateOrPreflight());
         });
 
-        assertEquals("Field name [" + testString + "] in index [test1] is too long. " +
-            "The limit is set to [" + maxFieldNameLength + "] characters but was ["
-            + testString.length() + "] characters", e.getMessage());
+        assertEquals("Field name [" + testString + "] is longer than the limit of [" + maxFieldNameLength + "] characters",
+            e.getMessage());
     }
 
     public void testMappingRecoverySkipFieldNameLengthLimit() throws Throwable {
@@ -362,8 +339,8 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
     }
 
     public void testReloadSearchAnalyzers() throws IOException {
-        Settings settings = Settings.builder().put(IndexMetaData.SETTING_NUMBER_OF_SHARDS, 1)
-                .put(IndexMetaData.SETTING_NUMBER_OF_REPLICAS, 1)
+        Settings settings = Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
                 .put("index.analysis.analyzer.reloadableAnalyzer.type", "custom")
                 .put("index.analysis.analyzer.reloadableAnalyzer.tokenizer", "standard")
                 .putList("index.analysis.analyzer.reloadableAnalyzer.filter", "myReloadableFilter").build();
@@ -404,8 +381,10 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
         assertSame(current.getDefaultSearchQuoteAnalyzer(), updatedAnalyzers.getDefaultSearchQuoteAnalyzer());
 
         assertFalse(assertSameContainedFilters(originalTokenFilters, current.get("reloadableAnalyzer")));
-        assertFalse(assertSameContainedFilters(originalTokenFilters, mapperService.fullName("field").searchAnalyzer()));
-        assertFalse(assertSameContainedFilters(originalTokenFilters, mapperService.fullName("otherField").searchQuoteAnalyzer()));
+        assertFalse(assertSameContainedFilters(originalTokenFilters,
+            mapperService.fieldType("field").getTextSearchInfo().getSearchAnalyzer()));
+        assertFalse(assertSameContainedFilters(originalTokenFilters,
+            mapperService.fieldType("otherField").getTextSearchInfo().getSearchQuoteAnalyzer()));
     }
 
     private boolean assertSameContainedFilters(TokenFilterFactory[] originalTokenFilter, NamedAnalyzer updatedAnalyzer) {

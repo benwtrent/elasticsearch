@@ -10,6 +10,8 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.client.Client;
+import org.elasticsearch.cluster.service.ClusterService;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.xpack.core.transform.transforms.TimeSyncConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformCheckpointingInfo.TransformCheckpointingInfoBuilder;
 import org.elasticsearch.xpack.core.transform.transforms.TransformConfig;
@@ -30,26 +32,33 @@ public class TransformCheckpointService {
 
     private static final Logger logger = LogManager.getLogger(TransformCheckpointService.class);
 
-    private final Client client;
     private final TransformConfigManager transformConfigManager;
     private final TransformAuditor transformAuditor;
+    private final RemoteClusterResolver remoteClusterResolver;
 
     public TransformCheckpointService(
-        final Client client,
+        final Settings settings,
+        final ClusterService clusterService,
         final TransformConfigManager transformConfigManager,
         TransformAuditor transformAuditor
     ) {
-        this.client = client;
         this.transformConfigManager = transformConfigManager;
         this.transformAuditor = transformAuditor;
+        this.remoteClusterResolver = new RemoteClusterResolver(settings, clusterService.getClusterSettings());
     }
 
-    public CheckpointProvider getCheckpointProvider(final TransformConfig transformConfig) {
+    public CheckpointProvider getCheckpointProvider(final Client client, final TransformConfig transformConfig) {
         if (transformConfig.getSyncConfig() instanceof TimeSyncConfig) {
-            return new TimeBasedCheckpointProvider(client, transformConfigManager, transformAuditor, transformConfig);
+            return new TimeBasedCheckpointProvider(
+                client,
+                remoteClusterResolver,
+                transformConfigManager,
+                transformAuditor,
+                transformConfig
+            );
         }
 
-        return new DefaultCheckpointProvider(client, transformConfigManager, transformAuditor, transformConfig);
+        return new DefaultCheckpointProvider(client, remoteClusterResolver, transformConfigManager, transformAuditor, transformConfig);
     }
 
     /**
@@ -62,6 +71,7 @@ public class TransformCheckpointService {
      * @param listener listener to retrieve the result
      */
     public void getCheckpointingInfo(
+        final Client client,
         final String transformId,
         final long lastCheckpointNumber,
         final TransformIndexerPosition nextCheckpointPosition,
@@ -71,7 +81,7 @@ public class TransformCheckpointService {
 
         // we need to retrieve the config first before we can defer the rest to the corresponding provider
         transformConfigManager.getTransformConfiguration(transformId, ActionListener.wrap(transformConfig -> {
-            getCheckpointProvider(transformConfig).getCheckpointingInfo(
+            getCheckpointProvider(client, transformConfig).getCheckpointingInfo(
                 lastCheckpointNumber,
                 nextCheckpointPosition,
                 nextCheckpointProgress,
@@ -82,5 +92,4 @@ public class TransformCheckpointService {
             listener.onFailure(new CheckpointException("Failed to retrieve configuration", transformError));
         }));
     }
-
 }
