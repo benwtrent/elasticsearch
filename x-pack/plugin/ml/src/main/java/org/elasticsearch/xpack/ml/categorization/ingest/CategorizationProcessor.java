@@ -7,46 +7,19 @@ package org.elasticsearch.xpack.ml.categorization.ingest;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
-import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.ElasticsearchStatusException;
-import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.client.Client;
-import org.elasticsearch.cluster.ClusterState;
-import org.elasticsearch.cluster.metadata.MetaData;
-import org.elasticsearch.cluster.service.ClusterService;
-import org.elasticsearch.common.settings.Setting;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.http.CorsHandler;
 import org.elasticsearch.ingest.AbstractProcessor;
 import org.elasticsearch.ingest.ConfigurationUtils;
 import org.elasticsearch.ingest.IngestDocument;
-import org.elasticsearch.ingest.IngestMetadata;
-import org.elasticsearch.ingest.IngestService;
-import org.elasticsearch.ingest.Pipeline;
-import org.elasticsearch.ingest.PipelineConfiguration;
 import org.elasticsearch.ingest.Processor;
-import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.xpack.core.ml.action.CategorizeTextAction;
-import org.elasticsearch.xpack.core.ml.action.InternalInferModelAction;
-import org.elasticsearch.xpack.core.ml.inference.results.WarningInferenceResults;
-import org.elasticsearch.xpack.core.ml.inference.trainedmodel.ClassificationConfig;
-import org.elasticsearch.xpack.core.ml.inference.trainedmodel.InferenceConfig;
-import org.elasticsearch.xpack.core.ml.inference.trainedmodel.RegressionConfig;
-import org.elasticsearch.xpack.core.ml.job.messages.Messages;
 import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 import org.elasticsearch.xpack.core.ml.utils.MapHelper;
-import org.elasticsearch.xpack.ml.notifications.InferenceAuditor;
 
-import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 
 import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
 import static org.elasticsearch.xpack.core.ClientHelper.executeAsyncWithOrigin;
@@ -71,8 +44,9 @@ public class CategorizationProcessor extends AbstractProcessor {
                                    String targetField,
                                    String categorizationConfigId,
                                    String textField,
+                                   String description,
                                    boolean includeGrok) {
-        super(tag);
+        super(tag, description);
         this.client = ExceptionsHelper.requireNonNull(client, "client");
         this.targetField = ExceptionsHelper.requireNonNull(targetField, TARGET_FIELD);
         this.categorizationConfigId = ExceptionsHelper.requireNonNull(categorizationConfigId, CATEGORIZATION_CONFIG_ID);
@@ -127,7 +101,10 @@ public class CategorizationProcessor extends AbstractProcessor {
         }
 
         @Override
-        public CategorizationProcessor create(Map<String, Processor.Factory> processorFactories, String tag, Map<String, Object> config) {
+        public Processor create(Map<String, Processor.Factory> processorFactories,
+                                String tag,
+                                String description,
+                                Map<String, Object> config) {
             String categorizationConfigId = ConfigurationUtils.readStringProperty(TYPE, tag, config, CATEGORIZATION_CONFIG_ID);
             String defaultTargetField = tag == null ? DEFAULT_TARGET_FIELD : DEFAULT_TARGET_FIELD + "." + tag;
             String targetField = ConfigurationUtils.readStringProperty(TYPE, tag, config, TARGET_FIELD, defaultTargetField);
@@ -138,6 +115,7 @@ public class CategorizationProcessor extends AbstractProcessor {
                 targetField,
                 categorizationConfigId,
                 textField,
+                description,
                 includeGrok);
         }
     }

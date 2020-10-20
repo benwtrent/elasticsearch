@@ -6,6 +6,7 @@
 package org.elasticsearch.xpack.core.ml.job.results;
 
 import org.elasticsearch.index.get.GetResult;
+import org.elasticsearch.xpack.core.ml.categorization.CategorizationConfig;
 import org.elasticsearch.xpack.core.ml.datafeed.ChunkingConfig;
 import org.elasticsearch.xpack.core.ml.datafeed.DatafeedConfig;
 import org.elasticsearch.xpack.core.ml.datafeed.DatafeedTimingStats;
@@ -253,6 +254,15 @@ public final class ReservedFieldNames {
 
             AnalysisLimits.MODEL_MEMORY_LIMIT.getPreferredName(),
             AnalysisLimits.CATEGORIZATION_EXAMPLES_LIMIT.getPreferredName(),
+
+
+        CategorizationConfig.ID.getPreferredName(),
+        CategorizationConfig.CATEGORIES.getPreferredName(),
+        CategorizationConfig.CATEGORIZATION_ANALYZER.getPreferredName(),
+        CategorizationConfig.CATEGORIZATION_FILTERS.getPreferredName(),
+        CategorizationConfig.UPDATE_TIME.getPreferredName(),
+        CategorizationConfig.OVERRIDES.getPreferredName(),
+        CategorizationConfig.CUSTOM_GROK_PATTERNS.getPreferredName(),
 
             Detector.DETECTOR_DESCRIPTION_FIELD.getPreferredName(),
             Detector.FUNCTION_FIELD.getPreferredName(),

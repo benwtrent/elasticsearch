@@ -17,7 +17,6 @@ import org.elasticsearch.cluster.block.ClusterBlockLevel;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.license.LicenseUtils;
 import org.elasticsearch.license.XPackLicenseState;
 import org.elasticsearch.tasks.Task;
@@ -34,7 +33,6 @@ import org.elasticsearch.xpack.ml.categorization.persistence.CategorizationProvi
 import org.elasticsearch.xpack.ml.job.persistence.JobConfigProvider;
 import org.elasticsearch.xpack.ml.job.persistence.JobResultsProvider;
 
-import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
 
@@ -55,22 +53,12 @@ public class TransportPutCategorizationConfigAction extends TransportMasterNodeA
                                                   CategorizationProvider configProvider, JobConfigProvider jobConfigProvider,
                                                   JobResultsProvider jobResultsProvider, Client client) {
         super(PutCategorizationConfigAction.NAME, transportService, clusterService, threadPool, actionFilters,
-            PutCategorizationConfigAction.Request::new, indexNameExpressionResolver);
+            Request::new, indexNameExpressionResolver, Response::new, ThreadPool.Names.SAME);
         this.licenseState = licenseState;
         this.configProvider = configProvider;
         this.jobConfigProvider = jobConfigProvider;
         this.jobResultsProvider = jobResultsProvider;
         this.client = client;
-    }
-
-    @Override
-    protected String executor() {
-        return ThreadPool.Names.SAME;
-    }
-
-    @Override
-    protected Response read(StreamInput in) throws IOException {
-        return new Response(in);
     }
 
     @Override
@@ -104,7 +92,8 @@ public class TransportPutCategorizationConfigAction extends TransportMasterNodeA
                 }
                 jobResultsProvider.categoryDefinitions(job.getId(),
                     null,
-                    true,
+                    null,
+                    false,
                     0,
                     10_000,
                     (qp) -> getCategoriesListener.onResponse(qp.results()),
@@ -119,7 +108,7 @@ public class TransportPutCategorizationConfigAction extends TransportMasterNodeA
 
     @Override
     protected void doExecute(Task task, Request request, ActionListener<Response> listener) {
-        if (licenseState.isMachineLearningAllowed()) {
+        if (licenseState.checkFeature(XPackLicenseState.Feature.MACHINE_LEARNING)) {
             super.doExecute(task, request, listener);
         } else {
             listener.onFailure(LicenseUtils.newComplianceException(XPackField.MACHINE_LEARNING));

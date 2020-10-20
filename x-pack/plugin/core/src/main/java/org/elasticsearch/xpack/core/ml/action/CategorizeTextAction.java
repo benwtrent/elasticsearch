@@ -13,7 +13,6 @@ import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.xcontent.ConstructingObjectParser;
 import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
@@ -21,14 +20,11 @@ import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.ingest.IngestDocument;
 import org.elasticsearch.xpack.core.ml.categorization.CategorizationConfig;
 import org.elasticsearch.xpack.core.ml.job.messages.Messages;
-import org.elasticsearch.xpack.core.ml.job.results.CategoryDefinition;
 
 import java.io.IOException;
-import java.lang.reflect.Array;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
 public class CategorizeTextAction extends ActionType<CategorizeTextAction.Response> {
 
@@ -44,7 +40,10 @@ public class CategorizeTextAction extends ActionType<CategorizeTextAction.Respon
         public static final ParseField TEXT = new ParseField("text");
         public static final ParseField INCLUDE_GROK = new ParseField("include_grok");
         private static ConstructingObjectParser<Request, Void> PARSER =
-            new ConstructingObjectParser<>("categorize_text_action_request", false, a -> new Request((String)a[0], (String)a[1], (Boolean)a[2]));
+            new ConstructingObjectParser<>(
+                "categorize_text_action_request",
+                false,
+                a -> new Request((String)a[0], (String)a[1], (Boolean)a[2]));
         static {
             PARSER.declareString(ConstructingObjectParser.constructorArg(), TEXT);
             PARSER.declareString(ConstructingObjectParser.optionalConstructorArg(), CategorizationConfig.ID);
@@ -54,10 +53,16 @@ public class CategorizeTextAction extends ActionType<CategorizeTextAction.Respon
             Request request = PARSER.apply(parser, null);
             if (request.getCategorizationConfigId() == null) {
                 request.setCategorizationConfigId(categorizationConfigId);
-            } else if (!Strings.isNullOrEmpty(categorizationConfigId) && !categorizationConfigId.equals(request.getCategorizationConfigId())) {
+            } else if (!Strings.isNullOrEmpty(categorizationConfigId) &&
+                !categorizationConfigId.equals(request.getCategorizationConfigId())) {
                 // If we have both URI and body jobBuilder ID, they must be identical
-                throw new IllegalArgumentException(Messages.getMessage(Messages.INCONSISTENT_ID, CategorizationConfig.ID.getPreferredName(),
-                    request.getCategorizationConfigId(), categorizationConfigId));
+                throw new IllegalArgumentException(
+                    Messages.getMessage(
+                        Messages.INCONSISTENT_ID,
+                        CategorizationConfig.ID.getPreferredName(),
+                        request.getCategorizationConfigId(),
+                        categorizationConfigId
+                    ));
             }
             return request;
         }

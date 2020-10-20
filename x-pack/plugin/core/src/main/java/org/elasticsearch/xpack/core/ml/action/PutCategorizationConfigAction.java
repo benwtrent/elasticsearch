@@ -22,7 +22,6 @@ import org.elasticsearch.xpack.core.ml.job.messages.Messages;
 import org.elasticsearch.xpack.core.ml.utils.MlStrings;
 
 import java.io.IOException;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -45,7 +44,8 @@ public class PutCategorizationConfigAction extends ActionType<PutCategorizationC
             CategorizationConfig.Builder categorizationBuilder = CategorizationConfig.STRICT_PARSER.apply(parser, null);
             if (categorizationBuilder.getCategorizationConfigId() == null) {
                 categorizationBuilder.setCategorizationConfigId(categorizationConfigId);
-            } else if (!Strings.isNullOrEmpty(categorizationConfigId) && !categorizationConfigId.equals(categorizationBuilder.getCategorizationConfigId())) {
+            } else if (!Strings.isNullOrEmpty(categorizationConfigId) &&
+                !categorizationConfigId.equals(categorizationBuilder.getCategorizationConfigId())) {
                 // If we have both URI and body jobBuilder ID, they must be identical
                 throw new IllegalArgumentException(Messages.getMessage(Messages.INCONSISTENT_ID, CategorizationConfig.ID.getPreferredName(),
                     categorizationBuilder.getCategorizationConfigId(), categorizationConfigId));
@@ -95,7 +95,8 @@ public class PutCategorizationConfigAction extends ActionType<PutCategorizationC
                         Set<Long> commonCategories = Sets.intersection(override.getCategoryIds(),
                             overrides.get(j).getCategoryIds());
                         if (commonCategories.isEmpty() == false) {
-                            validationException = addValidationError(Messages.getMessage(Messages.CATEGORIZATION_CONFIG_OVERLAPPING_OVERRIDES,
+                            validationException = addValidationError(Messages.getMessage(
+                                Messages.CATEGORIZATION_CONFIG_OVERLAPPING_OVERRIDES,
                                 override.getName(),
                                 overrides.get(j).getName(),
                                 commonCategories), validationException);

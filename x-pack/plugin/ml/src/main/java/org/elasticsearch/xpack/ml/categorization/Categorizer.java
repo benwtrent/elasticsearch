@@ -40,7 +40,7 @@ public class Categorizer implements Accountable, Closeable {
                        CategorizationAnalyzer analyzer,
                        Map<String, String> customGrokPatterns,
                        MatcherWatchdog watchdog) {
-        Map<String, String> grokPatternBank = new HashMap<>(Grok.getBuiltinPatterns());
+        Map<String, String> grokPatternBank = new HashMap<>(Grok.BUILTIN_PATTERNS);
         if(customGrokPatterns != null) {
             grokPatternBank.putAll(customGrokPatterns);
         }

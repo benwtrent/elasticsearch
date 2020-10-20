@@ -97,30 +97,6 @@ public class ElasticsearchMappings {
     private ElasticsearchMappings() {
     }
 
-    /*public static void addCategorizationFields(XContentBuilder builder) throws IOException {
-        builder.startObject(CategorizationConfig.ID.getPreferredName())
-            .field(TYPE, KEYWORD)
-            .endObject()
-            .startObject(CategorizationConfig.OVERRIDES.getPreferredName())
-            .field(ENABLED, false)
-            .endObject()
-            .startObject(CategorizationConfig.CUSTOM_GROK_PATTERNS.getPreferredName())
-            .field(ENABLED, false)
-            .endObject()
-            .startObject(CategorizationConfig.CATEGORIES.getPreferredName())
-            .field(ENABLED, false)
-            .endObject()
-            .startObject(CategorizationConfig.UPDATE_TIME.getPreferredName())
-            .field(TYPE, DATE)
-            .endObject()
-            .startObject(CategorizationConfig.CATEGORIZATION_ANALYZER.getPreferredName())
-            .field(ENABLED, false)
-            .endObject()
-            .startObject(CategorizationConfig.CATEGORIZATION_FILTERS.getPreferredName())
-            .field(TYPE, KEYWORD)
-            .endObject();
-    }*/
-
     static String[] mappingRequiresUpdate(ClusterState state, String[] concreteIndices, Version minVersion) throws IOException {
         List<String> indicesToUpdate = new ArrayList<>();
 

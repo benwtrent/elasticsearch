@@ -231,6 +231,28 @@
       "background_persist_interval" : {
         "type" : "keyword"
       },
+      "categorization_config_id": {
+        "type": "keyword"
+      },
+      "overrides": {
+        "type": "object",
+        "enabled": false
+      },
+      "categories": {
+        "enabled": false
+      },
+      "custom_grok_patterns": {
+        "enabled": false
+      },
+      "update_time": {
+        "type": "date"
+      },
+      "categorization_analyzer": {
+        "enabled": false
+      },
+      "categorization_filters": {
+        "type": "keyword"
+      },
       "chunking_config" : {
         "properties" : {
           "mode" : {

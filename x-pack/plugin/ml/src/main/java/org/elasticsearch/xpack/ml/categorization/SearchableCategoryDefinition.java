@@ -19,7 +19,6 @@ import org.elasticsearch.xpack.core.ml.job.results.CategoryDefinition;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -49,7 +48,7 @@ final class SearchableCategoryDefinition implements Accountable {
         this.name = definition.getRegex();
         this.grok = definition.getGrokPattern() == null ?
             null :
-            new Grok[] { new Grok(grokPatternBank, definition.getGrokPattern(), watchdog) };
+            new Grok[] { new Grok(grokPatternBank, definition.getGrokPattern(), watchdog, logger::info) };
     }
 
     // TODO adjust to allow the override regex
@@ -68,7 +67,7 @@ final class SearchableCategoryDefinition implements Accountable {
         this.name = override.getName();
         this.grok = override.getGrokPattern() == null ?
             new Grok[definitions.size()] :
-            new Grok[] { new Grok(grokPatternBank, override.getGrokPattern(), watchdog) };
+            new Grok[] { new Grok(grokPatternBank, override.getGrokPattern(), watchdog, logger::info) };
         for (int i = 0; i < definitions.size(); i++) {
             CategoryDefinition definition = definitions.get(i);
             maxLengths[i] = definition.getMaxMatchingLength();
@@ -82,7 +81,7 @@ final class SearchableCategoryDefinition implements Accountable {
             if (override.getGrokPattern() == null) {
                 grok[i] = definition.getGrokPattern() == null ?
                     null :
-                    new Grok(grokPatternBank, definitions.get(i).getGrokPattern(), watchdog);
+                    new Grok(grokPatternBank, definitions.get(i).getGrokPattern(), watchdog, logger::info);
             }
         }
     }

@@ -28,14 +28,13 @@ import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
+import org.elasticsearch.xpack.core.ml.MlConfigIndex;
 import org.elasticsearch.xpack.core.ml.categorization.CategorizationConfig;
-import org.elasticsearch.xpack.core.ml.job.persistence.AnomalyDetectorsIndex;
 import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 import org.elasticsearch.xpack.core.ml.utils.ToXContentParams;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.Collections;
 
 import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
@@ -70,7 +69,7 @@ public class CategorizationProvider {
                 .filter(QueryBuilders.termsQuery(CategorizationConfig.ID.getPreferredName(), categorizationId)))
             .trackTotalHits(false)
             .size(1);
-        SearchRequest searchRequest = new SearchRequest().indices(AnomalyDetectorsIndex.configIndexName()).source(sourceBuilder);
+        SearchRequest searchRequest = new SearchRequest().indices(MlConfigIndex.indexName()).source(sourceBuilder);
         executeAsyncWithOrigin(client.threadPool().getThreadContext(),
             ML_ORIGIN,
             searchRequest,
@@ -103,7 +102,7 @@ public class CategorizationProvider {
         try (XContentBuilder builder = XContentFactory.jsonBuilder()) {
             XContentBuilder source = body.toXContent(builder, FOR_INTERNAL_STORAGE_PARAMS);
 
-            return new IndexRequest(AnomalyDetectorsIndex.configIndexName())
+            return new IndexRequest(MlConfigIndex.indexName())
                 .opType(DocWriteRequest.OpType.CREATE)
                 .id(docId)
                 .source(source);

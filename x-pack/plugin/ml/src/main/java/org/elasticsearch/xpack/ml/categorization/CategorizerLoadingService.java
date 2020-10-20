@@ -98,7 +98,12 @@ public class CategorizerLoadingService {
                 createCategorizationAnalyzer(config, analysisRegistry),
                 config.getCustomGrokPatterns(),
                 matcherWatchdog);
-            logger.trace("[{}] loaded bytes [{},{}]", config.getCategorizationConfigId(), categorizer.ramBytesUsed(), new ByteSizeValue(categorizer.ramBytesUsed()));
+            logger.trace(
+                () -> new ParameterizedMessage(
+                    "[{}] loaded bytes [{},{}]",
+                    config.getCategorizationConfigId(),
+                    categorizer.ramBytesUsed(),
+                    new ByteSizeValue(categorizer.ramBytesUsed())));
             return categorizer;
         } catch (IOException ex) {
             throw ExceptionsHelper.serverError("[{}] unexpected failure creating analyzer", ex, config.getCategorizationConfigId());
@@ -110,7 +115,9 @@ public class CategorizerLoadingService {
      * Returns true if the model is CURRENTLY being loaded and the listener was added to be notified when it is loaded
      * Returns false if the model is not loaded or actively being loaded
      */
-    private boolean loadModelIfNecessary(String categorizationConfigId, AnalysisRegistry analysisRegistry, ActionListener<Categorizer> modelActionListener) {
+    private boolean loadModelIfNecessary(String categorizationConfigId,
+                                         AnalysisRegistry analysisRegistry,
+                                         ActionListener<Categorizer> modelActionListener) {
         synchronized (loadingListeners) {
             Categorizer cachedModel = categorizerCache.get(categorizationConfigId);
             if (cachedModel != null) {

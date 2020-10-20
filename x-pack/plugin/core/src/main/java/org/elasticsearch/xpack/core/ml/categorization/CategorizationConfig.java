@@ -54,7 +54,9 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
         parser.declareString(CategorizationConfig.Builder::setCategorizationConfigId, ID);
         parser.declareString(CategorizationConfig.Builder::setJobId, JOB_ID);
         parser.declareObjectArray(CategorizationConfig.Builder::setOverrides,
-            (p, c) -> ignoreUnknownFields ? CategorizationOverride.LENIENT_PARSER.apply(p, c).build() : CategorizationOverride.STRICT_PARSER.apply(p, c).build(),
+            (p, c) -> ignoreUnknownFields ?
+                CategorizationOverride.LENIENT_PARSER.apply(p, c).build() :
+                CategorizationOverride.STRICT_PARSER.apply(p, c).build(),
             OVERRIDES);
         parser.declareString(CategorizationConfig.Builder::setDescription, DESCRIPTION);
         parser.declareField(CategorizationConfig.Builder::setCreateTime,
@@ -115,7 +117,9 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
         this.updateTime = updateTime == null ? null : Instant.ofEpochMilli(updateTime.toEpochMilli());
         this.customGrokPatterns = customGrokPatterns == null ? Collections.emptyMap() : Collections.unmodifiableMap(customGrokPatterns);
         this.categorizationAnalyzerConfig = categorizationAnalyzerConfig;
-        this.categorizationFilters = categorizationFilters == null ? Collections.emptyList() : Collections.unmodifiableList(categorizationFilters);
+        this.categorizationFilters = categorizationFilters == null ?
+            Collections.emptyList() :
+            Collections.unmodifiableList(categorizationFilters);
     }
 
     public CategorizationConfig(StreamInput in) throws IOException {
@@ -350,11 +354,29 @@ public class CategorizationConfig implements ToXContentObject, Writeable {
                         overridesMissingCategories);
                 }
             }
-            return new CategorizationConfig(categorizationConfigId, jobId, overrides, categories, description, createTime, updateTime, customGrokPatterns, categorizationAnalyzerConfig, categorizationFilters);
+            return new CategorizationConfig(categorizationConfigId,
+                jobId,
+                overrides,
+                categories,
+                description,
+                createTime,
+                updateTime,
+                customGrokPatterns,
+                categorizationAnalyzerConfig,
+                categorizationFilters);
         }
 
         public CategorizationConfig build() {
-            return new CategorizationConfig(categorizationConfigId, jobId, overrides, categories, description, createTime, updateTime, customGrokPatterns, categorizationAnalyzerConfig, categorizationFilters);
+            return new CategorizationConfig(categorizationConfigId,
+                jobId,
+                overrides,
+                categories,
+                description,
+                createTime,
+                updateTime,
+                customGrokPatterns,
+                categorizationAnalyzerConfig,
+                categorizationFilters);
         }
     }
 }

@@ -8,7 +8,6 @@ package org.elasticsearch.xpack.ml.rest.categorization;
 import org.elasticsearch.client.node.NodeClient;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.rest.BaseRestHandler;
-import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.action.RestToXContentListener;
 import org.elasticsearch.xpack.core.ml.action.PutCategorizationConfigAction;
@@ -18,8 +17,6 @@ import org.elasticsearch.xpack.ml.MachineLearning;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
-
-import static org.elasticsearch.rest.RestRequest.Method.GET;
 
 public class RestPutCategorizationConfigAction extends BaseRestHandler {
 

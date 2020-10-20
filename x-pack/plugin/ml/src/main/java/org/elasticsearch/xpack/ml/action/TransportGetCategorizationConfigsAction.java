@@ -18,9 +18,9 @@ import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.action.AbstractTransportGetResourcesAction;
+import org.elasticsearch.xpack.core.ml.MlConfigIndex;
 import org.elasticsearch.xpack.core.ml.action.GetCategorizationConfigsAction;
 import org.elasticsearch.xpack.core.ml.categorization.CategorizationConfig;
-import org.elasticsearch.xpack.core.ml.job.persistence.AnomalyDetectorsIndex;
 import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 
 import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
@@ -42,7 +42,7 @@ public class TransportGetCategorizationConfigsAction extends AbstractTransportGe
 
     @Override
     protected String[] getIndices() {
-        return new String[] { AnomalyDetectorsIndex.configIndexName() };
+        return new String[] { MlConfigIndex.indexName() };
     }
 
     @Override

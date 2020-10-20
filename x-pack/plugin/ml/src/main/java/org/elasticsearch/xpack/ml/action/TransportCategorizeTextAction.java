@@ -10,7 +10,6 @@ import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.HandledTransportAction;
-import org.elasticsearch.client.Client;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.index.analysis.AnalysisRegistry;
 import org.elasticsearch.license.LicenseUtils;
@@ -19,21 +18,10 @@ import org.elasticsearch.tasks.Task;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.XPackField;
 import org.elasticsearch.xpack.core.ml.action.CategorizeTextAction;
-import org.elasticsearch.xpack.core.ml.action.GetCategorizationConfigsAction;
 import org.elasticsearch.xpack.core.ml.action.CategorizeTextAction.Request;
 import org.elasticsearch.xpack.core.ml.action.CategorizeTextAction.Response;
-import org.elasticsearch.xpack.core.ml.categorization.CategorizationConfig;
-import org.elasticsearch.xpack.core.ml.job.config.CategorizationAnalyzerConfig;
 import org.elasticsearch.xpack.ml.categorization.Categorizer;
 import org.elasticsearch.xpack.ml.categorization.CategorizerLoadingService;
-import org.elasticsearch.xpack.ml.job.categorization.CategorizationAnalyzer;
-
-import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-
-import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
-import static org.elasticsearch.xpack.core.ClientHelper.executeAsyncWithOrigin;
 
 public class TransportCategorizeTextAction extends HandledTransportAction<Request, Response> {
 
@@ -55,7 +43,7 @@ public class TransportCategorizeTextAction extends HandledTransportAction<Reques
 
     @Override
     protected void doExecute(Task task, Request request, ActionListener<Response> listener) {
-        if (licenseState.isMachineLearningAllowed() == false) {
+        if (licenseState.checkFeature(XPackLicenseState.Feature.MACHINE_LEARNING) == false) {
             listener.onFailure(LicenseUtils.newComplianceException(XPackField.MACHINE_LEARNING));
         }
         ActionListener<Categorizer> getCategorizer = ActionListener.wrap(
