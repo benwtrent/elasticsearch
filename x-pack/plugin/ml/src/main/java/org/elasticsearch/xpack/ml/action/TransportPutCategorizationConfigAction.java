@@ -34,7 +34,12 @@ import org.elasticsearch.xpack.ml.job.persistence.JobConfigProvider;
 import org.elasticsearch.xpack.ml.job.persistence.JobResultsProvider;
 
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
 public class TransportPutCategorizationConfigAction extends TransportMasterNodeAction<Request, Response> {
 
@@ -77,7 +82,14 @@ public class TransportPutCategorizationConfigAction extends TransportMasterNodeA
 
         ActionListener<List<CategoryDefinition>> getCategoriesListener = ActionListener.wrap(
             categories -> {
-                builder.setCategories(categories);
+                Set<Long> deadCategories = categories.stream()
+                    .flatMapToLong(c -> Arrays.stream(c.getPreferredToCategories()))
+                    .boxed()
+                    .collect(Collectors.toSet());
+                builder.setCategories(categories.stream()
+                    .filter(c -> !deadCategories.contains(c.getCategoryId()))
+                    .sorted(Comparator.comparing(CategoryDefinition::getNumMatches).reversed())
+                    .collect(Collectors.toList()));
                 configProvider.storeCategorizationConfig(builder.build(Instant.now()), storeConfigListener);
             },
             listener::onFailure
