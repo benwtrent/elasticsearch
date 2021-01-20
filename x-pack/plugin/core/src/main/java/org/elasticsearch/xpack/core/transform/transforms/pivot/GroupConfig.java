@@ -19,9 +19,11 @@ import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
+import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.search.aggregations.AggregatorFactories;
+import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregationBuilder;
 import org.elasticsearch.xpack.core.transform.TransformField;
 import org.elasticsearch.xpack.core.transform.TransformMessages;
 import org.elasticsearch.xpack.core.transform.utils.ExceptionsHelper;
@@ -44,6 +46,26 @@ public class GroupConfig implements Writeable, ToXContentObject {
 
     private final Map<String, Object> source;
     private final Map<String, SingleGroupSource> groups;
+
+    public static GroupConfig fromGroups(final Map<String, SingleGroupSource> groups) {
+        try (
+            XContentBuilder xContentBuilder = XContentFactory.jsonBuilder();
+        ) {
+            xContentBuilder.startObject();
+            for (Map.Entry<String, SingleGroupSource> entry : groups.entrySet()) {
+                xContentBuilder.startObject(entry.getKey());
+                xContentBuilder.field(entry.getValue().getType().value(), entry.getValue());
+                xContentBuilder.endObject();
+            }
+            xContentBuilder.endObject();
+            return new GroupConfig(
+                XContentHelper.convertToMap(BytesReference.bytes(xContentBuilder), true, xContentBuilder.contentType()).v2(),
+                groups
+            );
+        } catch (Exception e) {
+            throw new IllegalArgumentException("unable to parse group by", e);
+        }
+    }
 
     public GroupConfig(final Map<String, Object> source, final Map<String, SingleGroupSource> groups) {
         this.source = ExceptionsHelper.requireNonNull(source, TransformField.GROUP_BY.getPreferredName());
@@ -139,6 +161,24 @@ public class GroupConfig implements Writeable, ToXContentObject {
         }
         return new GroupConfig(source, groups);
     }
+
+    public void toCompositeAggXContent(XContentBuilder builder) throws IOException {
+        builder.startObject();
+        builder.field(CompositeAggregationBuilder.SOURCES_FIELD_NAME.getPreferredName());
+        builder.startArray();
+
+        for (Map.Entry<String, SingleGroupSource> groupBy : groups.entrySet()) {
+            builder.startObject();
+            builder.startObject(groupBy.getKey());
+            builder.field(groupBy.getValue().getType().value(), groupBy.getValue());
+            builder.endObject();
+            builder.endObject();
+        }
+
+        builder.endArray();
+        builder.endObject(); // sources
+    }
+
 
     private static Map<String, SingleGroupSource> parseGroupConfig(final XContentParser parser, boolean lenient) throws IOException {
         Matcher validAggMatcher = AggregatorFactories.VALID_AGG_NAME.matcher("");

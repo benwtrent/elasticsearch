@@ -158,7 +158,7 @@ public final class TransformAggregations {
 
             if (sourceType == null) {
                 // this should never happen and would mean a bug in the calling code, the error is logged in {@link
-                // org.elasticsearch.xpack.transform.transforms.pivot.SchemaUtil#resolveMappings()}
+                // org.elasticsearch.xpack.transform.transforms.common.SchemaUtil#resolveMappings()}
                 return null;
             }
 

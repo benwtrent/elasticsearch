@@ -31,6 +31,10 @@ public class DateHistogramGroupSourceTests extends AbstractSerializingTestCase<D
     }
 
     public static DateHistogramGroupSource randomDateHistogramGroupSource(Version version) {
+        return randomDateHistogramGroupSource(version, version.onOrAfter(Version.V_7_10_0) ? randomBoolean() : false);
+    }
+
+    public static DateHistogramGroupSource randomDateHistogramGroupSource(Version version, boolean missingBucket) {
         ScriptConfig scriptConfig = null;
         String field;
 
@@ -41,7 +45,7 @@ public class DateHistogramGroupSourceTests extends AbstractSerializingTestCase<D
         } else {
             field = randomAlphaOfLengthBetween(1, 20);
         }
-        boolean missingBucket = version.onOrAfter(Version.V_7_10_0) ? randomBoolean() : false;
+        missingBucket = version.onOrAfter(Version.V_7_10_0) ? missingBucket : false;
 
         DateHistogramGroupSource dateHistogramGroupSource;
         if (randomBoolean()) {
@@ -66,6 +70,7 @@ public class DateHistogramGroupSourceTests extends AbstractSerializingTestCase<D
 
         return dateHistogramGroupSource;
     }
+
 
     public void testBackwardsSerialization72() throws IOException {
         // version 7.7 introduced scripts, so test before that

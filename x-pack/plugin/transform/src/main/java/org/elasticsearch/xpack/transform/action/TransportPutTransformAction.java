@@ -267,7 +267,7 @@ public class TransportPutTransformAction extends AcknowledgedTransportMasterNode
 
         final TransformConfig config = request.getConfig();
         // create the function for validation
-        final Function function = FunctionFactory.create(config);
+        final Function function = FunctionFactory.create(config, null);
 
         // <3> Return to the listener
         ActionListener<Boolean> putTransformConfigurationListener = ActionListener.wrap(putTransformConfigurationResult -> {

@@ -173,7 +173,8 @@ public class TransformStats implements Writeable, ToXContentObject {
                 checkpointingInfo.getLast().getCheckpoint(),
                 reason,
                 checkpointingInfo.getNext().getCheckpointProgress(),
-                node
+                node,
+                null
             ).writeTo(out);
             indexerStats.writeTo(out);
             checkpointingInfo.writeTo(out);

@@ -27,6 +27,7 @@ import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.xpack.core.ClientHelper;
 import org.elasticsearch.xpack.core.indexing.IndexerState;
+import org.elasticsearch.xpack.core.transform.transforms.FunctionState;
 import org.elasticsearch.xpack.core.transform.transforms.TransformCheckpoint;
 import org.elasticsearch.xpack.core.transform.transforms.TransformConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformIndexerPosition;
@@ -74,7 +75,8 @@ class ClientTransformIndexer extends TransformIndexer {
         TransformCheckpoint nextCheckpoint,
         SeqNoPrimaryTermAndIndex seqNoPrimaryTermAndIndex,
         TransformContext context,
-        boolean shouldStopAtCheckpoint
+        boolean shouldStopAtCheckpoint,
+        FunctionState functionState
     ) {
         super(
             ExceptionsHelper.requireNonNull(threadPool, "threadPool"),
@@ -89,7 +91,8 @@ class ClientTransformIndexer extends TransformIndexer {
             transformProgress,
             lastCheckpoint,
             nextCheckpoint,
-            context
+            context,
+            functionState
         );
         this.client = ExceptionsHelper.requireNonNull(client, "client");
         this.seqNoPrimaryTermAndIndex = new AtomicReference<>(seqNoPrimaryTermAndIndex);
@@ -283,7 +286,8 @@ class ClientTransformIndexer extends TransformIndexer {
             context.getStateReason(),
             getProgress(),
             null,
-            shouldStopAtCheckpoint
+            shouldStopAtCheckpoint,
+            getFunctionState()
         );
         logger.debug("[{}] updating persistent state of transform to [{}].", transformConfig.getId(), state.toString());
 

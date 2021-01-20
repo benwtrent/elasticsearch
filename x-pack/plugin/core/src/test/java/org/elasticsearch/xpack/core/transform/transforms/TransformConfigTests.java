@@ -17,7 +17,10 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.ClusterConfig;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.ClusterConfigTests;
 import org.elasticsearch.xpack.core.transform.transforms.latest.LatestConfig;
+import org.elasticsearch.xpack.core.transform.transforms.latest.LatestConfigTests;
 import org.elasticsearch.xpack.core.transform.transforms.pivot.PivotConfig;
 import org.elasticsearch.xpack.core.transform.transforms.pivot.PivotConfigTests;
 import org.junit.Before;
@@ -52,6 +55,7 @@ public class TransformConfigTests extends AbstractSerializingTransformTestCase<T
             null,
             PivotConfigTests.randomPivotConfig(Version.CURRENT),
             null,
+            null,
             randomBoolean() ? null : randomAlphaOfLengthBetween(1, 1000),
             SettingsConfigTests.randomSettingsConfig(),
             null,
@@ -64,10 +68,30 @@ public class TransformConfigTests extends AbstractSerializingTransformTestCase<T
     }
 
     public static TransformConfig randomTransformConfig(String id) {
-        return randomTransformConfig(id, PivotConfigTests.randomPivotConfig(Version.CURRENT), null);
+        LatestConfig latestConfig = null;
+        PivotConfig pivotConfig = null;
+        ClusterConfig clusterConfig = null; ;
+        switch(randomIntBetween(0, 2)) {
+            case 0:
+                pivotConfig = PivotConfigTests.randomPivotConfig();
+                break;
+            case 1:
+                latestConfig = LatestConfigTests.randomLatestConfig();
+                break;
+            case 2:
+                clusterConfig = ClusterConfigTests.randomInstance();
+                break;
+        }
+
+        return randomTransformConfig(id, pivotConfig, latestConfig, clusterConfig);
     }
 
-    public static TransformConfig randomTransformConfig(String id, PivotConfig pivotConfig, LatestConfig latestConfig) {
+    public static TransformConfig randomTransformConfig(
+        String id,
+        PivotConfig pivotConfig,
+        LatestConfig latestConfig,
+        ClusterConfig clusterConfig
+    ) {
         return new TransformConfig(
             id,
             randomSourceConfig(),
@@ -77,6 +101,7 @@ public class TransformConfigTests extends AbstractSerializingTransformTestCase<T
             randomHeaders(),
             pivotConfig,
             latestConfig,
+            clusterConfig,
             randomBoolean() ? null : randomAlphaOfLengthBetween(1, 1000),
             randomBoolean() ? null : SettingsConfigTests.randomSettingsConfig(),
             randomBoolean() ? null : Instant.now(),
@@ -95,6 +120,7 @@ public class TransformConfigTests extends AbstractSerializingTransformTestCase<T
                 randomHeaders(),
                 PivotConfigTests.randomPivotConfig(),
                 null,
+                null,
                 randomBoolean() ? null : randomAlphaOfLengthBetween(1, 1000),
                 null,
                 null,
@@ -109,6 +135,7 @@ public class TransformConfigTests extends AbstractSerializingTransformTestCase<T
             randomBoolean() ? randomSyncConfig() : null,
             randomHeaders(),
             PivotConfigTests.randomInvalidPivotConfig(),
+            null,
             null,
             randomBoolean() ? null : randomAlphaOfLengthBetween(1, 1000),
             null,
@@ -316,6 +343,7 @@ public class TransformConfigTests extends AbstractSerializingTransformTestCase<T
                 null,
                 PivotConfigTests.randomPivotConfig(),
                 null,
+                null,
                 randomAlphaOfLength(1001),
                 null,
                 null,
@@ -332,6 +360,7 @@ public class TransformConfigTests extends AbstractSerializingTransformTestCase<T
             null,
             null,
             PivotConfigTests.randomPivotConfig(),
+            null,
             null,
             description,
             null,

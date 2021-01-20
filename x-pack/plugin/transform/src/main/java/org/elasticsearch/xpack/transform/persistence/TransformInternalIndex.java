@@ -59,6 +59,7 @@ public final class TransformInternalIndex {
      * version 4 (7.6): state::should_stop_at_checkpoint
      *                  checkpoint::checkpoint
      * version 5 (7.7): stats::processing_time_in_ms, stats::processing_total
+     * version 6 (8.0): state::function_state
      */
 
     // constants for mappings
@@ -194,6 +195,9 @@ public final class TransformInternalIndex {
                     .startObject(TransformState.CURRENT_POSITION.getPreferredName())
                         .field(ENABLED, false)
                     .endObject()
+                    .startObject(TransformState.FUNCTION_STATE.getPreferredName())
+                        .field(ENABLED, false)
+                     .endObject()
                     .startObject(TransformState.CHECKPOINT.getPreferredName())
                         .field(TYPE, LONG)
                     .endObject()

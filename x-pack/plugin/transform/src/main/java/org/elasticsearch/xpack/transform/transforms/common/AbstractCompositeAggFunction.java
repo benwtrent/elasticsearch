@@ -16,7 +16,12 @@ import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.client.Client;
+import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.collect.Tuple;
+import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
+import org.elasticsearch.common.xcontent.NamedXContentRegistry;
+import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.search.aggregations.Aggregations;
 import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregation;
@@ -25,16 +30,21 @@ import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.xpack.core.ClientHelper;
 import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 import org.elasticsearch.xpack.core.transform.TransformField;
+import org.elasticsearch.xpack.core.transform.TransformMessages;
 import org.elasticsearch.xpack.core.transform.transforms.SourceConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformIndexerStats;
 import org.elasticsearch.xpack.core.transform.transforms.TransformProgress;
+import org.elasticsearch.xpack.core.transform.transforms.pivot.GroupConfig;
 import org.elasticsearch.xpack.transform.transforms.Function;
 import org.elasticsearch.xpack.transform.transforms.pivot.AggregationResultUtils;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 
 /**
  * Basic abstract class for implementing a transform function that utilizes composite aggregations
@@ -45,6 +55,29 @@ public abstract class AbstractCompositeAggFunction implements Function {
     public static final String COMPOSITE_AGGREGATION_NAME = "_transform";
 
     private final CompositeAggregationBuilder cachedCompositeAggregation;
+
+    /**
+     * Creates a composite aggregation from the passed {@GroupConfig} or throws if there are pasing errors.
+     * @param config The configuration to parse into a composite aggregation
+     * @param functionName the calling transform function name. Used in error messages
+     * @return A parsed {@link CompositeAggregationBuilder} object
+     */
+    public static final CompositeAggregationBuilder createCompositeAggregationSources(GroupConfig config, String functionName) {
+        CompositeAggregationBuilder compositeAggregation;
+
+        try (XContentBuilder builder = jsonBuilder()) {
+            config.toCompositeAggXContent(builder);
+            XContentParser parser = builder.generator()
+                .contentType()
+                .xContent()
+                .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, BytesReference.bytes(builder).streamInput());
+            compositeAggregation = CompositeAggregationBuilder.PARSER.parse(parser, COMPOSITE_AGGREGATION_NAME);
+        } catch (IOException e) {
+            throw new RuntimeException(
+                TransformMessages.getMessage(TransformMessages.TRANSFORM_FAILED_TO_CREATE_COMPOSITE_AGGREGATION, functionName), e);
+        }
+        return compositeAggregation;
+    }
 
     public AbstractCompositeAggFunction(CompositeAggregationBuilder compositeAggregationBuilder) {
         cachedCompositeAggregation = compositeAggregationBuilder;

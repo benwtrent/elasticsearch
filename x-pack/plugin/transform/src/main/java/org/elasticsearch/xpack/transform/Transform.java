@@ -68,6 +68,11 @@ import org.elasticsearch.xpack.core.transform.action.compat.PutTransformActionDe
 import org.elasticsearch.xpack.core.transform.action.compat.StartTransformActionDeprecated;
 import org.elasticsearch.xpack.core.transform.action.compat.StopTransformActionDeprecated;
 import org.elasticsearch.xpack.core.transform.action.compat.UpdateTransformActionDeprecated;
+import org.elasticsearch.xpack.core.transform.transforms.FunctionState;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.ClusterFunctionState;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.ClusterValue;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.DateValue;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.TermValue;
 import org.elasticsearch.xpack.core.transform.transforms.persistence.TransformInternalIndexConstants;
 import org.elasticsearch.xpack.transform.action.TransportDeleteTransformAction;
 import org.elasticsearch.xpack.transform.action.TransportGetTransformAction;
@@ -367,6 +372,15 @@ public class Transform extends Plugin implements SystemIndexPlugin, PersistentTa
     @Override
     public List<Entry> getNamedXContent() {
         return new TransformNamedXContentProvider().getNamedXContentParsers();
+    }
+
+    @Override
+    public List<NamedWriteableRegistry.Entry> getNamedWriteables() {
+        return Arrays.asList(
+            new NamedWriteableRegistry.Entry(ClusterValue.class, DateValue.NAME, DateValue::new),
+            new NamedWriteableRegistry.Entry(ClusterValue.class, TermValue.NAME, TermValue::new),
+            new NamedWriteableRegistry.Entry(FunctionState.class, ClusterFunctionState.NAME, ClusterFunctionState::new)
+        );
     }
 
     @Override

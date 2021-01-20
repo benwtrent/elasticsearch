@@ -15,6 +15,7 @@ import org.elasticsearch.action.index.IndexRequest;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Predicate;
 
 import static java.util.function.Predicate.not;
 
@@ -53,8 +54,15 @@ public class DocumentConversionUtils {
      * @return A new {@link Map} but with all keys that start with "_" removed
      */
     public static <V> Map<String, V> removeInternalFields(Map<String, V> document) {
+        return removeFields(document, f -> f != null && f.startsWith("_"));
+    }
+
+    /**
+     * Removes fields that match the passed predicate
+     */
+    public static <V> Map<String, V> removeFields(Map<String, V> document, Predicate<String> removeFieldPredicate) {
         return document.entrySet().stream()
-            .filter(not(e -> e.getKey() != null && e.getKey().startsWith("_")))
+            .filter(not(e -> removeFieldPredicate.test(e.getKey())))
             // Workaround for handling null keys properly. For details see https://bugs.openjdk.java.net/browse/JDK-8148463
             .collect(HashMap::new, (m, e) -> m.put(e.getKey(), e.getValue()), HashMap::putAll);
     }

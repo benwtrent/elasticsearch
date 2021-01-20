@@ -130,7 +130,7 @@ public class TransportPreviewTransformAction extends HandledTransportAction<
             SourceDestValidations.PREVIEW_VALIDATIONS,
             ActionListener.wrap(r -> {
                 // create the function for validation
-                final Function function = FunctionFactory.create(config);
+                final Function function = FunctionFactory.create(config, null);
                 function.validateConfig(ActionListener.wrap(functionValidationResponse -> {
                     getPreview(
                         config.getId(), // note: @link{PreviewTransformAction} sets an id, so this is never null

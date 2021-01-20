@@ -20,7 +20,6 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.PipelineAggregationBuilder;
-import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregationBuilder;
 import org.elasticsearch.xpack.core.transform.TransformField;
 import org.elasticsearch.xpack.core.transform.utils.ExceptionsHelper;
 
@@ -29,12 +28,12 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map.Entry;
 import java.util.Objects;
 
 import static org.elasticsearch.action.ValidateActions.addValidationError;
 import static org.elasticsearch.common.xcontent.ConstructingObjectParser.constructorArg;
 import static org.elasticsearch.common.xcontent.ConstructingObjectParser.optionalConstructorArg;
+import static org.elasticsearch.xpack.core.transform.utils.TransformStrings.detectDuplicateDotDelimitedPaths;
 
 public class PivotConfig implements Writeable, ToXContentObject {
 
@@ -113,23 +112,6 @@ public class PivotConfig implements Writeable, ToXContentObject {
         return builder;
     }
 
-    public void toCompositeAggXContent(XContentBuilder builder) throws IOException {
-        builder.startObject();
-        builder.field(CompositeAggregationBuilder.SOURCES_FIELD_NAME.getPreferredName());
-        builder.startArray();
-
-        for (Entry<String, SingleGroupSource> groupBy : groups.getGroups().entrySet()) {
-            builder.startObject();
-            builder.startObject(groupBy.getKey());
-            builder.field(groupBy.getValue().getType().value(), groupBy.getValue());
-            builder.endObject();
-            builder.endObject();
-        }
-
-        builder.endArray();
-        builder.endObject(); // sources
-    }
-
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         groups.writeTo(out);
@@ -199,54 +181,11 @@ public class PivotConfig implements Writeable, ToXContentObject {
         aggregationConfig.getAggregatorFactories().forEach(agg -> addAggNames("", agg, usedNames));
         aggregationConfig.getPipelineAggregatorFactories().forEach(agg -> addAggNames("", agg, usedNames));
         usedNames.addAll(groups.getGroups().keySet());
-        return aggFieldValidation(usedNames);
+        return detectDuplicateDotDelimitedPaths(usedNames);
     }
 
     public static PivotConfig fromXContent(final XContentParser parser, boolean lenient) throws IOException {
         return lenient ? LENIENT_PARSER.apply(parser, null) : STRICT_PARSER.apply(parser, null);
-    }
-
-    /**
-     * Does the following checks:
-     *
-     *  - determines if there are any full duplicate names between the aggregation names and the group by names.
-     *  - finds if there are conflicting name paths that could cause a failure later when the config is started.
-     *
-     * Examples showing conflicting field name paths:
-     *
-     * aggName1: foo.bar.baz
-     * aggName2: foo.bar
-     *
-     * This should fail as aggName1 will cause foo.bar to be an object, causing a conflict with the use of foo.bar in aggName2.
-     * @param usedNames The aggregation and group_by names
-     * @return List of validation failure messages
-     */
-    static List<String> aggFieldValidation(List<String> usedNames) {
-        if (usedNames == null || usedNames.isEmpty()) {
-            return Collections.emptyList();
-        }
-        List<String> validationFailures = new ArrayList<>();
-
-        usedNames.sort(String::compareTo);
-        for (int i = 0; i < usedNames.size() - 1; i++) {
-            if (usedNames.get(i + 1).startsWith(usedNames.get(i) + ".")) {
-                validationFailures.add("field [" + usedNames.get(i) + "] cannot be both an object and a field");
-            }
-            if (usedNames.get(i + 1).equals(usedNames.get(i))) {
-                validationFailures.add("duplicate field [" + usedNames.get(i) + "] detected");
-            }
-        }
-
-        for (String name : usedNames) {
-            if (name.startsWith(".")) {
-                validationFailures.add("field [" + name + "] must not start with '.'");
-            }
-            if (name.endsWith(".")) {
-                validationFailures.add("field [" + name + "] must not end with '.'");
-            }
-        }
-
-        return validationFailures;
     }
 
     private static void addAggNames(String namePrefix, AggregationBuilder aggregationBuilder, Collection<String> names) {

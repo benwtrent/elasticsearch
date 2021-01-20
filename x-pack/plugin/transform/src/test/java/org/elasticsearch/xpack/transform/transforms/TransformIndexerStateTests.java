@@ -127,7 +127,8 @@ public class TransformIndexerStateTests extends ESTestCase {
                 /* TransformProgress */ null,
                 TransformCheckpoint.EMPTY,
                 TransformCheckpoint.EMPTY,
-                context
+                context,
+                null
             );
             this.threadPool = threadPool;
 
@@ -139,7 +140,8 @@ public class TransformIndexerStateTests extends ESTestCase {
                 context.getStateReason(),
                 getProgress(),
                 null,
-                context.shouldStopAtCheckpoint()
+                context.shouldStopAtCheckpoint(),
+                null
             );
         }
 
@@ -191,7 +193,8 @@ public class TransformIndexerStateTests extends ESTestCase {
                 context.getStateReason(),
                 getProgress(),
                 null,
-                context.shouldStopAtCheckpoint()
+                context.shouldStopAtCheckpoint(),
+                null
             );
 
             Collection<ActionListener<Void>> saveStateListenersAtTheMomentOfCalling = saveStateListeners.getAndSet(null);
@@ -250,6 +253,7 @@ public class TransformIndexerStateTests extends ESTestCase {
             new TimeSyncConfig("timestamp", TimeValue.timeValueSeconds(1)),
             null,
             randomPivotConfig(),
+            null,
             null,
             randomBoolean() ? null : randomAlphaOfLengthBetween(1, 1000),
             null,
@@ -456,6 +460,7 @@ public class TransformIndexerStateTests extends ESTestCase {
             new TimeSyncConfig("timestamp", TimeValue.timeValueSeconds(1)),
             null,
             randomPivotConfig(),
+            null,
             null,
             randomBoolean() ? null : randomAlphaOfLengthBetween(1, 1000),
             new SettingsConfig(null, Float.valueOf(1.0f), (Boolean) null),

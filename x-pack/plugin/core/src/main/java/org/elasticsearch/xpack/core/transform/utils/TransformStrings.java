@@ -8,6 +8,9 @@ package org.elasticsearch.xpack.core.transform.utils;
 
 import org.elasticsearch.cluster.metadata.Metadata;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.regex.Pattern;
 
 /**
@@ -43,5 +46,48 @@ public final class TransformStrings {
      */
     public static boolean hasValidLengthForId(String id) {
         return id.length() <= ID_LENGTH_LIMIT;
+    }
+
+    /**
+     * Does the following checks:
+     *
+     *  - determines if there are any full duplicate names between the names
+     *  - finds if there are conflicting name paths that could cause a failure later when the config is started.
+     *
+     * Examples showing conflicting field name paths:
+     *
+     * aggName1: foo.bar.baz
+     * aggName2: foo.bar
+     *
+     * This should fail as aggName1 will cause foo.bar to be an object, causing a conflict with the use of foo.bar in aggName2.
+     * @param usedNames The field names to check names
+     * @return List of validation failure messages
+     */
+    public static List<String> detectDuplicateDotDelimitedPaths(List<String> usedNames) {
+        if (usedNames == null || usedNames.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<String> validationFailures = new ArrayList<>();
+
+        usedNames.sort(String::compareTo);
+        for (int i = 0; i < usedNames.size() - 1; i++) {
+            if (usedNames.get(i + 1).startsWith(usedNames.get(i) + ".")) {
+                validationFailures.add("field [" + usedNames.get(i) + "] cannot be both an object and a field");
+            }
+            if (usedNames.get(i + 1).equals(usedNames.get(i))) {
+                validationFailures.add("duplicate field [" + usedNames.get(i) + "] detected");
+            }
+        }
+
+        for (String name : usedNames) {
+            if (name.startsWith(".")) {
+                validationFailures.add("field [" + name + "] must not start with '.'");
+            }
+            if (name.endsWith(".")) {
+                validationFailures.add("field [" + name + "] must not end with '.'");
+            }
+        }
+
+        return validationFailures;
     }
 }

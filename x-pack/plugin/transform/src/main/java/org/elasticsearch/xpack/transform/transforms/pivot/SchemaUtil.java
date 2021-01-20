@@ -21,7 +21,8 @@ import org.elasticsearch.index.mapper.NumberFieldMapper;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.PipelineAggregationBuilder;
 import org.elasticsearch.xpack.core.ClientHelper;
-import org.elasticsearch.xpack.core.transform.transforms.pivot.PivotConfig;
+import org.elasticsearch.xpack.core.transform.transforms.pivot.AggregationConfig;
+import org.elasticsearch.xpack.core.transform.transforms.pivot.GroupConfig;
 
 import java.math.BigDecimal;
 import java.util.Collections;
@@ -32,6 +33,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.elasticsearch.xpack.transform.transforms.common.DocumentConversionUtils.extractFieldMappings;
+import static org.elasticsearch.xpack.transform.transforms.pivot.TransformAggregations.getAggregationInputAndOutputTypes;
 
 public final class SchemaUtil {
     private static final Logger logger = LogManager.getLogger(SchemaUtil.class);
@@ -87,13 +89,15 @@ public final class SchemaUtil {
      * The Listener is alerted with a {@code Map<String, String>} that is a "field-name":"type" mapping
      *
      * @param client Client from which to make requests against the cluster
-     * @param config The PivotConfig for which to deduce destination mapping
+     * @param groupConfig The group by configuration
+     * @param aggregationConfig The aggregation configuration
      * @param source Source index that contains the data to pivot
      * @param listener Listener to alert on success or failure.
      */
     public static void deduceMappings(
         final Client client,
-        final PivotConfig config,
+        final GroupConfig groupConfig,
+        final AggregationConfig aggregationConfig,
         final String[] source,
         final ActionListener<Map<String, String>> listener
     ) {
@@ -106,36 +110,39 @@ public final class SchemaUtil {
         // collects the target mapping types used for grouping
         Map<String, String> fieldTypesForGrouping = new HashMap<>();
 
-        config.getGroupConfig()
-            .getGroups()
-            .forEach(
-                (destinationFieldName, group) -> {
-                    // skip any fields that use scripts as there will be no source mapping
-                    if (group.getScriptConfig() != null) {
-                        return;
-                    }
+        if (groupConfig != null) {
+            groupConfig
+                .getGroups()
+                .forEach(
+                    (destinationFieldName, group) -> {
+                        // skip any fields that use scripts as there will be no source mapping
+                        if (group.getScriptConfig() != null) {
+                            return;
+                        }
 
-                    // We will always need the field name for the grouping to create the mapping
-                    fieldNamesForGrouping.put(destinationFieldName, group.getField());
-                    // Sometimes the group config will supply a desired mapping as well
-                    if (group.getMappingType() != null) {
-                        fieldTypesForGrouping.put(destinationFieldName, group.getMappingType());
+                        // We will always need the field name for the grouping to create the mapping
+                        fieldNamesForGrouping.put(destinationFieldName, group.getField());
+                        // Sometimes the group config will supply a desired mapping as well
+                        if (group.getMappingType() != null) {
+                            fieldTypesForGrouping.put(destinationFieldName, group.getMappingType());
+                        }
                     }
-                }
-            );
-
-        for (AggregationBuilder agg : config.getAggregationConfig().getAggregatorFactories()) {
-            Tuple<Map<String, String>, Map<String, String>> inputAndOutputTypes = TransformAggregations.getAggregationInputAndOutputTypes(
-                agg
-            );
-            aggregationSourceFieldNames.putAll(inputAndOutputTypes.v1());
-            aggregationTypes.putAll(inputAndOutputTypes.v2());
+                );
         }
 
-        // For pipeline aggs, since they are referencing other aggregations in the payload, they do not have any
-        // sourcefieldnames to put into the payload. Though, certain ones, i.e. avg_bucket, do have determinant value types
-        for (PipelineAggregationBuilder agg : config.getAggregationConfig().getPipelineAggregatorFactories()) {
-            aggregationTypes.put(agg.getName(), agg.getType());
+        if (aggregationConfig != null) {
+            for (AggregationBuilder agg : aggregationConfig.getAggregatorFactories()) {
+                Tuple<Map<String, String>, Map<String, String>> inputAndOutputTypes = getAggregationInputAndOutputTypes(
+                    agg
+                );
+                aggregationSourceFieldNames.putAll(inputAndOutputTypes.v1());
+                aggregationTypes.putAll(inputAndOutputTypes.v2());
+            }
+            // For pipeline aggs, since they are referencing other aggregations in the payload, they do not have any
+            // sourcefieldnames to put into the payload. Though, certain ones, i.e. avg_bucket, do have determinant value types
+            for (PipelineAggregationBuilder agg : aggregationConfig.getPipelineAggregatorFactories()) {
+                aggregationTypes.put(agg.getName(), agg.getType());
+            }
         }
 
         Map<String, String> allFieldNames = new HashMap<>();

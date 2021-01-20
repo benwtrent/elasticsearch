@@ -12,8 +12,8 @@ import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.Writeable.Reader;
 import org.elasticsearch.common.xcontent.XContentParser;
-import org.elasticsearch.test.AbstractSerializingTestCase;
 import org.elasticsearch.xpack.core.indexing.IndexerState;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.ClusterFunctionStateTests;
 
 import java.io.IOException;
 import java.util.function.Predicate;
@@ -21,7 +21,7 @@ import java.util.function.Predicate;
 import static org.elasticsearch.xpack.core.transform.transforms.TransformProgressTests.randomTransformProgress;
 import static org.elasticsearch.xpack.core.transform.transforms.NodeAttributeTests.randomNodeAttributes;
 
-public class TransformStateTests extends AbstractSerializingTestCase<TransformState> {
+public class TransformStateTests extends AbstractSerializingTransformTestCase<TransformState> {
 
     public static TransformState randomTransformState() {
         return new TransformState(
@@ -32,7 +32,8 @@ public class TransformStateTests extends AbstractSerializingTestCase<TransformSt
             randomBoolean() ? null : randomAlphaOfLength(10),
             randomBoolean() ? null : randomTransformProgress(),
             randomBoolean() ? null : randomNodeAttributes(),
-            randomBoolean()
+            randomBoolean(),
+            randomBoolean() ? null : ClusterFunctionStateTests.randomInstance()
         );
     }
 
@@ -70,7 +71,8 @@ public class TransformStateTests extends AbstractSerializingTestCase<TransformSt
             randomBoolean() ? null : randomAlphaOfLength(10),
             randomBoolean() ? null : randomTransformProgress(),
             randomBoolean() ? null : randomNodeAttributes(),
-            false
+            false,
+            null
         ); // Will be false after BWC deserialization
         try (BytesStreamOutput output = new BytesStreamOutput()) {
             output.setVersion(Version.V_7_5_0);

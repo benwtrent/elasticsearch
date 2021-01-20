@@ -256,7 +256,8 @@ public class TransformPersistentTasksExecutor extends PersistentTasksExecutor<Tr
                     .setProgress(stateAndStats.getTransformState().getProgress())
                     .setIndexerState(currentIndexerState(transformState))
                     .setSeqNoPrimaryTermAndIndex(seqNoPrimaryTermAndIndex)
-                    .setShouldStopAtCheckpoint(transformState.shouldStopAtNextCheckpoint());
+                    .setShouldStopAtCheckpoint(transformState.shouldStopAtNextCheckpoint())
+                    .setFunctionState(transformState.getFunctionState());
                 logger.debug(
                     "[{}] Loading existing state: [{}], position [{}]",
                     transformId,

@@ -21,6 +21,10 @@ public class TermsGroupSourceTests extends AbstractSerializingTestCase<TermsGrou
     }
 
     public static TermsGroupSource randomTermsGroupSource(Version version) {
+        return randomTermsGroupSource(version, version.onOrAfter(Version.V_7_10_0) ? randomBoolean() : false);
+    }
+
+    public static TermsGroupSource randomTermsGroupSource(Version version, boolean missingBucket) {
         ScriptConfig scriptConfig = null;
         String field;
 
@@ -32,7 +36,7 @@ public class TermsGroupSourceTests extends AbstractSerializingTestCase<TermsGrou
             field = randomAlphaOfLengthBetween(1, 20);
         }
 
-        boolean missingBucket = version.onOrAfter(Version.V_7_10_0) ? randomBoolean() : false;
+        missingBucket = version.onOrAfter(Version.V_7_10_0) ? randomBoolean() : missingBucket;
         return new TermsGroupSource(field, scriptConfig, missingBucket);
     }
 

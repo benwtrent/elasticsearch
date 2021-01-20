@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.elasticsearch.xpack.core.transform.utils.TransformStrings.detectDuplicateDotDelimitedPaths;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.empty;
@@ -382,12 +383,12 @@ public class PivotConfigTests extends AbstractSerializingTransformTestCase<Pivot
         String nestedField2 = randomAlphaOfLength(10) + "4";
 
         assertThat(
-            PivotConfig.aggFieldValidation(Arrays.asList(prefix + nestedField1 + nestedField2, prefix + nestedField1, prefix, prefix2)),
+            detectDuplicateDotDelimitedPaths(Arrays.asList(prefix + nestedField1 + nestedField2, prefix + nestedField1, prefix, prefix2)),
             is(empty())
         );
 
         assertThat(
-            PivotConfig.aggFieldValidation(
+            detectDuplicateDotDelimitedPaths(
                 Arrays.asList(dotJoin(prefix, nestedField1, nestedField2), dotJoin(nestedField1, nestedField2), nestedField2, prefix2)
             ),
             is(empty())
@@ -400,7 +401,7 @@ public class PivotConfigTests extends AbstractSerializingTransformTestCase<Pivot
         String nestedField1 = randomAlphaOfLength(10) + "3";
         String nestedField2 = randomAlphaOfLength(10) + "4";
 
-        List<String> failures = PivotConfig.aggFieldValidation(
+        List<String> failures = detectDuplicateDotDelimitedPaths(
             Arrays.asList(
                 dotJoin(prefix, nestedField1, nestedField2),
                 dotJoin(prefix, nestedField2),
@@ -422,7 +423,7 @@ public class PivotConfigTests extends AbstractSerializingTransformTestCase<Pivot
     }
 
     public void testAggNameValidationsWithInvalidFieldnames() {
-        List<String> failures = PivotConfig.aggFieldValidation(Arrays.asList(".at_start", "at_end.", ".start_and_end."));
+        List<String> failures = detectDuplicateDotDelimitedPaths(Arrays.asList(".at_start", "at_end.", ".start_and_end."));
 
         assertThat(
             failures,

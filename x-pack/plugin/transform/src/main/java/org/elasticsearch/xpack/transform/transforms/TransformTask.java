@@ -143,7 +143,8 @@ public class TransformTask extends AllocatedPersistentTask implements SchedulerE
                 context.getStateReason(),
                 null,
                 null,
-                false
+                false,
+                null
             );
         } else {
             return new TransformState(
@@ -154,7 +155,8 @@ public class TransformTask extends AllocatedPersistentTask implements SchedulerE
                 context.getStateReason(),
                 getIndexer().getProgress(),
                 null,
-                context.shouldStopAtCheckpoint()
+                context.shouldStopAtCheckpoint(),
+                getIndexer().getFunctionState()
             );
         }
     }
@@ -259,7 +261,8 @@ public class TransformTask extends AllocatedPersistentTask implements SchedulerE
             null,
             getIndexer().getProgress(),
             null,
-            context.shouldStopAtCheckpoint()
+            context.shouldStopAtCheckpoint(),
+            getIndexer().getFunctionState()
         );
 
         logger.info("[{}] updating state for transform to [{}].", transform.getId(), state.toString());

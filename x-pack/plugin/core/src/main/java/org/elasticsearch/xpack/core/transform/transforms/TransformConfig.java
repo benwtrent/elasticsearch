@@ -26,6 +26,7 @@ import org.elasticsearch.common.xcontent.XContentParserUtils;
 import org.elasticsearch.xpack.core.common.time.TimeUtils;
 import org.elasticsearch.xpack.core.transform.TransformField;
 import org.elasticsearch.xpack.core.transform.TransformMessages;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.ClusterConfig;
 import org.elasticsearch.xpack.core.transform.transforms.latest.LatestConfig;
 import org.elasticsearch.xpack.core.transform.transforms.pivot.PivotConfig;
 import org.elasticsearch.xpack.core.transform.utils.ExceptionsHelper;
@@ -50,6 +51,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
     // types of transforms
     public static final ParseField PIVOT_TRANSFORM = new ParseField("pivot");
     public static final ParseField LATEST_TRANSFORM = new ParseField("latest");
+    public static final ParseField CLUSTER_TRANSFORM = new ParseField("cluster");
 
     private static final ConstructingObjectParser<TransformConfig, String> STRICT_PARSER = createParser(false);
     private static final ConstructingObjectParser<TransformConfig, String> LENIENT_PARSER = createParser(true);
@@ -70,6 +72,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
 
     private final PivotConfig pivotConfig;
     private final LatestConfig latestConfig;
+    private final ClusterConfig clusterConfig;
 
     private static void validateStrictParsingParams(Object arg, String parameterName) {
         if (arg != null) {
@@ -103,10 +106,10 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
             if (lenient == false) {
                 // on strict parsing do not allow injection of headers, transform version, or create time
                 validateStrictParsingParams(args[6], HEADERS.getPreferredName());
-                validateStrictParsingParams(args[11], TransformField.CREATE_TIME.getPreferredName());
-                validateStrictParsingParams(args[12], TransformField.VERSION.getPreferredName());
+                validateStrictParsingParams(args[12], TransformField.CREATE_TIME.getPreferredName());
+                validateStrictParsingParams(args[13], TransformField.VERSION.getPreferredName());
                 // exactly one function must be defined
-                if ((args[7] == null) == (args[8] == null)) {
+                if ((args[7] == null) == (args[8] == null) == (args[9] == null)) {
                     throw new IllegalArgumentException(TransformMessages.TRANSFORM_CONFIGURATION_BAD_FUNCTION_COUNT);
                 }
             }
@@ -116,8 +119,9 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
 
             PivotConfig pivotConfig = (PivotConfig) args[7];
             LatestConfig latestConfig = (LatestConfig) args[8];
-            String description = (String) args[9];
-            SettingsConfig settings = (SettingsConfig) args[10];
+            ClusterConfig clusterConfig = (ClusterConfig) args[9];
+            String description = (String) args[10];
+            SettingsConfig settings = (SettingsConfig) args[11];
             return new TransformConfig(
                 id,
                 source,
@@ -127,10 +131,11 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
                 headers,
                 pivotConfig,
                 latestConfig,
+                clusterConfig,
                 description,
                 settings,
-                (Instant) args[11],
-                (String) args[12]
+                (Instant) args[12],
+                (String) args[13]
             );
         });
 
@@ -143,6 +148,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
         parser.declareObject(optionalConstructorArg(), (p, c) -> p.mapStrings(), HEADERS);
         parser.declareObject(optionalConstructorArg(), (p, c) -> PivotConfig.fromXContent(p, lenient), PIVOT_TRANSFORM);
         parser.declareObject(optionalConstructorArg(), (p, c) -> LatestConfig.fromXContent(p, lenient), LATEST_TRANSFORM);
+        parser.declareObject(optionalConstructorArg(), (p, c) -> ClusterConfig.fromXContent(p, lenient), CLUSTER_TRANSFORM);
         parser.declareString(optionalConstructorArg(), TransformField.DESCRIPTION);
         parser.declareObject(optionalConstructorArg(), (p, c) -> SettingsConfig.fromXContent(p, lenient), TransformField.SETTINGS);
         parser.declareField(
@@ -176,6 +182,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
         final Map<String, String> headers,
         final PivotConfig pivotConfig,
         final LatestConfig latestConfig,
+        final ClusterConfig clusterConfig,
         final String description,
         final SettingsConfig settings,
         final Instant createTime,
@@ -189,6 +196,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
         this.setHeaders(headers == null ? Collections.emptyMap() : headers);
         this.pivotConfig = pivotConfig;
         this.latestConfig = latestConfig;
+        this.clusterConfig = clusterConfig;
         this.description = description;
         this.settings = settings == null ? new SettingsConfig() : settings;
         if (this.description != null && this.description.length() > MAX_DESCRIPTION_LENGTH) {
@@ -210,6 +218,11 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
         setHeaders(in.readMap(StreamInput::readString, StreamInput::readString));
         pivotConfig = in.readOptionalWriteable(PivotConfig::new);
         latestConfig = in.readOptionalWriteable(LatestConfig::new);
+        if (in.getVersion().onOrAfter(Version.V_8_0_0)) {
+            clusterConfig = in.readOptionalWriteable(ClusterConfig::new);
+        } else {
+            clusterConfig = null;
+        }
         description = in.readOptionalString();
         if (in.getVersion().onOrAfter(Version.V_7_3_0)) {
             syncConfig = in.readOptionalNamedWriteable(SyncConfig.class);
@@ -283,6 +296,10 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
         return latestConfig;
     }
 
+    public ClusterConfig getClusterConfig() {
+        return clusterConfig;
+    }
+
     @Nullable
     public String getDescription() {
         return description;
@@ -330,6 +347,9 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
         out.writeMap(headers, StreamOutput::writeString, StreamOutput::writeString);
         out.writeOptionalWriteable(pivotConfig);
         out.writeOptionalWriteable(latestConfig);
+        if (out.getVersion().onOrAfter(Version.V_8_0_0)) {
+            out.writeOptionalWriteable(clusterConfig);
+        }
         out.writeOptionalString(description);
         if (out.getVersion().onOrAfter(Version.V_7_3_0)) {
             out.writeOptionalNamedWriteable(syncConfig);
@@ -388,6 +408,9 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
         if (latestConfig != null) {
             builder.field(LATEST_TRANSFORM.getPreferredName(), latestConfig);
         }
+        if (clusterConfig != null) {
+            builder.field(CLUSTER_TRANSFORM.getPreferredName(), clusterConfig);
+        }
         if (description != null) {
             builder.field(TransformField.DESCRIPTION.getPreferredName(), description);
         }
@@ -416,6 +439,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
             && Objects.equals(this.headers, that.headers)
             && Objects.equals(this.pivotConfig, that.pivotConfig)
             && Objects.equals(this.latestConfig, that.latestConfig)
+            && Objects.equals(this.clusterConfig, that.clusterConfig)
             && Objects.equals(this.description, that.description)
             && Objects.equals(this.settings, that.settings)
             && Objects.equals(this.createTime, that.createTime)
@@ -433,6 +457,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
             headers,
             pivotConfig,
             latestConfig,
+            clusterConfig,
             description,
             settings,
             createTime,
@@ -523,6 +548,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
         private Instant createTime;
         private PivotConfig pivotConfig;
         private LatestConfig latestConfig;
+        private ClusterConfig clusterConfig;
         private SettingsConfig settings;
 
         public Builder() {}
@@ -538,6 +564,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
             this.createTime = config.createTime;
             this.pivotConfig = config.pivotConfig;
             this.latestConfig = config.latestConfig;
+            this.clusterConfig = config.clusterConfig;
             this.settings = config.settings;
         }
 
@@ -631,6 +658,15 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
             return latestConfig;
         }
 
+        public ClusterConfig getClusterConfig() {
+            return clusterConfig;
+        }
+
+        public Builder setClusterConfig(ClusterConfig clusterConfig) {
+            this.clusterConfig = clusterConfig;
+            return this;
+        }
+
         Builder setVersion(Version version) {
             this.transformVersion = version;
             return this;
@@ -650,6 +686,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
                 headers,
                 pivotConfig,
                 latestConfig,
+                clusterConfig,
                 description,
                 settings,
                 createTime,
@@ -677,6 +714,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
                 && Objects.equals(this.headers, that.headers)
                 && Objects.equals(this.pivotConfig, that.pivotConfig)
                 && Objects.equals(this.latestConfig, that.latestConfig)
+                && Objects.equals(this.clusterConfig, that.clusterConfig)
                 && Objects.equals(this.description, that.description)
                 && Objects.equals(this.settings, that.settings)
                 && Objects.equals(this.createTime, that.createTime)
@@ -694,6 +732,7 @@ public class TransformConfig extends AbstractDiffable<TransformConfig> implement
                 headers,
                 pivotConfig,
                 latestConfig,
+                clusterConfig,
                 description,
                 settings,
                 createTime,

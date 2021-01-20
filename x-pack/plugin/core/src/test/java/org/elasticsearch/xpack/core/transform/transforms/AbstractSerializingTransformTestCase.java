@@ -21,6 +21,10 @@ import org.elasticsearch.search.aggregations.BaseAggregationBuilder;
 import org.elasticsearch.test.AbstractSerializingTestCase;
 import org.elasticsearch.xpack.core.transform.TransformField;
 import org.elasticsearch.xpack.core.transform.TransformNamedXContentProvider;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.ClusterFunctionState;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.ClusterValue;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.DateValue;
+import org.elasticsearch.xpack.core.transform.transforms.cluster.TermValue;
 import org.junit.Before;
 
 import java.util.Collections;
@@ -52,6 +56,9 @@ public abstract class AbstractSerializingTransformTestCase<T extends ToXContent 
                 MockDeprecatedAggregationBuilder::new));
         namedWriteables.add(new NamedWriteableRegistry.Entry(SyncConfig.class, TransformField.TIME_BASED_SYNC.getPreferredName(),
                 TimeSyncConfig::new));
+        namedWriteables.add(new NamedWriteableRegistry.Entry(ClusterValue.class, DateValue.NAME, DateValue::new));
+        namedWriteables.add(new NamedWriteableRegistry.Entry(ClusterValue.class, TermValue.NAME, TermValue::new));
+        namedWriteables.add(new NamedWriteableRegistry.Entry(FunctionState.class, ClusterFunctionState.NAME, ClusterFunctionState::new));
 
         List<NamedXContentRegistry.Entry> namedXContents = searchModule.getNamedXContents();
         namedXContents.add(new NamedXContentRegistry.Entry(QueryBuilder.class,

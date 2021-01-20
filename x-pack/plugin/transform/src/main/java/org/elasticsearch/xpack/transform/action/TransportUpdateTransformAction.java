@@ -324,7 +324,7 @@ public class TransportUpdateTransformAction extends TransportTasksAction<Transfo
         ClusterState clusterState,
         ActionListener<Response> listener
     ) {
-        final Function function = FunctionFactory.create(config);
+        final Function function = FunctionFactory.create(config, null);
 
         // <3> Return to the listener
         ActionListener<Boolean> putTransformConfigurationListener = ActionListener.wrap(putTransformConfigurationResult -> {

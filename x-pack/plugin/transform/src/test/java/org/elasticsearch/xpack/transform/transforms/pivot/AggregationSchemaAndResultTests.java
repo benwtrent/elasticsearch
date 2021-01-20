@@ -135,7 +135,13 @@ public class AggregationSchemaAndResultTests extends ESTestCase {
             .count();
 
         this.<Map<String, String>>assertAsync(
-            listener -> SchemaUtil.deduceMappings(client, pivotConfig, new String[] { "source-index" }, listener),
+            listener -> SchemaUtil.deduceMappings(
+                client,
+                pivotConfig.getGroupConfig(),
+                pivotConfig.getAggregationConfig(),
+                new String[] { "source-index" },
+                listener
+            ),
             mappings -> {
                 assertEquals(numGroupsWithoutScripts + 10, mappings.size());
                 assertEquals("long", mappings.get("max_rating"));
@@ -202,7 +208,13 @@ public class AggregationSchemaAndResultTests extends ESTestCase {
             .count();
 
         this.<Map<String, String>>assertAsync(
-            listener -> SchemaUtil.deduceMappings(client, pivotConfig, new String[] { "source-index" }, listener),
+            listener -> SchemaUtil.deduceMappings(
+                client,
+                pivotConfig.getGroupConfig(),
+                pivotConfig.getAggregationConfig(),
+                new String[] { "source-index" },
+                listener
+            ),
             mappings -> {
                 assertEquals(numGroupsWithoutScripts + 12, mappings.size());
                 assertEquals("long", mappings.get("filter_1"));

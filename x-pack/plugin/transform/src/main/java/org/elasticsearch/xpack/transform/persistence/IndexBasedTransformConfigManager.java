@@ -56,6 +56,7 @@ import org.elasticsearch.xpack.core.transform.TransformField;
 import org.elasticsearch.xpack.core.transform.TransformMessages;
 import org.elasticsearch.xpack.core.transform.transforms.TransformCheckpoint;
 import org.elasticsearch.xpack.core.transform.transforms.TransformConfig;
+import org.elasticsearch.xpack.core.transform.transforms.TransformState;
 import org.elasticsearch.xpack.core.transform.transforms.TransformStoredDoc;
 import org.elasticsearch.xpack.core.transform.transforms.persistence.TransformInternalIndexConstants;
 
@@ -436,7 +437,7 @@ public class IndexBasedTransformConfigManager implements TransformConfigManager 
                     try (
                         InputStream stream = source.streamInput();
                         XContentParser parser = XContentFactory.xContent(XContentType.JSON)
-                            .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, stream)
+                            .createParser(xContentRegistry, LoggingDeprecationHandler.INSTANCE, stream)
                     ) {
                         ids.add((String) parser.map().get(TransformField.ID.getPreferredName()));
                     } catch (IOException e) {
@@ -610,6 +611,10 @@ public class IndexBasedTransformConfigManager implements TransformConfigManager 
             .setQuery(builder)
             // the limit for getting stats and transforms is 1000, as long as we do not have 10 indices this works
             .setSize(Math.min(transformIds.size(), 10_000))
+            .setFetchSource(
+                null,
+                // Function state can be large. We should not serialize it unless it is needed
+                new String[]{TransformStoredDoc.STATE_FIELD.getPreferredName() + "." + TransformState.FUNCTION_STATE.getPreferredName()})
             .request();
 
         executeAsyncWithOrigin(
@@ -627,7 +632,7 @@ public class IndexBasedTransformConfigManager implements TransformConfigManager 
                         try (
                             InputStream stream = source.streamInput();
                             XContentParser parser = XContentFactory.xContent(XContentType.JSON)
-                                .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, stream)
+                                .createParser(xContentRegistry, LoggingDeprecationHandler.INSTANCE, stream)
                         ) {
                             stats.add(TransformStoredDoc.fromXContent(parser));
                         } catch (IOException e) {

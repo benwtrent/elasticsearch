@@ -13,11 +13,6 @@ import org.elasticsearch.ElasticsearchStatusException;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.client.Client;
-import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
-import org.elasticsearch.common.xcontent.NamedXContentRegistry;
-import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.rest.RestStatus;
@@ -25,7 +20,6 @@ import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregation;
 import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregationBuilder;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
-import org.elasticsearch.xpack.core.transform.TransformMessages;
 import org.elasticsearch.xpack.core.transform.transforms.SettingsConfig;
 import org.elasticsearch.xpack.core.transform.transforms.SourceConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformIndexerStats;
@@ -35,13 +29,12 @@ import org.elasticsearch.xpack.transform.Transform;
 import org.elasticsearch.xpack.transform.transforms.common.AbstractCompositeAggFunction;
 import org.elasticsearch.xpack.transform.transforms.common.DocumentConversionUtils;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
 import static java.util.stream.Collectors.toList;
-import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
+
 
 /**
  * The pivot transform function. This continually searches and pivots results according to the passed {@link PivotConfig}
@@ -87,7 +80,7 @@ public class Pivot extends AbstractCompositeAggFunction {
 
     @Override
     public void deduceMappings(Client client, SourceConfig sourceConfig, final ActionListener<Map<String, String>> listener) {
-        SchemaUtil.deduceMappings(client, config, sourceConfig.getIndex(), listener);
+        SchemaUtil.deduceMappings(client, config.getGroupConfig(), config.getAggregationConfig(), sourceConfig.getIndex(), listener);
     }
 
     /**
@@ -158,28 +151,11 @@ public class Pivot extends AbstractCompositeAggFunction {
     }
 
     private static CompositeAggregationBuilder createCompositeAggregation(PivotConfig config) {
-        final CompositeAggregationBuilder compositeAggregation = createCompositeAggregationSources(config);
+        final CompositeAggregationBuilder compositeAggregation = createCompositeAggregationSources(config.getGroupConfig(), "pivot");
 
         config.getAggregationConfig().getAggregatorFactories().forEach(compositeAggregation::subAggregation);
         config.getAggregationConfig().getPipelineAggregatorFactories().forEach(compositeAggregation::subAggregation);
 
-        return compositeAggregation;
-    }
-
-    private static CompositeAggregationBuilder createCompositeAggregationSources(PivotConfig config) {
-        CompositeAggregationBuilder compositeAggregation;
-
-        try (XContentBuilder builder = jsonBuilder()) {
-            config.toCompositeAggXContent(builder);
-            XContentParser parser = builder.generator()
-                .contentType()
-                .xContent()
-                .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, BytesReference.bytes(builder).streamInput());
-            compositeAggregation = CompositeAggregationBuilder.PARSER.parse(parser, COMPOSITE_AGGREGATION_NAME);
-        } catch (IOException e) {
-            throw new RuntimeException(
-                TransformMessages.getMessage(TransformMessages.TRANSFORM_FAILED_TO_CREATE_COMPOSITE_AGGREGATION, "pivot"), e);
-        }
         return compositeAggregation;
     }
 

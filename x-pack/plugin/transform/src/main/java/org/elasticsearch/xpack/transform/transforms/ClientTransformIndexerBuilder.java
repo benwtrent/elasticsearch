@@ -10,6 +10,7 @@ package org.elasticsearch.xpack.transform.transforms;
 import org.elasticsearch.client.ParentTaskAssigningClient;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.xpack.core.indexing.IndexerState;
+import org.elasticsearch.xpack.core.transform.transforms.FunctionState;
 import org.elasticsearch.xpack.core.transform.transforms.TransformCheckpoint;
 import org.elasticsearch.xpack.core.transform.transforms.TransformConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformIndexerPosition;
@@ -38,6 +39,7 @@ class ClientTransformIndexerBuilder {
     private TransformCheckpoint lastCheckpoint;
     private TransformCheckpoint nextCheckpoint;
     private SeqNoPrimaryTermAndIndex seqNoPrimaryTermAndIndex;
+    private FunctionState functionState;
     private boolean shouldStopAtCheckpoint;
 
     ClientTransformIndexerBuilder() {
@@ -63,7 +65,8 @@ class ClientTransformIndexerBuilder {
             TransformCheckpoint.isNullOrEmpty(nextCheckpoint) ? TransformCheckpoint.EMPTY : nextCheckpoint,
             seqNoPrimaryTermAndIndex,
             context,
-            shouldStopAtCheckpoint
+            shouldStopAtCheckpoint,
+            functionState
         );
     }
 
@@ -141,4 +144,8 @@ class ClientTransformIndexerBuilder {
         return this;
     }
 
+    public ClientTransformIndexerBuilder setFunctionState(FunctionState functionState) {
+        this.functionState = functionState;
+        return this;
+    }
 }

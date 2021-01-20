@@ -39,7 +39,8 @@ public class TransportGetTransformStatsActionTests extends ESTestCase {
             reason,
             null,
             null,
-            true
+            true,
+            null
         );
         withIdStateAndStats(transformId, stoppedState, stats);
         TransformCheckpointingInfo info = new TransformCheckpointingInfo(
@@ -60,7 +61,7 @@ public class TransportGetTransformStatsActionTests extends ESTestCase {
         );
 
         reason = "foo";
-        stoppedState = new TransformState(TransformTaskState.STOPPED, IndexerState.STOPPED, null, 0, reason, null, null, true);
+        stoppedState = new TransformState(TransformTaskState.STOPPED, IndexerState.STOPPED, null, 0, reason, null, null, true, null);
         withIdStateAndStats(transformId, stoppedState, stats);
 
         assertThat(
@@ -77,7 +78,17 @@ public class TransportGetTransformStatsActionTests extends ESTestCase {
         String transformId = "transform-with-stats";
         String reason = null;
         TransformIndexerStats stats = TransformIndexerStatsTests.randomStats();
-        TransformState failedState = new TransformState(TransformTaskState.FAILED, IndexerState.STOPPED, null, 0, reason, null, null, true);
+        TransformState failedState = new TransformState(
+            TransformTaskState.FAILED,
+            IndexerState.STOPPED,
+            null,
+            0,
+            reason,
+            null,
+            null,
+            true,
+            null
+        );
         withIdStateAndStats(transformId, failedState, stats);
         TransformCheckpointingInfo info = new TransformCheckpointingInfo(
             new TransformCheckpointStats(1, null, null, 1, 1),
@@ -97,7 +108,7 @@ public class TransportGetTransformStatsActionTests extends ESTestCase {
         );
 
         reason = "the task is failed";
-        failedState = new TransformState(TransformTaskState.FAILED, IndexerState.STOPPED, null, 0, reason, null, null, true);
+        failedState = new TransformState(TransformTaskState.FAILED, IndexerState.STOPPED, null, 0, reason, null, null, true, null);
         withIdStateAndStats(transformId, failedState, stats);
 
         assertThat(
@@ -122,7 +133,8 @@ public class TransportGetTransformStatsActionTests extends ESTestCase {
             reason,
             null,
             null,
-            true
+            true,
+            null
         );
         withIdStateAndStats(transformId, runningState, stats);
         TransformCheckpointingInfo info = new TransformCheckpointingInfo(
@@ -161,7 +173,7 @@ public class TransportGetTransformStatsActionTests extends ESTestCase {
         );
 
         reason = "foo";
-        runningState = new TransformState(TransformTaskState.STARTED, IndexerState.INDEXING, null, 0, reason, null, null, true);
+        runningState = new TransformState(TransformTaskState.STARTED, IndexerState.INDEXING, null, 0, reason, null, null, true,  null);
         withIdStateAndStats(transformId, runningState, stats);
 
         assertThat(
@@ -174,7 +186,7 @@ public class TransportGetTransformStatsActionTests extends ESTestCase {
         );
 
         // Stop at next checkpoint is false.
-        runningState = new TransformState(TransformTaskState.STARTED, IndexerState.INDEXING, null, 0, reason, null, null, false);
+        runningState = new TransformState(TransformTaskState.STARTED, IndexerState.INDEXING, null, 0, reason, null, null, false, null);
         withIdStateAndStats(transformId, runningState, stats);
 
         assertThat(

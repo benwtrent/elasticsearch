@@ -89,7 +89,8 @@ public class TransformTaskTests extends ESTestCase {
             "because",
             null,
             null,
-            false
+            false,
+            null
         );
 
         TransformTask transformTask = new TransformTask(
@@ -170,7 +171,8 @@ public class TransformTaskTests extends ESTestCase {
             "because",
             null,
             null,
-            false
+            false,
+            null
         );
 
         TransformTask transformTask = new TransformTask(

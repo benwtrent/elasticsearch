@@ -14,6 +14,7 @@ import org.elasticsearch.client.Client;
 import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
+import org.elasticsearch.xpack.core.transform.transforms.FunctionState;
 import org.elasticsearch.xpack.core.transform.transforms.SourceConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformIndexerStats;
 import org.elasticsearch.xpack.core.transform.transforms.TransformProgress;
@@ -49,7 +50,7 @@ public interface Function {
      * 2. apply the collected changes as filter query and search/process them
      * 3. in case phase 1 could not collect all changes, move the collector cursor, collect changes and continue with step 2
      */
-    public interface ChangeCollector {
+    interface ChangeCollector {
 
         /**
          * Build the search query to gather the changes between 2 checkpoints.
@@ -218,4 +219,8 @@ public interface Function {
         Map<String, String> fieldMappings,
         TransformIndexerStats stats
     );
+
+    default FunctionState getFunctionState() {
+        return null;
+    }
 }

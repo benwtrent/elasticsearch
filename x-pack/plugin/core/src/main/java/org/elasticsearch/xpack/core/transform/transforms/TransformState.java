@@ -29,6 +29,11 @@ import java.util.Objects;
 import static org.elasticsearch.common.xcontent.ConstructingObjectParser.constructorArg;
 import static org.elasticsearch.common.xcontent.ConstructingObjectParser.optionalConstructorArg;
 
+/**
+ * The overall transform state.
+ *
+ * Contains all information for failure recovery
+ */
 public class TransformState implements Task.Status, PersistentTaskState {
     public static final String NAME = TransformField.TASK_NAME;
 
@@ -45,9 +50,11 @@ public class TransformState implements Task.Status, PersistentTaskState {
     private NodeAttributes node;
 
     private final boolean shouldStopAtNextCheckpoint;
+    private final FunctionState functionState;
 
     public static final ParseField TASK_STATE = new ParseField("task_state");
     public static final ParseField INDEXER_STATE = new ParseField("indexer_state");
+    public static final ParseField FUNCTION_STATE = new ParseField("function_state");
 
     // 7.3 BWC: current_position only exists in 7.2.  In 7.3+ it is replaced by position.
     public static final ParseField CURRENT_POSITION = new ParseField("current_position");
@@ -78,6 +85,7 @@ public class TransformState implements Task.Status, PersistentTaskState {
             TransformProgress progress = (TransformProgress) args[6];
             NodeAttributes node = (NodeAttributes) args[7];
             boolean shouldStopAtNextCheckpoint = args[8] == null ? false : (boolean)args[8];
+            FunctionState functionState = (FunctionState) args[9];
 
             return new TransformState(taskState,
                 indexerState,
@@ -86,7 +94,8 @@ public class TransformState implements Task.Status, PersistentTaskState {
                 reason,
                 progress,
                 node,
-                shouldStopAtNextCheckpoint);
+                shouldStopAtNextCheckpoint,
+                functionState);
         });
 
     static {
@@ -99,6 +108,7 @@ public class TransformState implements Task.Status, PersistentTaskState {
         PARSER.declareField(optionalConstructorArg(), TransformProgress.PARSER::apply, PROGRESS, ValueType.OBJECT);
         PARSER.declareField(optionalConstructorArg(), NodeAttributes.PARSER::apply, NODE, ValueType.OBJECT);
         PARSER.declareBoolean(optionalConstructorArg(), SHOULD_STOP_AT_NEXT_CHECKPOINT);
+        PARSER.declareNamedObject(optionalConstructorArg(), (p, c, n) -> p.namedObject(FunctionState.class, n, true), FUNCTION_STATE);
     }
 
     public TransformState(TransformTaskState taskState,
@@ -108,7 +118,8 @@ public class TransformState implements Task.Status, PersistentTaskState {
                           @Nullable String reason,
                           @Nullable TransformProgress progress,
                           @Nullable NodeAttributes node,
-                          boolean shouldStopAtNextCheckpoint) {
+                          boolean shouldStopAtNextCheckpoint,
+                          @Nullable FunctionState functionState) {
         this.taskState = taskState;
         this.indexerState = indexerState;
         this.position = position;
@@ -117,6 +128,7 @@ public class TransformState implements Task.Status, PersistentTaskState {
         this.progress = progress;
         this.node = node;
         this.shouldStopAtNextCheckpoint = shouldStopAtNextCheckpoint;
+        this.functionState = functionState;
     }
 
     public TransformState(TransformTaskState taskState,
@@ -125,8 +137,9 @@ public class TransformState implements Task.Status, PersistentTaskState {
                           long checkpoint,
                           @Nullable String reason,
                           @Nullable TransformProgress progress,
-                          @Nullable NodeAttributes node) {
-        this(taskState, indexerState, position, checkpoint, reason, progress, node, false);
+                          @Nullable NodeAttributes node,
+                          @Nullable FunctionState functionState) {
+        this(taskState, indexerState, position, checkpoint, reason, progress, node, false, functionState);
     }
 
     public TransformState(TransformTaskState taskState,
@@ -134,8 +147,9 @@ public class TransformState implements Task.Status, PersistentTaskState {
                           @Nullable TransformIndexerPosition position,
                           long checkpoint,
                           @Nullable String reason,
-                          @Nullable TransformProgress progress) {
-        this(taskState, indexerState, position, checkpoint, reason, progress, null);
+                          @Nullable TransformProgress progress,
+                          @Nullable FunctionState functionState) {
+        this(taskState, indexerState, position, checkpoint, reason, progress, null, functionState);
     }
 
     public TransformState(StreamInput in) throws IOException {
@@ -159,6 +173,11 @@ public class TransformState implements Task.Status, PersistentTaskState {
             shouldStopAtNextCheckpoint = in.readBoolean();
         } else {
             shouldStopAtNextCheckpoint = false;
+        }
+        if (in.getVersion().onOrAfter(Version.V_8_0_0)) {
+            functionState = in.readOptionalNamedWriteable(FunctionState.class);
+        } else {
+            functionState = null;
         }
     }
 
@@ -199,6 +218,10 @@ public class TransformState implements Task.Status, PersistentTaskState {
         return shouldStopAtNextCheckpoint;
     }
 
+    public FunctionState getFunctionState() {
+        return functionState;
+    }
+
     public static TransformState fromXContent(XContentParser parser) {
         try {
             return PARSER.parse(parser, null);
@@ -226,6 +249,11 @@ public class TransformState implements Task.Status, PersistentTaskState {
             builder.field(NODE.getPreferredName(), node);
         }
         builder.field(SHOULD_STOP_AT_NEXT_CHECKPOINT.getPreferredName(), shouldStopAtNextCheckpoint);
+        if (functionState != null) {
+            builder.startObject(FUNCTION_STATE.getPreferredName());
+            builder.field(functionState.getWriteableName(), functionState, params);
+            builder.endObject();
+        }
         builder.endObject();
         return builder;
     }
@@ -253,6 +281,9 @@ public class TransformState implements Task.Status, PersistentTaskState {
         if (out.getVersion().onOrAfter(Version.V_7_6_0)) {
             out.writeBoolean(shouldStopAtNextCheckpoint);
         }
+        if (out.getVersion().onOrAfter(Version.V_8_0_0)) {
+            out.writeOptionalNamedWriteable(functionState);
+        }
     }
 
     @Override
@@ -274,12 +305,23 @@ public class TransformState implements Task.Status, PersistentTaskState {
             Objects.equals(this.reason, that.reason) &&
             Objects.equals(this.progress, that.progress) &&
             Objects.equals(this.shouldStopAtNextCheckpoint, that.shouldStopAtNextCheckpoint) &&
-            Objects.equals(this.node, that.node);
+            Objects.equals(this.node, that.node) &&
+            Objects.equals(this.functionState, that.functionState);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(taskState, indexerState, position, checkpoint, reason, progress, node, shouldStopAtNextCheckpoint);
+        return Objects.hash(
+            taskState,
+            indexerState,
+            position,
+            checkpoint,
+            reason,
+            progress,
+            node,
+            shouldStopAtNextCheckpoint,
+            functionState
+        );
     }
 
     @Override

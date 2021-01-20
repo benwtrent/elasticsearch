@@ -153,7 +153,7 @@ public class GroupConfigTests extends AbstractSerializingTestCase<GroupConfig> {
         }
     }
 
-    private static Map<String, Object> getSource(SingleGroupSource groupSource) {
+    public static Map<String, Object> getSource(SingleGroupSource groupSource) {
         try (XContentBuilder xContentBuilder = XContentFactory.jsonBuilder()) {
             XContentBuilder content = groupSource.toXContent(xContentBuilder, ToXContent.EMPTY_PARAMS);
             return XContentHelper.convertToMap(BytesReference.bytes(content), true, XContentType.JSON).v2();

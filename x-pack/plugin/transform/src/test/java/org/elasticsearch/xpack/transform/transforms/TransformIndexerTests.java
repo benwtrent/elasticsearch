@@ -125,7 +125,8 @@ public class TransformIndexerTests extends ESTestCase {
                 /* TransformProgress */ null,
                 TransformCheckpoint.EMPTY,
                 TransformCheckpoint.EMPTY,
-                context
+                context,
+                null
             );
             this.searchFunction = searchFunction;
             this.bulkFunction = bulkFunction;
@@ -273,6 +274,7 @@ public class TransformIndexerTests extends ESTestCase {
             null,
             randomPivotConfig(),
             null,
+            null,
             randomBoolean() ? null : randomAlphaOfLengthBetween(1, 1000),
             new SettingsConfig(pageSize, null, (Boolean) null),
             null,
@@ -344,6 +346,7 @@ public class TransformIndexerTests extends ESTestCase {
             null,
             randomPivotConfig(),
             null,
+            null,
             randomBoolean() ? null : randomAlphaOfLengthBetween(1, 1000),
             new SettingsConfig(pageSize, null, (Boolean) null),
             null,
@@ -404,6 +407,7 @@ public class TransformIndexerTests extends ESTestCase {
             null,
             null,
             randomPivotConfig(),
+            null,
             null,
             randomBoolean() ? null : randomAlphaOfLengthBetween(1, 1000),
             new SettingsConfig(pageSize, null, (Boolean) null),
@@ -490,7 +494,7 @@ public class TransformIndexerTests extends ESTestCase {
         LatestConfig latestConfig = new LatestConfig(Arrays.asList("field-A", "field-B"), "sort");
         TransformConfig config =
             new TransformConfig(
-                transformId, sourceConfig, randomDestConfig(), null, syncConfig, null, null, latestConfig, null, null, null, null);
+                transformId, sourceConfig, randomDestConfig(), null, syncConfig, null, null, latestConfig, null, null, null, null, null);
 
         MockTransformAuditor auditor = MockTransformAuditor.createMockAuditor();
         auditor.addExpectation(
@@ -521,7 +525,7 @@ public class TransformIndexerTests extends ESTestCase {
         LatestConfig latestConfig = new LatestConfig(Arrays.asList("field-A", "field-B"), "sort");
         TransformConfig config =
             new TransformConfig(
-                transformId, sourceConfig, randomDestConfig(), null, syncConfig, null, null, latestConfig, null, null, null, null);
+                transformId, sourceConfig, randomDestConfig(), null, syncConfig, null, null, latestConfig, null, null, null, null, null);
 
         MockTransformAuditor auditor = MockTransformAuditor.createMockAuditor();
         auditor.addExpectation(

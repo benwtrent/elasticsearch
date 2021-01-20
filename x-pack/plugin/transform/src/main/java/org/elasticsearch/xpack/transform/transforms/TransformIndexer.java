@@ -30,6 +30,7 @@ import org.elasticsearch.xpack.core.indexing.AsyncTwoPhaseIndexer;
 import org.elasticsearch.xpack.core.indexing.IndexerState;
 import org.elasticsearch.xpack.core.indexing.IterationResult;
 import org.elasticsearch.xpack.core.transform.TransformMessages;
+import org.elasticsearch.xpack.core.transform.transforms.FunctionState;
 import org.elasticsearch.xpack.core.transform.transforms.SettingsConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformCheckpoint;
 import org.elasticsearch.xpack.core.transform.transforms.TransformConfig;
@@ -97,6 +98,7 @@ public abstract class TransformIndexer extends AsyncTwoPhaseIndexer<TransformInd
     protected final AtomicReference<Collection<ActionListener<Void>>> saveStateListeners = new AtomicReference<>();
 
     private final Map<String, String> fieldMappings;
+    private final AtomicReference<FunctionState> functionState;
 
     // the function of the transform, e.g. pivot or latest
     private Function function;
@@ -135,7 +137,8 @@ public abstract class TransformIndexer extends AsyncTwoPhaseIndexer<TransformInd
         TransformProgress transformProgress,
         TransformCheckpoint lastCheckpoint,
         TransformCheckpoint nextCheckpoint,
-        TransformContext context
+        TransformContext context,
+        FunctionState functionState
     ) {
         super(threadPool, initialState, initialPosition, jobStats);
         this.transformsConfigManager = ExceptionsHelper.requireNonNull(transformsConfigManager, "transformsConfigManager");
@@ -150,7 +153,7 @@ public abstract class TransformIndexer extends AsyncTwoPhaseIndexer<TransformInd
 
         // give runState a default
         this.runState = RunState.APPLY_RESULTS;
-
+        this.functionState = new AtomicReference<>(functionState);
         if (transformConfig.getSettings() != null && transformConfig.getSettings().getDocsPerSecond() != null) {
             docsPerSecond = transformConfig.getSettings().getDocsPerSecond();
         }
@@ -160,6 +163,10 @@ public abstract class TransformIndexer extends AsyncTwoPhaseIndexer<TransformInd
 
     public int getPageSize() {
         return pageSize;
+    }
+
+    public FunctionState getFunctionState() {
+        return functionState.get();
     }
 
     @Override
@@ -366,7 +373,8 @@ public abstract class TransformIndexer extends AsyncTwoPhaseIndexer<TransformInd
 
     protected void initializeFunction() {
         // create the function
-        function = FunctionFactory.create(getConfig());
+        function = FunctionFactory.create(getConfig(), functionState.get());
+        functionState.set(function.getFunctionState());
 
         if (isContinuous()) {
             Map<String, Object> scriptBasedRuntimeFieldNames = transformConfig.getSource().getScriptBasedRuntimeMappings();
