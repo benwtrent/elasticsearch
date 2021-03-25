@@ -17,6 +17,8 @@ import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
+import org.elasticsearch.common.xcontent.ToXContentObject;
+import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilders;
 import org.elasticsearch.search.aggregations.bucket.MultiBucketsAggregation;
@@ -38,9 +40,12 @@ import org.elasticsearch.xpack.core.ml.investigation.InvestigationConfig;
 import org.elasticsearch.xpack.core.ml.investigation.InvestigationSource;
 import org.elasticsearch.xpack.core.security.SecurityContext;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
 
 import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
@@ -124,11 +129,43 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
                                 client,
                                 investigationConfig.getSourceConfig()
                             );
-                            termCorrelator.correlation(groupedActionListener);
+                            termCorrelator.correlation(ActionListener.wrap(
+                                correlationResults -> {
+                                    correlationResults.sort(Comparator.comparing(CorrelationResult::getCorrelation));
+                                    groupedActionListener.onResponse(Collections.singletonMap(term, correlationResults));
+                                },
+                                groupedActionListener::onFailure
+                            ));
                         }
                     },
                     responseActionListener::onFailure
                 ));
+        }
+    }
+
+    static class CorrelationResult implements ToXContentObject {
+        private final String value;
+        private final double correlation;
+
+        CorrelationResult(String value, double correlation) {
+            this.value = value;
+            this.correlation = correlation;
+        }
+
+        @Override
+        public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+            return builder.startObject()
+                .field("value", value)
+                .field("correlation", correlation)
+                .endObject();
+        }
+
+        public String getValue() {
+            return value;
+        }
+
+        public double getCorrelation() {
+            return correlation;
         }
     }
 
@@ -154,7 +191,7 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
             return Tuple.tuple(builder, expectations);
         }
 
-        private Map<String, Object> results = new ConcurrentHashMap<>();
+        private List<CorrelationResult> results = new ArrayList<>();
         private double[] expectations;
         private final String termField;
         private final CompositeAggregationBuilder aggregationBuilder;
@@ -176,7 +213,7 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
             this.source = source;
         }
 
-        void correlation(ActionListener<Map<String, Object>> listener) {
+        void correlation(ActionListener<List<CorrelationResult>> listener) {
             client.prepareSearch(source.getIndex())
                 .setSize(0)
                 .setQuery(source.getQuery())
@@ -211,7 +248,7 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
                 .toArray();
             PearsonsCorrelation pearsonsCorrelation = new PearsonsCorrelation();
             double corr = pearsonsCorrelation.correlation(expectations, counts);
-            results.put(term, corr);
+            results.add(new CorrelationResult(term, corr));
         }
 
     }
