@@ -18,6 +18,7 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.ml.investigation.InvestigationConfig;
 
 import java.io.IOException;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -61,8 +62,8 @@ public class StartInvestigationAction extends ActionType<StartInvestigationActio
 
     public static class Response extends ActionResponse implements ToXContentObject  {
 
-        private final List<Map<String, Object>> items;
-        public Response(List<Map<String, Object>> items) {
+        private final Collection<Map<String, Object>> items;
+        public Response(Collection<Map<String, Object>> items) {
             this.items = items;
         }
 

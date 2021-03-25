@@ -22,6 +22,7 @@ public class InvestigationConfig implements ToXContentObject, Writeable {
 
     public static ParseField KEY_INDICATOR = new ParseField("key_indicator");
     public static ParseField TERMS = new ParseField("terms");
+    public static ParseField SOURCE_CONFIG = new ParseField("source_config");
 
     public static ObjectParser<InvestigationConfig, Void> PARSER = new ObjectParser<InvestigationConfig, Void>(
         "investigation_config",
@@ -31,10 +32,12 @@ public class InvestigationConfig implements ToXContentObject, Writeable {
     static {
         PARSER.declareString(InvestigationConfig::setKeyIndicator, KEY_INDICATOR);
         PARSER.declareStringArray(InvestigationConfig::setTerms, TERMS);
+        PARSER.declareObject(InvestigationConfig::setSourceConfig, InvestigationSource.createParser(false), SOURCE_CONFIG);
     }
 
     private String keyIndicator;
     private List<String> terms;
+    private InvestigationSource sourceConfig;
 
     public InvestigationConfig() {
 
@@ -61,6 +64,15 @@ public class InvestigationConfig implements ToXContentObject, Writeable {
     public InvestigationConfig(StreamInput in) throws IOException {
         this.keyIndicator = in.readString();
         this.terms = in.readStringList();
+    }
+
+    public InvestigationConfig setSourceConfig(InvestigationSource sourceConfig) {
+        this.sourceConfig = sourceConfig;
+        return this;
+    }
+
+    public InvestigationSource getSourceConfig() {
+        return sourceConfig;
     }
 
     @Override

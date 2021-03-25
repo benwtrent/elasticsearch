@@ -7,19 +7,21 @@
 package org.elasticsearch.xpack.ml.action;
 
 import org.apache.commons.math3.stat.correlation.PearsonsCorrelation;
-import org.apache.commons.math3.stat.inference.KolmogorovSmirnovTest;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
+import org.elasticsearch.action.support.GroupedActionListener;
 import org.elasticsearch.action.support.HandledTransportAction;
 import org.elasticsearch.client.Client;
+import org.elasticsearch.client.OriginSettingClient;
+import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilders;
-import org.elasticsearch.search.aggregations.Aggregations;
 import org.elasticsearch.search.aggregations.bucket.MultiBucketsAggregation;
 import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregation;
+import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.composite.TermsValuesSourceBuilder;
 import org.elasticsearch.search.aggregations.bucket.range.Range;
 import org.elasticsearch.search.aggregations.bucket.range.RangeAggregationBuilder;
@@ -32,14 +34,16 @@ import org.elasticsearch.xpack.core.XPackSettings;
 import org.elasticsearch.xpack.core.ml.action.StartInvestigationAction;
 import org.elasticsearch.xpack.core.ml.action.StartInvestigationAction.Request;
 import org.elasticsearch.xpack.core.ml.action.StartInvestigationAction.Response;
+import org.elasticsearch.xpack.core.ml.investigation.InvestigationConfig;
+import org.elasticsearch.xpack.core.ml.investigation.InvestigationSource;
 import org.elasticsearch.xpack.core.security.SecurityContext;
 
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
-import java.util.stream.LongStream;
+
+import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
 
 
 public class TransportStartInvestigationAction extends HandledTransportAction<Request, Response> {
@@ -67,94 +71,139 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
     }
 
     void investigate(Request request, ActionListener<Response> listener) {
-        final String termField = request.getConfig().getTerms().get(0);
-        Correlator correlator = new Correlator(termField);
-        client.prepareSearch("correlation_demo")
-            .setSource(correlator.rangeQuery())
-            .execute(ActionListener.wrap(
-                searchResponse -> {
-                    AggregationBuilder metricAgg = correlator.buildRangeAggAndSetExpectations(searchResponse.getAggregations());
-                    client.prepareSearch("correlation_demo").addAggregation(
-                        AggregationBuilders.composite(
-                            "correlation_composite",
-                            List.of(new TermsValuesSourceBuilder(termField).field(termField))
-                        ).subAggregation(metricAgg).size(10000) // TODO actually scroll just all for now
-                    ).setSize(0).execute(
-                        ActionListener.wrap(
-                            compositeSearchResponse -> {
-                                CompositeAggregation agg = compositeSearchResponse.getAggregations().get("correlation_composite");
-                                for (CompositeAggregation.Bucket bucket : agg.getBuckets()) {
-                                    correlator.handleBucket(bucket);
-                                }
-                                listener.onResponse(new Response(correlator.results));
-                            },
-                            listener::onFailure
-                        )
-                    );
-                },
-                listener::onFailure
-            ));
-
+        CorrelatorFactory correlatorFactory = new CorrelatorFactory(client, request.getConfig());
+        correlatorFactory.execute(listener);
     }
 
-    static class Correlator {
-
-        private Map<String, Object> compositePage;
-        private List<Map<String, Object>> results = new ArrayList<>();
-        private double[] expectations;
-        private final String termField;
-        private final KolmogorovSmirnovTest ks2Test = new KolmogorovSmirnovTest();
-        private static final double[] PERCENTILE_STEPS = IntStream.range(2, 99)
+    static class CorrelatorFactory {
+        static final double[] PERCENTILE_STEPS = IntStream.range(2, 99)
             .filter(i -> i % 2 == 0)
             .mapToDouble(Double::valueOf)
             .toArray();
 
-        Correlator(String termField) {
-            this.termField = termField;
+        private final InvestigationConfig investigationConfig;
+        private final OriginSettingClient client;
+
+        CorrelatorFactory(Client client, InvestigationConfig config) {
+            this.investigationConfig = config;
+            this.client = new OriginSettingClient(client, ML_ORIGIN);
         }
 
-        SearchSourceBuilder rangeQuery() {
-            return SearchSourceBuilder.searchSource()
-                .aggregation(
-                    AggregationBuilders.percentiles("correlation_percentiles")
-                        .field("latency")
-                        .percentiles(PERCENTILE_STEPS)
+        void execute(ActionListener<Response> responseActionListener) {
+            client.prepareSearch(investigationConfig.getSourceConfig().getIndex())
+                .setSource(SearchSourceBuilder.searchSource()
+                    .aggregation(
+                        AggregationBuilders.percentiles("correlation_percentiles")
+                            .field(investigationConfig.getKeyIndicator())
+                            .percentiles(PERCENTILE_STEPS)
+                    )
+                    .size(0)
+                    .trackTotalHits(true)
+                    .query(investigationConfig.getSourceConfig().getQuery())
                 )
-                .size(0)
-                .trackTotalHits(true);
-        }
+                .execute(ActionListener.wrap(
+                    searchResponse -> {
+                        Percentiles percentiles = searchResponse.getAggregations().get("correlation_percentiles");
+                        var val = TermCorrelator.buildRangeAggAndSetExpectations(percentiles,
+                            PERCENTILE_STEPS,
+                            investigationConfig.getKeyIndicator()
+                        );
 
-        AggregationBuilder buildRangeAggAndSetExpectations(Aggregations aggregations) {
-            Percentiles percentiles = aggregations.get("correlation_percentiles");
-            expectations = new double[PERCENTILE_STEPS.length + 1];
-            RangeAggregationBuilder builder = AggregationBuilders.range("correlation_range").field("latency");
-            double percentile_0 = percentiles.percentile(PERCENTILE_STEPS[0]);
+                        GroupedActionListener<Map<String, Object>> groupedActionListener = new GroupedActionListener<>(
+                            ActionListener.wrap(
+                                results -> responseActionListener.onResponse(new Response(results)),
+                                responseActionListener::onFailure
+                            ),
+                            investigationConfig.getTerms().size()
+                        );
+
+                        for (String term : investigationConfig.getTerms()) {
+                            TermCorrelator termCorrelator = new TermCorrelator(term,
+                                val.v2(),
+                                val.v1(),
+                                client,
+                                investigationConfig.getSourceConfig()
+                            );
+                            termCorrelator.correlation(groupedActionListener);
+                        }
+                    },
+                    responseActionListener::onFailure
+                ));
+        }
+    }
+
+    static class TermCorrelator {
+
+        static Tuple<AggregationBuilder, double[]> buildRangeAggAndSetExpectations(Percentiles percentiles,
+                                                                                   double[] steps,
+                                                                                   String indicatorFieldName) {
+            double[] expectations = new double[steps.length + 1];
+            RangeAggregationBuilder builder = AggregationBuilders.range("correlation_range").field(indicatorFieldName);
+            double percentile_0 = percentiles.percentile(steps[0]);
             builder.addUnboundedTo(percentile_0);
             expectations[0] = percentile_0;
-            for (int i = 1; i < PERCENTILE_STEPS.length; i++) {
-                double percentile_l = percentiles.percentile(PERCENTILE_STEPS[i - 1]);
-                double percentile_r = percentiles.percentile(PERCENTILE_STEPS[i]);
+            for (int i = 1; i < steps.length; i++) {
+                double percentile_l = percentiles.percentile(steps[i - 1]);
+                double percentile_r = percentiles.percentile(steps[i]);
                 builder.addRange(percentile_l, percentile_r);
                 expectations[i] = 0.5 * (percentile_l + percentile_r);
             }
-            double percentile_n = percentiles.percentile(PERCENTILE_STEPS[PERCENTILE_STEPS.length - 1]);
+            double percentile_n = percentiles.percentile(steps[steps.length - 1]);
             builder.addUnboundedFrom(percentile_n);
-            expectations[PERCENTILE_STEPS.length] = percentile_n;
-            return builder;
+            expectations[steps.length] = percentile_n;
+            return Tuple.tuple(builder, expectations);
+        }
+
+        private Map<String, Object> results = new ConcurrentHashMap<>();
+        private double[] expectations;
+        private final String termField;
+        private final CompositeAggregationBuilder aggregationBuilder;
+        private final Client client;
+        private final InvestigationSource source;
+        TermCorrelator(String termField,
+                       double[] expectations,
+                       AggregationBuilder rangeAgg,
+                       OriginSettingClient client,
+                       InvestigationSource source) {
+            this.termField = termField;
+            this.expectations = expectations;
+            this.aggregationBuilder = AggregationBuilders.composite(
+                "composite_" + termField,
+                List.of(new TermsValuesSourceBuilder(termField).field(termField)))
+                .size(100)
+                .subAggregation(rangeAgg);
+            this.client = client;
+            this.source = source;
+        }
+
+        void correlation(ActionListener<Map<String, Object>> listener) {
+            client.prepareSearch(source.getIndex())
+                .setSize(0)
+                .setQuery(source.getQuery())
+                .addAggregation(aggregationBuilder)
+                .execute(ActionListener.wrap(
+                    response -> {
+                        if (response.getAggregations() == null) {
+                            listener.onResponse(results);
+                            return;
+                        }
+                        CompositeAggregation aggregation = response.getAggregations().get("composite_" + termField);
+                        if (aggregation == null || aggregation.getBuckets().isEmpty()) {
+                            listener.onResponse(results);
+                            return;
+                        }
+                        this.aggregationBuilder.aggregateAfter(aggregation.afterKey());
+                        aggregation.getBuckets().forEach(this::handleBucket);
+                        correlation(listener);
+                    },
+                    listener::onFailure
+                ));
         }
 
         void handleBucket(CompositeAggregation.Bucket bucket) {
             String term = bucket.getKey().get(termField).toString();
             Range termRanges = bucket.getAggregations().get("correlation_range");
             final int l = termRanges.getBuckets().size();
-            final int a = (int) (l / 5.0 + 0.5);
-            final int b = (int) (4.0 * l / 5.0 + 0.5);
-            long[] x_b = LongStream.range(0, a)
-                .map(i -> termRanges.getBuckets().get((int)i).getDocCount())
-                .toArray();
-            long[] x_a = LongStream.range(a, l)
-                .map(i -> termRanges.getBuckets().get((int)i).getDocCount())
-                .toArray();
             double[] counts = termRanges.getBuckets()
                 .stream()
                 .mapToLong(MultiBucketsAggregation.Bucket::getDocCount)
@@ -162,7 +211,7 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
                 .toArray();
             PearsonsCorrelation pearsonsCorrelation = new PearsonsCorrelation();
             double corr = pearsonsCorrelation.correlation(expectations, counts);
-            results.add(Collections.singletonMap(term, corr));
+            results.put(term, corr);
         }
 
     }
