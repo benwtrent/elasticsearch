@@ -15,6 +15,7 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.xpack.core.ml.investigation.InvestigationConfig;
 
 import java.io.IOException;
 import java.util.List;
@@ -31,9 +32,30 @@ public class StartInvestigationAction extends ActionType<StartInvestigationActio
     }
 
     public static class Request extends ActionRequest {
+
+        private final InvestigationConfig config;
+        public Request(InvestigationConfig config) {
+            this.config = config;
+        }
+
+        public Request(StreamInput in) throws IOException {
+            super(in);
+            this.config = new InvestigationConfig(in);
+        }
+
+        public InvestigationConfig getConfig() {
+            return config;
+        }
+
         @Override
         public ActionRequestValidationException validate() {
             return null;
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            super.writeTo(out);
+            this.config.writeTo(out);
         }
     }
 
