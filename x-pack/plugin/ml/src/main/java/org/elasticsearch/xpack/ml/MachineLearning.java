@@ -248,6 +248,8 @@ import org.elasticsearch.xpack.ml.action.TransportUpdateProcessAction;
 import org.elasticsearch.xpack.ml.action.TransportUpgradeJobModelSnapshotAction;
 import org.elasticsearch.xpack.ml.action.TransportValidateDetectorAction;
 import org.elasticsearch.xpack.ml.action.TransportValidateJobConfigAction;
+import org.elasticsearch.xpack.ml.aggs.categorization.CategorizeTextAggregationBuilder;
+import org.elasticsearch.xpack.ml.aggs.categorization.InternalCategorizationAggregation;
 import org.elasticsearch.xpack.ml.aggs.correlation.BucketCorrelationAggregationBuilder;
 import org.elasticsearch.xpack.ml.aggs.correlation.CorrelationNamedContentProvider;
 import org.elasticsearch.xpack.ml.aggs.kstest.BucketCountKSTestAggregationBuilder;
@@ -1146,6 +1148,18 @@ public class MachineLearning extends Plugin implements SystemIndexPlugin,
             InferencePipelineAggregationBuilder.buildSpec(modelLoadingService, getLicenseState()),
             BucketCorrelationAggregationBuilder.buildSpec(),
             BucketCountKSTestAggregationBuilder.buildSpec()
+        );
+    }
+
+    @Override
+    public List<AggregationSpec> getAggregations() {
+        return Arrays.asList(
+            new AggregationSpec(
+                CategorizeTextAggregationBuilder.NAME,
+                CategorizeTextAggregationBuilder::new,
+                CategorizeTextAggregationBuilder.PARSER
+            ).addResultReader(InternalCategorizationAggregation::new)
+            .setAggregatorRegistrar(s -> s.registerUsage(CategorizeTextAggregationBuilder.NAME))
         );
     }
 
