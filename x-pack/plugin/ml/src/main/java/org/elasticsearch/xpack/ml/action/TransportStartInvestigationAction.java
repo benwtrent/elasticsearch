@@ -6,14 +6,15 @@
  */
 package org.elasticsearch.xpack.ml.action;
 
+import org.apache.commons.math3.analysis.UnivariateFunction;
 import org.apache.commons.math3.analysis.interpolation.SplineInterpolator;
 import org.apache.commons.math3.analysis.polynomials.PolynomialSplineFunction;
+import org.apache.commons.math3.analysis.solvers.BrentSolver;
 import org.apache.commons.math3.stat.correlation.PearsonsCorrelation;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.GroupedActionListener;
 import org.elasticsearch.action.support.HandledTransportAction;
-import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.OriginSettingClient;
 import org.elasticsearch.common.inject.Inject;
@@ -23,7 +24,6 @@ import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilders;
-import org.elasticsearch.search.aggregations.bucket.MultiBucketsAggregation;
 import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregation;
 import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.composite.TermsValuesSourceBuilder;
@@ -115,6 +115,7 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
                             PERCENTILE_STEPS,
                             investigationConfig.getKeyIndicator()
                         );
+                        final long totalHits = searchResponse.getHits().getTotalHits().value;
 
                         GroupedActionListener<Map<String, Object>> groupedActionListener = new GroupedActionListener<>(
                             ActionListener.wrap(
@@ -126,8 +127,8 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
 
                         for (String term : investigationConfig.getTerms()) {
                             TermCorrelator termCorrelator = new TermCorrelator(term,
-                                val.v2(),
-                                val.v1(),
+                                val,
+                                totalHits,
                                 client,
                                 investigationConfig.getSourceConfig()
                             );
@@ -148,10 +149,14 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
     static class CorrelationResult implements ToXContentObject {
         private final String value;
         private final double correlation;
+        private final double meanInfluence;
+        private final double percentileInfluence;
 
-        CorrelationResult(String value, double correlation) {
+        CorrelationResult(String value, double correlation, double meanInfluence, double percentileInfluence) {
             this.value = value;
             this.correlation = correlation;
+            this.meanInfluence = meanInfluence;
+            this.percentileInfluence = percentileInfluence;
         }
 
         @Override
@@ -159,6 +164,8 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
             return builder.startObject()
                 .field("value", value)
                 .field("correlation", correlation)
+                .field("mean_influence", meanInfluence)
+                .field("75_percentile_influence", percentileInfluence)
                 .endObject();
         }
 
@@ -174,12 +181,14 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
     static class Statistics {
         final AggregationBuilder rangeAgg;
         final double[] expectations;
+        final double mean;
         final PolynomialSplineFunction univariateSpline;
 
-        Statistics(AggregationBuilder rangeAgg, double[] expectations, PolynomialSplineFunction univariateSpline) {
+        Statistics(AggregationBuilder rangeAgg, double[] expectations, PolynomialSplineFunction univariateSpline, double mean) {
             this.rangeAgg = rangeAgg;
             this.expectations = expectations;
             this.univariateSpline = univariateSpline;
+            this.mean = mean;
         }
     }
 
@@ -212,6 +221,7 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
             double[] expectations = new double[percentiles.size() + 1];
             expectations[0] = percentile_0;
             cumSumFactions[0] = fractions.get(0);
+            double mean = percentile_0 * fractions.get(0);
             for (int i = 1; i < percentiles.size(); i++) {
                 double percentile_l = percentiles.get(i - 1);
                 double percentile_r = percentiles.get(i);
@@ -220,37 +230,42 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
                 cumSumFactions[i] = cumSumFactions[i - 1] + fractions_r;
                 builder.addRange(percentile_l, percentile_r);
                 expectations[i] = (fractions_l * percentile_l + fractions_r * percentile_r) / (fractions_l + fractions_r);
+                mean += expectations[i] * fractions_r;
             }
             cumSumFactions[fractions.size() - 1] = cumSumFactions[fractions.size() - 2] + fractions.get(fractions.size() - 1);
             double percentile_n = percentiles.get(percentiles.size() - 1);
             builder.addUnboundedFrom(percentile_n);
             expectations[percentiles.size()] = percentile_n;
-            return new Statistics(builder, expectations, new SplineInterpolator().interpolate(expectations, cumSumFactions));
+            mean += expectations[percentiles.size()] * fractions.get(percentiles.size());
+            return new Statistics(builder, expectations, new SplineInterpolator().interpolate(expectations, cumSumFactions), mean);
         }
 
         private List<CorrelationResult> results = new ArrayList<>();
         private double[] expectations;
         private final String termField;
         private final PolynomialSplineFunction function;
+        private final double mean;
+        private final long totalHits;
         private final CompositeAggregationBuilder aggregationBuilder;
         private final Client client;
         private final InvestigationSource source;
         TermCorrelator(String termField,
-                       double[] expectations,
-                       AggregationBuilder rangeAgg,
-                       PolynomialSplineFunction function,
+                       Statistics statistics,
+                       long totalHits,
                        OriginSettingClient client,
                        InvestigationSource source) {
             this.termField = termField;
-            this.expectations = expectations;
+            this.expectations = statistics.expectations;
             this.aggregationBuilder = AggregationBuilders.composite(
                 "composite_" + termField,
                 List.of(new TermsValuesSourceBuilder(termField).field(termField)))
                 .size(100)
-                .subAggregation(rangeAgg);
+                .subAggregation(statistics.rangeAgg);
             this.client = client;
             this.source = source;
-            this.function = function;
+            this.function = statistics.univariateSpline;
+            this.mean = statistics.mean;
+            this.totalHits = totalHits;
         }
 
         void correlation(ActionListener<List<CorrelationResult>> listener) {
@@ -280,15 +295,41 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
         void handleBucket(CompositeAggregation.Bucket bucket) {
             String term = bucket.getKey().get(termField).toString();
             Range termRanges = bucket.getAggregations().get("correlation_range");
-            final int l = termRanges.getBuckets().size();
-            double[] counts = termRanges.getBuckets()
-                .stream()
-                .mapToLong(MultiBucketsAggregation.Bucket::getDocCount)
-                .mapToDouble(Double::valueOf)
-                .toArray();
+            double[] counts = new double[termRanges.getBuckets().size()];
+            double browserCount = 0;
+            double meanBrowser = 0;
+            int i = 0;
+            for (Range.Bucket rangeBucket : termRanges.getBuckets()) {
+                meanBrowser += rangeBucket.getDocCount() * expectations[i];
+                browserCount += rangeBucket.getDocCount();
+                counts[i++] = rangeBucket.getDocCount();
+            }
+            double weight = browserCount / totalHits;
+            double[] fractionsBrowserCumulativeSum = new double[counts.length];
+            fractionsBrowserCumulativeSum[0] = counts[0]/browserCount;
+            for (int j = 1; j < counts.length; j++) {
+                fractionsBrowserCumulativeSum[j] = fractionsBrowserCumulativeSum[j - 1] + counts[j] / browserCount;
+            }
             PearsonsCorrelation pearsonsCorrelation = new PearsonsCorrelation();
             double corr = pearsonsCorrelation.correlation(expectations, counts);
-            results.add(new CorrelationResult(term, corr));
+
+            PolynomialSplineFunction f_b = new SplineInterpolator().interpolate(expectations, fractionsBrowserCumulativeSum);
+
+            UnivariateFunction cdf_75 = (x) -> (function.value(x) + f_b.value(x)) - 0.75;
+            UnivariateFunction cdf_75_eps = (x) -> (1 - 0.01 * weight) * function.value(x) + weight * f_b.value(x);
+            BrentSolver solver = new BrentSolver();
+            double a = solver.solve(10_000,
+                cdf_75,
+                expectations[0],
+                expectations[expectations.length - 1]
+            );
+            double b = solver.solve(10_000,
+                cdf_75_eps,
+                expectations[0],
+                expectations[expectations.length - 1]
+            );
+
+            results.add(new CorrelationResult(term, corr, weight * (meanBrowser - mean), (b - a)/0.01));
         }
 
     }
