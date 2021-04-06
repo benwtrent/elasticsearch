@@ -6,14 +6,16 @@
  */
 package org.elasticsearch.xpack.ml.action;
 
+import org.apache.commons.math3.analysis.interpolation.SplineInterpolator;
+import org.apache.commons.math3.analysis.polynomials.PolynomialSplineFunction;
 import org.apache.commons.math3.stat.correlation.PearsonsCorrelation;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.GroupedActionListener;
 import org.elasticsearch.action.support.HandledTransportAction;
+import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.OriginSettingClient;
-import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
@@ -169,37 +171,74 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
         }
     }
 
+    static class Statistics {
+        final AggregationBuilder rangeAgg;
+        final double[] expectations;
+        final PolynomialSplineFunction univariateSpline;
+
+        Statistics(AggregationBuilder rangeAgg, double[] expectations, PolynomialSplineFunction univariateSpline) {
+            this.rangeAgg = rangeAgg;
+            this.expectations = expectations;
+            this.univariateSpline = univariateSpline;
+        }
+    }
+
     static class TermCorrelator {
 
-        static Tuple<AggregationBuilder, double[]> buildRangeAggAndSetExpectations(Percentiles percentiles,
-                                                                                   double[] steps,
-                                                                                   String indicatorFieldName) {
-            double[] expectations = new double[steps.length + 1];
+        static Statistics buildRangeAggAndSetExpectations(Percentiles raw_percentiles,
+                                                          double[] steps,
+                                                          String indicatorFieldName) {
+            List<Double> percentiles = new ArrayList<>();
+            List<Double> fractions = new ArrayList<>();
             RangeAggregationBuilder builder = AggregationBuilders.range("correlation_range").field(indicatorFieldName);
-            double percentile_0 = percentiles.percentile(steps[0]);
+            double percentile_0 = raw_percentiles.percentile(steps[0]);
             builder.addUnboundedTo(percentile_0);
-            expectations[0] = percentile_0;
+            fractions.add(2.0/100);
+            percentiles.add(percentile_0);
+            int last_added = 0;
             for (int i = 1; i < steps.length; i++) {
-                double percentile_l = percentiles.percentile(steps[i - 1]);
-                double percentile_r = percentiles.percentile(steps[i]);
-                builder.addRange(percentile_l, percentile_r);
-                expectations[i] = 0.5 * (percentile_l + percentile_r);
+                double percentile_l = raw_percentiles.percentile(steps[i - 1]);
+                double percentile_r = raw_percentiles.percentile(steps[i]);
+                if (Double.compare(percentile_l, percentile_r) == 0) {
+                    fractions.set(last_added, fractions.get(last_added) + 2.0/100);
+                } else {
+                    last_added = i;
+                    fractions.add(2.0/100);
+                    percentiles.add(percentile_r);
+                }
             }
-            double percentile_n = percentiles.percentile(steps[steps.length - 1]);
+            fractions.add(2.0/100);
+            double[] cumSumFactions = new double[fractions.size()];
+            double[] expectations = new double[percentiles.size() + 1];
+            expectations[0] = percentile_0;
+            cumSumFactions[0] = fractions.get(0);
+            for (int i = 1; i < percentiles.size(); i++) {
+                double percentile_l = percentiles.get(i - 1);
+                double percentile_r = percentiles.get(i);
+                double fractions_l = fractions.get(i - 1);
+                double fractions_r = fractions.get(i);
+                cumSumFactions[i] = cumSumFactions[i - 1] + fractions_r;
+                builder.addRange(percentile_l, percentile_r);
+                expectations[i] = (fractions_l * percentile_l + fractions_r * percentile_r) / (fractions_l + fractions_r);
+            }
+            cumSumFactions[fractions.size() - 1] = cumSumFactions[fractions.size() - 2] + fractions.get(fractions.size() - 1);
+            double percentile_n = percentiles.get(percentiles.size() - 1);
             builder.addUnboundedFrom(percentile_n);
-            expectations[steps.length] = percentile_n;
-            return Tuple.tuple(builder, expectations);
+            expectations[percentiles.size()] = percentile_n;
+            return new Statistics(builder, expectations, new SplineInterpolator().interpolate(expectations, cumSumFactions));
         }
 
         private List<CorrelationResult> results = new ArrayList<>();
         private double[] expectations;
         private final String termField;
+        private final PolynomialSplineFunction function;
         private final CompositeAggregationBuilder aggregationBuilder;
         private final Client client;
         private final InvestigationSource source;
         TermCorrelator(String termField,
                        double[] expectations,
                        AggregationBuilder rangeAgg,
+                       PolynomialSplineFunction function,
                        OriginSettingClient client,
                        InvestigationSource source) {
             this.termField = termField;
@@ -211,6 +250,7 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
                 .subAggregation(rangeAgg);
             this.client = client;
             this.source = source;
+            this.function = function;
         }
 
         void correlation(ActionListener<List<CorrelationResult>> listener) {
