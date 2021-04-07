@@ -11,6 +11,8 @@ import org.apache.commons.math3.analysis.interpolation.SplineInterpolator;
 import org.apache.commons.math3.analysis.polynomials.PolynomialSplineFunction;
 import org.apache.commons.math3.analysis.solvers.BrentSolver;
 import org.apache.commons.math3.stat.correlation.PearsonsCorrelation;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.GroupedActionListener;
@@ -22,6 +24,7 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.AggregationBuilders;
 import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregation;
@@ -54,6 +57,9 @@ import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
 
 
 public class TransportStartInvestigationAction extends HandledTransportAction<Request, Response> {
+
+    private static final Logger logger = LogManager.getLogger(TransportStartInvestigationAction.class);
+
 
     private final ThreadPool threadPool;
     private final Client client;
@@ -106,7 +112,7 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
                     )
                     .size(0)
                     .trackTotalHits(true)
-                    .query(investigationConfig.getSourceConfig().getQuery())
+                    .query(QueryBuilders.boolQuery().filter(QueryBuilders.existsQuery("browser")).filter(investigationConfig.getSourceConfig().getQuery()))
                 )
                 .execute(ActionListener.wrap(
                     searchResponse -> {
@@ -202,17 +208,17 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
             RangeAggregationBuilder builder = AggregationBuilders.range("correlation_range").field(indicatorFieldName);
             double percentile_0 = raw_percentiles.percentile(steps[0]);
             builder.addUnboundedTo(percentile_0);
-            fractions.add(2.0/100);
+            fractions.add(0.02);
             percentiles.add(percentile_0);
             int last_added = 0;
             for (int i = 1; i < steps.length; i++) {
                 double percentile_l = raw_percentiles.percentile(steps[i - 1]);
                 double percentile_r = raw_percentiles.percentile(steps[i]);
                 if (Double.compare(percentile_l, percentile_r) == 0) {
-                    fractions.set(last_added, fractions.get(last_added) + 2.0/100);
+                    fractions.set(last_added, fractions.get(last_added) + 0.02);
                 } else {
                     last_added = i;
-                    fractions.add(2.0/100);
+                    fractions.add(0.02);
                     percentiles.add(percentile_r);
                 }
             }
@@ -237,6 +243,7 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
             builder.addUnboundedFrom(percentile_n);
             expectations[percentiles.size()] = percentile_n;
             mean += expectations[percentiles.size()] * fractions.get(percentiles.size());
+            logger.info("Stats objects [{}] [{}] [{}]", expectations, mean, cumSumFactions);
             return new Statistics(builder, expectations, new SplineInterpolator().interpolate(expectations, cumSumFactions), mean);
         }
 
@@ -304,6 +311,7 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
                 browserCount += rangeBucket.getDocCount();
                 counts[i++] = rangeBucket.getDocCount();
             }
+            meanBrowser /= browserCount;
             double weight = browserCount / totalHits;
             double[] fractionsBrowserCumulativeSum = new double[counts.length];
             fractionsBrowserCumulativeSum[0] = counts[0]/browserCount;
@@ -313,10 +321,20 @@ public class TransportStartInvestigationAction extends HandledTransportAction<Re
             PearsonsCorrelation pearsonsCorrelation = new PearsonsCorrelation();
             double corr = pearsonsCorrelation.correlation(expectations, counts);
 
+            logger.info("Browser Stats objects [{}] [{}] [{}] [{}]", term, meanBrowser, weight, fractionsBrowserCumulativeSum);
             PolynomialSplineFunction f_b = new SplineInterpolator().interpolate(expectations, fractionsBrowserCumulativeSum);
 
-            UnivariateFunction cdf_75 = (x) -> (function.value(x) + f_b.value(x)) - 0.75;
-            UnivariateFunction cdf_75_eps = (x) -> (1 - 0.01 * weight) * function.value(x) + weight * f_b.value(x);
+            UnivariateFunction cdf_75 = (x) -> (function.value(x)) - 0.75;
+            UnivariateFunction cdf_75_eps = (x) -> ((1 - 0.01 * weight) * function.value(x) + weight * f_b.value(x)) - 0.75;
+            logger.info("cdf_75 {} {} {} {} {} {}",
+                cdf_75.value(expectations[0]),
+                cdf_75.value(expectations[expectations.length - 1]),
+                function.value(expectations[0]),
+                function.value(expectations[expectations.length - 1]),
+                f_b.value(expectations[0]),
+                f_b.value(expectations[expectations.length - 1])
+                );
+            logger.info("cdf_75_eps {} {}", cdf_75_eps.value(expectations[0]), cdf_75_eps.value(expectations[expectations.length - 1]));
             BrentSolver solver = new BrentSolver();
             double a = solver.solve(10_000,
                 cdf_75,
