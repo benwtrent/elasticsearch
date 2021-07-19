@@ -29,7 +29,7 @@ import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
-public class StartTrainedModelDeploymentAction extends ActionType<NodeAcknowledgedResponse> {
+public class StartTrainedModelDeploymentAction extends ActionType<CreateTrainedModelAllocationAction.Response> {
 
     public static final StartTrainedModelDeploymentAction INSTANCE = new StartTrainedModelDeploymentAction();
     public static final String NAME = "cluster:admin/xpack/ml/trained_models/deployment/start";
@@ -37,7 +37,7 @@ public class StartTrainedModelDeploymentAction extends ActionType<NodeAcknowledg
     public static final TimeValue DEFAULT_TIMEOUT = new TimeValue(20, TimeUnit.SECONDS);
 
     public StartTrainedModelDeploymentAction() {
-        super(NAME, NodeAcknowledgedResponse::new);
+        super(NAME, CreateTrainedModelAllocationAction.Response::new);
     }
 
     public static class Request extends MasterNodeRequest<Request> implements ToXContentObject {

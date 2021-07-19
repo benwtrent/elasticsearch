@@ -911,12 +911,7 @@ public class MachineLearning extends Plugin implements SystemIndexPlugin,
                     autodetectProcessManager.get(),
                     memoryTracker.get(),
                     expressionResolver,
-                    client),
-                new TransportStartTrainedModelDeploymentAction.TaskExecutor(settings,
-                    clusterService,
-                    expressionResolver,
-                    memoryTracker.get(),
-                    deploymentManager.get())
+                    client)
         );
     }
 
