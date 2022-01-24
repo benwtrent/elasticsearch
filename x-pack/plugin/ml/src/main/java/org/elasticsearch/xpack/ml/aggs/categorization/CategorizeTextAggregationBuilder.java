@@ -107,6 +107,11 @@ public class CategorizeTextAggregationBuilder extends AbstractAggregationBuilder
         return this;
     }
 
+    @Override
+    public boolean supportsSampling() {
+        return true;
+    }
+
     public CategorizeTextAggregationBuilder(StreamInput in) throws IOException {
         super(in);
         this.bucketCountThresholds = new TermsAggregator.BucketCountThresholds(in);

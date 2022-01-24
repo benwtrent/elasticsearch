@@ -10,6 +10,8 @@ package org.elasticsearch.search.aggregations.support;
 
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.elasticsearch.common.breaker.CircuitBreaker;
@@ -35,6 +37,7 @@ import org.elasticsearch.script.ScriptContext;
 import org.elasticsearch.search.aggregations.Aggregator;
 import org.elasticsearch.search.aggregations.MultiBucketConsumerService.MultiBucketConsumer;
 import org.elasticsearch.search.aggregations.bucket.filter.FilterByFilterAggregator;
+import org.elasticsearch.search.aggregations.bucket.sampler.random.RandomSamplingQuery;
 import org.elasticsearch.search.internal.SubSearchContext;
 import org.elasticsearch.search.lookup.SearchLookup;
 import org.elasticsearch.search.profile.aggregation.AggregationProfiler;
@@ -194,6 +197,24 @@ public abstract class AggregationContext implements Releasable {
      * you must provide it to this method.
      */
     public abstract Query filterQuery(Query query);
+
+    /**
+     * Build the given query, but additionally sampled given the current SamplingContext.
+     * @param builder The query to build
+     * @param samplingContext The sampling context to apply, can be null
+     * @return A new query taking into account the sampling context
+     * @throws IOException When building fails
+     */
+    public abstract Query buildQueryWithSampler(QueryBuilder builder, @Nullable SamplingContext samplingContext) throws IOException;
+
+    /**
+     * @param samplingContext The sampling context to apply, can be null
+     * @return a random sampling query if the sampling context requires
+     * @throws IOException when build fails
+     */
+    public Optional<Query> buildSamplingQueryIfNecessary(SamplingContext samplingContext) throws IOException {
+        return Optional.empty();
+    }
 
     /**
      * The settings for the index against which this search is running.
@@ -461,6 +482,29 @@ public abstract class AggregationContext implements Releasable {
         @Override
         public Query filterQuery(Query query) {
             return filterQuery.apply(query);
+        }
+
+        @Override
+        public Query buildQueryWithSampler(QueryBuilder builder, SamplingContext samplingContext) throws IOException {
+            Query rewritten = Rewriteable.rewrite(builder, context, true).toQuery(context);
+            if (samplingContext == null || samplingContext.isSampled() == false) {
+                return rewritten;
+            }
+            BooleanQuery.Builder queryBuilder = new BooleanQuery.Builder();
+            queryBuilder.add(rewritten, BooleanClause.Occur.FILTER);
+            queryBuilder.add(
+                new RandomSamplingQuery(samplingContext.probability(), samplingContext.seed(), shardRandomSeed()),
+                BooleanClause.Occur.FILTER
+            );
+            return queryBuilder.build();
+        }
+
+        @Override
+        public Optional<Query> buildSamplingQueryIfNecessary(SamplingContext samplingContext) throws IOException {
+            if (samplingContext == null || samplingContext.isSampled() == false) {
+                return Optional.empty();
+            }
+            return Optional.of(new RandomSamplingQuery(samplingContext.probability(), samplingContext.seed(), shardRandomSeed()));
         }
 
         @Override

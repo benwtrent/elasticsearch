@@ -78,6 +78,11 @@ public class RangeAggregationBuilder extends AbstractRangeBuilder<RangeAggregati
         return new RangeAggregationBuilder(this, factoriesBuilder, metadata);
     }
 
+    @Override
+    public boolean supportsSampling() {
+        return true;
+    }
+
     /**
      * Add a new range to this aggregation.
      *

@@ -32,6 +32,7 @@ import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.search.aggregations.CardinalityUpperBound;
 import org.elasticsearch.search.aggregations.bucket.terms.heuristic.SignificanceHeuristic;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 
 import java.io.IOException;
 
@@ -54,25 +55,35 @@ class SignificanceLookup {
     }
 
     private final AggregationContext context;
+    private final SamplingContext samplingContext;
     private final MappedFieldType fieldType;
     private final DocValueFormat format;
     private final Query backgroundFilter;
     private final int supersetNumDocs;
     private TermsEnum termsEnum;
 
-    SignificanceLookup(AggregationContext context, MappedFieldType fieldType, DocValueFormat format, QueryBuilder backgroundFilter)
-        throws IOException {
+    SignificanceLookup(
+        AggregationContext context,
+        SamplingContext samplingContext,
+        MappedFieldType fieldType,
+        DocValueFormat format,
+        QueryBuilder backgroundFilter
+    ) throws IOException {
         this.context = context;
         this.fieldType = fieldType;
         this.format = format;
-        this.backgroundFilter = backgroundFilter == null ? null : context.buildQuery(backgroundFilter);
+        this.backgroundFilter = backgroundFilter == null
+            ? context.buildSamplingQueryIfNecessary(samplingContext).orElse(null)
+            : context.buildQueryWithSampler(backgroundFilter, samplingContext);
         /*
          * We need to use a superset size that includes deleted docs or we
          * could end up blowing up with bad statistics that cause us to blow
          * up later on.
          */
         IndexSearcher searcher = context.searcher();
-        supersetNumDocs = backgroundFilter == null ? searcher.getIndexReader().maxDoc() : searcher.count(this.backgroundFilter);
+        // TODO can we cheat the random sampler and take a fraction of the max doc?
+        supersetNumDocs = this.backgroundFilter == null ? searcher.getIndexReader().maxDoc() : searcher.count(this.backgroundFilter);
+        this.samplingContext = samplingContext;
     }
 
     /**
@@ -134,7 +145,9 @@ class SignificanceLookup {
      * Get the background frequency of a {@link BytesRef} term.
      */
     private long getBackgroundFrequency(BytesRef term) throws IOException {
-        return getBackgroundFrequency(context.buildQuery(new TermQueryBuilder(fieldType.name(), format.format(term).toString())));
+        return getBackgroundFrequency(
+            context.buildQueryWithSampler(new TermQueryBuilder(fieldType.name(), format.format(term).toString()), samplingContext)
+        );
     }
 
     /**
@@ -189,10 +202,13 @@ class SignificanceLookup {
      * Get the background frequency of a {@code long} term.
      */
     private long getBackgroundFrequency(long term) throws IOException {
-        return getBackgroundFrequency(context.buildQuery(new TermQueryBuilder(fieldType.name(), format.format(term).toString())));
+        return getBackgroundFrequency(
+            context.buildQueryWithSampler(new TermQueryBuilder(fieldType.name(), format.format(term).toString()), samplingContext)
+        );
     }
 
     private long getBackgroundFrequency(Query query) throws IOException {
+        // TODO can we optimize with the sampling here and take a faction of the doc freq?
         if (query instanceof TermQuery) {
             // for types that use the inverted index, we prefer using a terms
             // enum that will do a better job at reusing index inputs

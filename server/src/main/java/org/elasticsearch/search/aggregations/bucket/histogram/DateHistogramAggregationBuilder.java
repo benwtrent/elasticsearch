@@ -146,6 +146,11 @@ public class DateHistogramAggregationBuilder extends ValuesSourceAggregationBuil
         return new DateHistogramAggregationBuilder(this, factoriesBuilder, metadata);
     }
 
+    @Override
+    public boolean supportsSampling() {
+        return true;
+    }
+
     /** Read from a stream, for internal use only. */
     public DateHistogramAggregationBuilder(StreamInput in) throws IOException {
         super(in);

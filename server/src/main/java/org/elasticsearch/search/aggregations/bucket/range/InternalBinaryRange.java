@@ -17,6 +17,8 @@ import org.elasticsearch.search.aggregations.Aggregations;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.InternalAggregations;
 import org.elasticsearch.search.aggregations.InternalMultiBucketAggregation;
+import org.elasticsearch.search.aggregations.support.LongToLongFunction;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
@@ -25,6 +27,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static java.util.Collections.unmodifiableList;
@@ -225,6 +228,34 @@ public final class InternalBinaryRange extends InternalMultiBucketAggregation<In
 
     @Override
     public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
+        return innerReduce(
+            aggregations,
+            reduceContext,
+            internalAggregations -> InternalAggregations.reduce(internalAggregations, reduceContext),
+            l -> l
+        );
+    }
+
+    @Override
+    public InternalAggregation reduceSampled(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        SamplingContext samplingContext
+    ) {
+        return innerReduce(
+            aggregations,
+            reduceContext,
+            internalAggregations -> InternalAggregations.reduceSampled(internalAggregations, reduceContext, samplingContext),
+            reduceContext.isFinalReduce() ? samplingContext::inverseScale : l -> l
+        );
+    }
+
+    private InternalAggregation innerReduce(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        Function<List<InternalAggregations>, InternalAggregations> aggReducer,
+        LongToLongFunction countScaler
+    ) {
         reduceContext.consumeBucketsAndMaybeBreak(buckets.size());
         long[] docCounts = new long[buckets.size()];
         InternalAggregations[][] aggs = new InternalAggregations[buckets.size()][];
@@ -245,17 +276,8 @@ public final class InternalBinaryRange extends InternalMultiBucketAggregation<In
         List<Bucket> buckets = new ArrayList<>(this.buckets.size());
         for (int i = 0; i < this.buckets.size(); ++i) {
             Bucket b = this.buckets.get(i);
-            buckets.add(
-                new Bucket(
-                    format,
-                    keyed,
-                    b.key,
-                    b.from,
-                    b.to,
-                    docCounts[i],
-                    InternalAggregations.reduce(Arrays.asList(aggs[i]), reduceContext)
-                )
-            );
+            long docCount = countScaler.apply(docCounts[i]);
+            buckets.add(new Bucket(format, keyed, b.key, b.from, b.to, docCount, aggReducer.apply(Arrays.asList(aggs[i]))));
         }
         return new InternalBinaryRange(name, format, keyed, buckets, metadata);
     }
@@ -266,6 +288,17 @@ public final class InternalBinaryRange extends InternalMultiBucketAggregation<In
         List<InternalAggregations> aggregationsList = buckets.stream().map(bucket -> bucket.aggregations).collect(Collectors.toList());
         final InternalAggregations aggs = InternalAggregations.reduce(aggregationsList, context);
         return createBucket(aggs, buckets.get(0));
+    }
+
+    @Override
+    protected Bucket reduceSampledBucket(List<Bucket> buckets, AggregationReduceContext context, SamplingContext samplingContext) {
+        assert buckets.size() > 0;
+        List<InternalAggregations> aggregationsList = buckets.stream().map(bucket -> bucket.aggregations).collect(Collectors.toList());
+        final InternalAggregations aggs = InternalAggregations.reduceSampled(aggregationsList, context, samplingContext);
+        Bucket prototype = buckets.get(0);
+        long docCount = prototype.docCount;
+        docCount = context.isFinalReduce() ? samplingContext.inverseScale(docCount) : docCount;
+        return createBucket(aggs, new Bucket(format, keyed, prototype.key, prototype.from, prototype.to, docCount, prototype.aggregations));
     }
 
     @Override

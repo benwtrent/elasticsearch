@@ -15,6 +15,8 @@ import org.elasticsearch.search.aggregations.AggregationReduceContext;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.InternalAggregations;
 import org.elasticsearch.search.aggregations.InternalMultiBucketAggregation;
+import org.elasticsearch.search.aggregations.support.LongToLongFunction;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
@@ -23,6 +25,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 import static java.util.Collections.unmodifiableList;
 
@@ -76,6 +80,23 @@ public abstract class InternalGeoGrid<B extends InternalGeoGridBucket> extends I
 
     @Override
     public InternalGeoGrid<B> reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
+        return innerReduce(aggregations, reduceContext, this::reduceBucket);
+    }
+
+    @Override
+    public InternalGeoGrid<B> reduceSampled(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        SamplingContext samplingContext
+    ) {
+        return innerReduce(aggregations, reduceContext, (buckets, context) -> this.reduceSampledBucket(buckets, context, samplingContext));
+    }
+
+    private InternalGeoGrid<B> innerReduce(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        BiFunction<List<InternalGeoGridBucket>, AggregationReduceContext, InternalGeoGridBucket> bucketReducer
+    ) {
         LongObjectPagedHashMap<List<InternalGeoGridBucket>> buckets = null;
         for (InternalAggregation aggregation : aggregations) {
             @SuppressWarnings("unchecked")
@@ -98,7 +119,7 @@ public abstract class InternalGeoGrid<B extends InternalGeoGridBucket> extends I
         BucketPriorityQueue<InternalGeoGridBucket> ordered = new BucketPriorityQueue<>(size);
         for (LongObjectPagedHashMap.Cursor<List<InternalGeoGridBucket>> cursor : buckets) {
             List<InternalGeoGridBucket> sameCellBuckets = cursor.value;
-            ordered.insertWithOverflow(reduceBucket(sameCellBuckets, reduceContext));
+            ordered.insertWithOverflow(bucketReducer.apply(sameCellBuckets, reduceContext));
         }
         buckets.close();
         InternalGeoGridBucket[] list = new InternalGeoGridBucket[ordered.size()];
@@ -111,6 +132,27 @@ public abstract class InternalGeoGrid<B extends InternalGeoGridBucket> extends I
 
     @Override
     protected InternalGeoGridBucket reduceBucket(List<InternalGeoGridBucket> buckets, AggregationReduceContext context) {
+        return innerReduce(buckets, aggregationsList -> InternalAggregations.reduce(aggregationsList, context), l -> l);
+    }
+
+    @Override
+    protected InternalGeoGridBucket reduceSampledBucket(
+        List<InternalGeoGridBucket> buckets,
+        AggregationReduceContext context,
+        SamplingContext samplingContext
+    ) {
+        return innerReduce(
+            buckets,
+            aggregationsList -> InternalAggregations.reduceSampled(aggregationsList, context, samplingContext),
+            context.isFinalReduce() ? samplingContext::inverseScale : l -> l
+        );
+    }
+
+    private InternalGeoGridBucket innerReduce(
+        List<InternalGeoGridBucket> buckets,
+        Function<List<InternalAggregations>, InternalAggregations> aggReducer,
+        LongToLongFunction countScaler
+    ) {
         assert buckets.size() > 0;
         List<InternalAggregations> aggregationsList = new ArrayList<>(buckets.size());
         long docCount = 0;
@@ -118,7 +160,9 @@ public abstract class InternalGeoGrid<B extends InternalGeoGridBucket> extends I
             docCount += bucket.docCount;
             aggregationsList.add(bucket.aggregations);
         }
-        final InternalAggregations aggs = InternalAggregations.reduce(aggregationsList, context);
+        docCount = countScaler.apply(docCount);
+        ;
+        final InternalAggregations aggs = aggReducer.apply(aggregationsList);
         return createBucket(buckets.get(0).hashAsLong, docCount, aggs);
     }
 

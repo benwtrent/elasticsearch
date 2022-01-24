@@ -7,6 +7,7 @@
  */
 package org.elasticsearch.search.aggregations.bucket;
 
+import org.elasticsearch.common.TriFunction;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.search.aggregations.Aggregation;
@@ -15,6 +16,7 @@ import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.InternalAggregations;
 import org.elasticsearch.search.aggregations.pipeline.PipelineAggregator.PipelineTree;
 import org.elasticsearch.search.aggregations.support.AggregationPath;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
@@ -89,8 +91,54 @@ public abstract class InternalSingleBucketAggregation extends InternalAggregatio
      */
     protected abstract InternalSingleBucketAggregation newAggregation(String name, long docCount, InternalAggregations subAggregations);
 
+    /**
+     * Create a new empty sub aggregation taking into account the sampling context. This must be a new instance on each call.
+     * @param name aggregation name
+     * @param docCount the current doc count, NOTE: This has already been scaled appropriately
+     * @param subAggregations the reduced sub aggregations
+     * @param context the sampling context
+     * @return A new instance of the sub aggregation
+     */
+    protected InternalSingleBucketAggregation newAggregationSampled(
+        String name,
+        long docCount,
+        InternalAggregations subAggregations,
+        SamplingContext context
+    ) {
+        throw new UnsupportedOperationException(getWriteableName() + " aggregation [" + name + "] does not support sampling");
+    }
+
     @Override
     public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
+        return innerReduce(
+            aggregations,
+            (name, docCount, subAggregationsList) -> newAggregation(
+                name,
+                docCount,
+                InternalAggregations.reduce(subAggregationsList, reduceContext)
+            )
+        );
+    }
+
+    @Override
+    public InternalAggregation reduceSampled(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        SamplingContext context
+    ) {
+        return innerReduce(aggregations, (name, docCount, subAggregationsList) -> {
+            final InternalAggregations aggs = InternalAggregations.reduceSampled(subAggregationsList, reduceContext, context);
+            if (reduceContext.isFinalReduce()) {
+                docCount = context.inverseScale(docCount);
+            }
+            return newAggregationSampled(name, docCount, aggs, context);
+        });
+    }
+
+    private InternalAggregation innerReduce(
+        List<InternalAggregation> aggregations,
+        TriFunction<String, Long, List<InternalAggregations>, InternalAggregation> newAgg
+    ) {
         long docCount = 0L;
         List<InternalAggregations> subAggregationsList = new ArrayList<>(aggregations.size());
         for (InternalAggregation aggregation : aggregations) {
@@ -98,12 +146,11 @@ public abstract class InternalSingleBucketAggregation extends InternalAggregatio
             docCount += ((InternalSingleBucketAggregation) aggregation).docCount;
             subAggregationsList.add(((InternalSingleBucketAggregation) aggregation).aggregations);
         }
-        final InternalAggregations aggs = InternalAggregations.reduce(subAggregationsList, reduceContext);
-        return newAggregation(getName(), docCount, aggs);
+        return newAgg.apply(getName(), docCount, subAggregationsList);
     }
 
     /**
-     * Amulti-bucket agg needs to first reduce the buckets and *their* pipelines
+     * A multi-bucket agg needs to first reduce the buckets and *their* pipelines
      * before allowing sibling pipelines to materialize.
      */
     @Override

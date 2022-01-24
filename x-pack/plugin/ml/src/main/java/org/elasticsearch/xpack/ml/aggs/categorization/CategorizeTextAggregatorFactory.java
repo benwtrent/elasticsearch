@@ -18,6 +18,7 @@ import org.elasticsearch.search.aggregations.NonCollectingAggregator;
 import org.elasticsearch.search.aggregations.bucket.BucketUtils;
 import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregator;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xpack.core.ml.job.config.CategorizationAnalyzerConfig;
 
 import java.io.IOException;
@@ -105,6 +106,9 @@ public class CategorizeTextAggregatorFactory extends AggregatorFactory {
             // TODO significant text does a 2x here, should we as well?
             thresholds.setShardSize(BucketUtils.suggestShardSideQueueSize(thresholds.getRequiredSize()));
         }
+        // We should scale the shard min doc count to account for the reduction due to sampling
+        SamplingContext samplingContext = getSamplingContext().orElse(SamplingContext.NONE);
+        thresholds.setShardMinDocCount(samplingContext.scale(bucketCountThresholds.getShardMinDocCount()));
         thresholds.ensureValidity();
 
         return new CategorizeTextAggregator(

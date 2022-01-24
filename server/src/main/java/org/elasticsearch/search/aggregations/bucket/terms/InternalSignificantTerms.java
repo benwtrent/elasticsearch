@@ -17,6 +17,8 @@ import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.InternalAggregations;
 import org.elasticsearch.search.aggregations.InternalMultiBucketAggregation;
 import org.elasticsearch.search.aggregations.bucket.terms.heuristic.SignificanceHeuristic;
+import org.elasticsearch.search.aggregations.support.LongToLongFunction;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
@@ -26,6 +28,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
  * Result of the significant terms aggregation.
@@ -197,6 +201,29 @@ public abstract class InternalSignificantTerms<A extends InternalSignificantTerm
 
     @Override
     public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
+        return innerReduce(aggregations, reduceContext, this::reduceBucket, l -> l);
+    }
+
+    @Override
+    public InternalAggregation reduceSampled(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        SamplingContext samplingContext
+    ) {
+        return innerReduce(
+            aggregations,
+            reduceContext,
+            (b, context) -> this.reduceSampledBucket(b, context, samplingContext),
+            reduceContext.isFinalReduce() ? samplingContext::inverseScale : l -> l
+        );
+    }
+
+    private InternalAggregation innerReduce(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        BiFunction<List<B>, AggregationReduceContext, B> bucketReducer,
+        LongToLongFunction globalSizeScaler
+    ) {
         long globalSubsetSize = 0;
         long globalSupersetSize = 0;
         // Compute the overall result set size and the corpus size using the
@@ -212,23 +239,19 @@ public abstract class InternalSignificantTerms<A extends InternalSignificantTerm
             @SuppressWarnings("unchecked")
             InternalSignificantTerms<A, B> terms = (InternalSignificantTerms<A, B>) aggregation;
             for (B bucket : terms.getBuckets()) {
-                List<B> existingBuckets = buckets.get(bucket.getKeyAsString());
-                if (existingBuckets == null) {
-                    existingBuckets = new ArrayList<>(aggregations.size());
-                    buckets.put(bucket.getKeyAsString(), existingBuckets);
-                }
                 // Adjust the buckets with the global stats representing the
                 // total size of the pots from which the stats are drawn
-                existingBuckets.add(
-                    createBucket(
-                        bucket.getSubsetDf(),
-                        globalSubsetSize,
-                        bucket.getSupersetDf(),
-                        globalSupersetSize,
-                        bucket.aggregations,
-                        bucket
-                    )
-                );
+                buckets.computeIfAbsent(bucket.getKeyAsString(), k -> new ArrayList<>(aggregations.size()))
+                    .add(
+                        createBucket(
+                            bucket.getSubsetDf(),
+                            globalSubsetSize,
+                            bucket.getSupersetDf(),
+                            globalSupersetSize,
+                            bucket.aggregations,
+                            bucket
+                        )
+                    );
             }
         }
         SignificanceHeuristic heuristic = getSignificanceHeuristic().rewrite(reduceContext);
@@ -236,7 +259,7 @@ public abstract class InternalSignificantTerms<A extends InternalSignificantTerm
         BucketSignificancePriorityQueue<B> ordered = new BucketSignificancePriorityQueue<>(size);
         for (Map.Entry<String, List<B>> entry : buckets.entrySet()) {
             List<B> sameTermBuckets = entry.getValue();
-            final B b = reduceBucket(sameTermBuckets, reduceContext);
+            final B b = bucketReducer.apply(sameTermBuckets, reduceContext);
             b.updateScore(heuristic);
             if (((b.score > 0) && (b.subsetDf >= minDocCount)) || reduceContext.isFinalReduce() == false) {
                 B removed = ordered.insertWithOverflow(b);
@@ -253,11 +276,28 @@ public abstract class InternalSignificantTerms<A extends InternalSignificantTerm
         for (int i = ordered.size() - 1; i >= 0; i--) {
             list[i] = ordered.pop();
         }
-        return create(globalSubsetSize, globalSupersetSize, Arrays.asList(list));
+        return create(globalSizeScaler.apply(globalSubsetSize), globalSizeScaler.apply(globalSupersetSize), Arrays.asList(list));
     }
 
     @Override
     protected B reduceBucket(List<B> buckets, AggregationReduceContext context) {
+        return innerReduceBucket(buckets, aggregationsList -> InternalAggregations.reduce(aggregationsList, context), l -> l);
+    }
+
+    @Override
+    protected B reduceSampledBucket(List<B> buckets, AggregationReduceContext context, SamplingContext samplingContext) {
+        return innerReduceBucket(
+            buckets,
+            aggregationsList -> InternalAggregations.reduceSampled(aggregationsList, context, samplingContext),
+            context.isFinalReduce() ? samplingContext::inverseScale : l -> l
+        );
+    }
+
+    private B innerReduceBucket(
+        List<B> buckets,
+        Function<List<InternalAggregations>, InternalAggregations> reducer,
+        LongToLongFunction countScaler
+    ) {
         assert buckets.size() > 0;
         long subsetDf = 0;
         long supersetDf = 0;
@@ -267,8 +307,14 @@ public abstract class InternalSignificantTerms<A extends InternalSignificantTerm
             supersetDf += bucket.supersetDf;
             aggregationsList.add(bucket.aggregations);
         }
-        InternalAggregations aggs = InternalAggregations.reduce(aggregationsList, context);
-        return createBucket(subsetDf, buckets.get(0).subsetSize, supersetDf, buckets.get(0).supersetSize, aggs, buckets.get(0));
+        InternalAggregations aggs = reducer.apply(aggregationsList);
+        long subsetSize = buckets.get(0).subsetSize;
+        long supersetSize = buckets.get(0).subsetSize;
+        subsetSize = countScaler.apply(subsetSize);
+        supersetSize = countScaler.apply(supersetSize);
+        subsetDf = countScaler.apply(subsetDf);
+        supersetDf = countScaler.apply(supersetDf);
+        return createBucket(subsetDf, subsetSize, supersetDf, supersetSize, aggs, buckets.get(0));
     }
 
     abstract B createBucket(

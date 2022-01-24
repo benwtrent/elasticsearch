@@ -77,7 +77,13 @@ public class TermsReduceBenchmark {
                 Integer.MAX_VALUE,
                 new NoneCircuitBreakerService().getBreaker(CircuitBreaker.REQUEST)
             );
-            return new AggregationReduceContext.ForFinal(null, null, bucketConsumer, PipelineAggregator.PipelineTree.EMPTY, task);
+            return new AggregationReduceContext.ForFinal(
+                null,
+                null,
+                bucketConsumer,
+                PipelineAggregator.PipelineTree.EMPTY,
+                task
+            );
         }
     });
 

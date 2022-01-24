@@ -15,6 +15,8 @@ import org.elasticsearch.search.aggregations.AggregationReduceContext;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.InternalAggregations;
 import org.elasticsearch.search.aggregations.InternalMultiBucketAggregation;
+import org.elasticsearch.search.aggregations.support.LongToLongFunction;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
@@ -22,6 +24,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 public class InternalFilters extends InternalMultiBucketAggregation<InternalFilters, InternalFilters.InternalBucket> implements Filters {
     public static class InternalBucket extends InternalMultiBucketAggregation.InternalBucket implements Filters.Bucket {
@@ -177,6 +181,27 @@ public class InternalFilters extends InternalMultiBucketAggregation<InternalFilt
 
     @Override
     public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
+        return innerReduce(aggregations, reduceContext, this::reduceBucket);
+    }
+
+    @Override
+    public InternalAggregation reduceSampled(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        SamplingContext samplingContext
+    ) {
+        return innerReduce(
+            aggregations,
+            reduceContext,
+            (buckets, context) -> this.reduceSampledBucket(buckets, reduceContext, samplingContext)
+        );
+    }
+
+    private InternalAggregation innerReduce(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        BiFunction<List<InternalBucket>, AggregationReduceContext, InternalBucket> bucketReducer
+    ) {
         List<List<InternalBucket>> bucketsList = null;
         for (InternalAggregation aggregation : aggregations) {
             InternalFilters filters = (InternalFilters) aggregation;
@@ -198,26 +223,44 @@ public class InternalFilters extends InternalMultiBucketAggregation<InternalFilt
         reduceContext.consumeBucketsAndMaybeBreak(bucketsList.size());
         InternalFilters reduced = new InternalFilters(name, new ArrayList<>(bucketsList.size()), keyed, getMetadata());
         for (List<InternalBucket> sameRangeList : bucketsList) {
-            reduced.buckets.add(reduceBucket(sameRangeList, reduceContext));
+            reduced.buckets.add(bucketReducer.apply(sameRangeList, reduceContext));
         }
         return reduced;
     }
 
     @Override
     protected InternalBucket reduceBucket(List<InternalBucket> buckets, AggregationReduceContext context) {
+        return innerReduceBucket(buckets, aggregationsList -> InternalAggregations.reduce(aggregationsList, context), l -> l);
+    }
+
+    @Override
+    protected InternalBucket reduceSampledBucket(
+        List<InternalBucket> buckets,
+        AggregationReduceContext context,
+        SamplingContext samplingContext
+    ) {
+        return innerReduceBucket(
+            buckets,
+            aggregationsList -> InternalAggregations.reduceSampled(aggregationsList, context, samplingContext),
+            context.isFinalReduce() ? samplingContext::inverseScale : l -> l
+        );
+    }
+
+    private InternalBucket innerReduceBucket(
+        List<InternalBucket> buckets,
+        Function<List<InternalAggregations>, InternalAggregations> aggReducer,
+        LongToLongFunction countScaler
+    ) {
         assert buckets.size() > 0;
-        InternalBucket reduced = null;
+        long docCount = 0;
         List<InternalAggregations> aggregationsList = new ArrayList<>(buckets.size());
         for (InternalBucket bucket : buckets) {
-            if (reduced == null) {
-                reduced = new InternalBucket(bucket.key, bucket.docCount, bucket.aggregations, bucket.keyed);
-            } else {
-                reduced.docCount += bucket.docCount;
-            }
+            docCount += bucket.docCount;
             aggregationsList.add(bucket.aggregations);
         }
-        reduced.aggregations = InternalAggregations.reduce(aggregationsList, context);
-        return reduced;
+        InternalAggregations aggregations = aggReducer.apply(aggregationsList);
+        return new InternalBucket(buckets.get(0).key, countScaler.apply(docCount), aggregations, buckets.get(0).keyed);
+
     }
 
     @Override

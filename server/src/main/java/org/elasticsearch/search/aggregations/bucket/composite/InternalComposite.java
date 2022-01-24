@@ -20,6 +20,8 @@ import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.InternalAggregations;
 import org.elasticsearch.search.aggregations.InternalMultiBucketAggregation;
 import org.elasticsearch.search.aggregations.KeyComparable;
+import org.elasticsearch.search.aggregations.support.LongToLongFunction;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
@@ -32,6 +34,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 public class InternalComposite extends InternalMultiBucketAggregation<InternalComposite, InternalComposite.InternalBucket>
     implements
@@ -188,6 +192,23 @@ public class InternalComposite extends InternalMultiBucketAggregation<InternalCo
 
     @Override
     public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
+        return innerReduce(aggregations, reduceContext, this::reduceBucket);
+    }
+
+    @Override
+    public InternalAggregation reduceSampled(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        SamplingContext samplingContext
+    ) {
+        return innerReduce(aggregations, reduceContext, (buckets, context) -> this.reduceSampledBucket(buckets, context, samplingContext));
+    }
+
+    private InternalAggregation innerReduce(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        BiFunction<List<InternalBucket>, AggregationReduceContext, InternalBucket> bucketReducer
+    ) {
         PriorityQueue<BucketIterator> pq = new PriorityQueue<>(aggregations.size()) {
             @Override
             protected boolean lessThan(BucketIterator a, BucketIterator b) {
@@ -225,7 +246,7 @@ public class InternalComposite extends InternalMultiBucketAggregation<InternalCo
             }
         }
         if (buckets.size() > 0) {
-            InternalBucket reduceBucket = reduceBucket(buckets, reduceContext);
+            InternalBucket reduceBucket = bucketReducer.apply(buckets, reduceContext);
             result.add(reduceBucket);
         }
 
@@ -255,6 +276,27 @@ public class InternalComposite extends InternalMultiBucketAggregation<InternalCo
 
     @Override
     protected InternalBucket reduceBucket(List<InternalBucket> buckets, AggregationReduceContext context) {
+        return innerReduceBucket(buckets, aggregations -> InternalAggregations.reduce(aggregations, context), l -> l);
+    }
+
+    @Override
+    protected InternalBucket reduceSampledBucket(
+        List<InternalBucket> buckets,
+        AggregationReduceContext context,
+        SamplingContext samplingContext
+    ) {
+        return innerReduceBucket(
+            buckets,
+            aggregations -> InternalAggregations.reduceSampled(aggregations, context, samplingContext),
+            context.isFinalReduce() ? samplingContext::inverseScale : l -> l
+        );
+    }
+
+    private InternalBucket innerReduceBucket(
+        List<InternalBucket> buckets,
+        Function<List<InternalAggregations>, InternalAggregations> aggReducer,
+        LongToLongFunction countScaler
+    ) {
         assert buckets.size() > 0;
         List<InternalAggregations> aggregations = new ArrayList<>(buckets.size());
         long docCount = 0;
@@ -262,7 +304,8 @@ public class InternalComposite extends InternalMultiBucketAggregation<InternalCo
             docCount += bucket.docCount;
             aggregations.add(bucket.aggregations);
         }
-        InternalAggregations aggs = InternalAggregations.reduce(aggregations, context);
+        docCount = countScaler.apply(docCount);
+        InternalAggregations aggs = aggReducer.apply(aggregations);
         /* Use the formats from the bucket because they'll be right to format
          * the key. The formats on the InternalComposite doing the reducing are
          * just whatever formats make sense for *its* index. This can be real

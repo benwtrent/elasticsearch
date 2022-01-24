@@ -77,6 +77,8 @@ public class FilterByFilterAggregator extends FiltersAggregator {
          * {@link FilterByFilterAggregator} into another sort of aggregator
          * if required.
          */
+        // TODO, it is possible to be "random sampler" aware here and allow being a sub agg of the `random_sampler` aggregator
+        // Following other protections, the adapted filter queries could be booleaned with a random sample query.
         protected abstract T adapt(CheckedFunction<AggregatorFactories, FilterByFilterAggregator, IOException> delegate) throws IOException;
 
         public final void add(String key, Query query) throws IOException {

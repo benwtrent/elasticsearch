@@ -20,6 +20,8 @@ import org.elasticsearch.search.aggregations.InternalMultiBucketAggregation;
 import org.elasticsearch.search.aggregations.InternalOrder;
 import org.elasticsearch.search.aggregations.TopBucketBuilder;
 import org.elasticsearch.search.aggregations.bucket.IteratorAndCurrent;
+import org.elasticsearch.search.aggregations.support.LongToLongFunction;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
@@ -28,8 +30,10 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
+import static org.elasticsearch.search.aggregations.BucketOrder.aggregation;
 import static org.elasticsearch.search.aggregations.InternalOrder.isKeyAsc;
 import static org.elasticsearch.search.aggregations.InternalOrder.isKeyOrder;
 import static org.elasticsearch.search.aggregations.bucket.terms.InternalTerms.DOC_COUNT_ERROR_UPPER_BOUND_FIELD_NAME;
@@ -86,6 +90,23 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
 
     @Override
     public B reduceBucket(List<B> buckets, AggregationReduceContext context) {
+        return innerBucketReducer(buckets, aggregationsList -> InternalAggregations.reduce(aggregationsList, context), l -> l);
+    }
+
+    @Override
+    public B reduceSampledBucket(List<B> buckets, AggregationReduceContext context, SamplingContext samplingContext) {
+        return innerBucketReducer(
+            buckets,
+            aggregationsList -> InternalAggregations.reduceSampled(aggregationsList, context, samplingContext),
+            context.isFinalReduce() ? samplingContext::inverseScale : l -> l
+        );
+    }
+
+    private B innerBucketReducer(
+        List<B> buckets,
+        Function<List<InternalAggregations>, InternalAggregations> aggReducer,
+        LongToLongFunction scaler
+    ) {
         assert buckets.size() > 0;
         long docCount = 0;
         // For the per term doc count error we add up the errors from the
@@ -105,7 +126,11 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
             }
             aggregationsList.add((InternalAggregations) bucket.getAggregations());
         }
-        InternalAggregations aggs = InternalAggregations.reduce(aggregationsList, context);
+        InternalAggregations aggs = aggReducer.apply(aggregationsList);
+        docCount = scaler.apply(docCount);
+        if (docCountError != -1) {
+            docCountError = scaler.apply(docCountError);
+        }
         return createBucket(docCount, aggs, docCountError, buckets.get(0));
     }
 
@@ -153,6 +178,7 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
     private BucketOrder reduceBuckets(
         List<InternalAggregation> aggregations,
         AggregationReduceContext reduceContext,
+        BiFunction<List<B>, AggregationReduceContext, B> sameKeyReducer,
         Function<DelayedBucket<B>, Boolean> sink
     ) {
         /*
@@ -165,9 +191,9 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
         if (isKeyOrder(thisReduceOrder)) {
             // extract the primary sort in case this is a compound order.
             thisReduceOrder = InternalOrder.key(isKeyAsc(thisReduceOrder));
-            reduceMergeSort(aggregations, thisReduceOrder, reduceContext, sink);
+            reduceMergeSort(aggregations, thisReduceOrder, reduceContext, sameKeyReducer, sink);
         } else {
-            reduceLegacy(aggregations, reduceContext, sink);
+            reduceLegacy(aggregations, reduceContext, sameKeyReducer, sink);
         }
         return thisReduceOrder;
     }
@@ -176,6 +202,7 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
         List<InternalAggregation> aggregations,
         BucketOrder thisReduceOrder,
         AggregationReduceContext reduceContext,
+        BiFunction<List<B>, AggregationReduceContext, B> sameKeyReducer,
         Function<DelayedBucket<B>, Boolean> sink
     ) {
         assert isKeyOrder(thisReduceOrder);
@@ -201,9 +228,7 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
             assert lastBucket == null || cmp.compare(top.current(), lastBucket) >= 0;
             if (lastBucket != null && cmp.compare(top.current(), lastBucket) != 0) {
                 // the key changed so bundle up the last key's worth of buckets
-                boolean shouldContinue = sink.apply(
-                    new DelayedBucket<B>(AbstractInternalTerms.this::reduceBucket, reduceContext, sameTermBuckets)
-                );
+                boolean shouldContinue = sink.apply(new DelayedBucket<B>(sameKeyReducer, reduceContext, sameTermBuckets));
                 if (false == shouldContinue) {
                     return;
                 }
@@ -226,13 +251,14 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
         }
 
         if (sameTermBuckets.isEmpty() == false) {
-            sink.apply(new DelayedBucket<B>(AbstractInternalTerms.this::reduceBucket, reduceContext, sameTermBuckets));
+            sink.apply(new DelayedBucket<B>(sameKeyReducer, reduceContext, sameTermBuckets));
         }
     }
 
     private void reduceLegacy(
         List<InternalAggregation> aggregations,
         AggregationReduceContext reduceContext,
+        BiFunction<List<B>, AggregationReduceContext, B> sameKeyReducer,
         Function<DelayedBucket<B>, Boolean> sink
     ) {
         Map<Object, List<B>> bucketMap = new HashMap<>();
@@ -246,9 +272,7 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
             }
         }
         for (List<B> sameTermBuckets : bucketMap.values()) {
-            boolean shouldContinue = sink.apply(
-                new DelayedBucket<B>(AbstractInternalTerms.this::reduceBucket, reduceContext, sameTermBuckets)
-            );
+            boolean shouldContinue = sink.apply(new DelayedBucket<B>(sameKeyReducer, reduceContext, sameTermBuckets));
             if (false == shouldContinue) {
                 return;
             }
@@ -256,6 +280,30 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
     }
 
     public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
+        return innerReduce(aggregations, reduceContext, AbstractInternalTerms.this::reduceBucket, l -> l, DelayedBucket::getDocCount);
+    }
+
+    public InternalAggregation reduceSampled(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        SamplingContext samplingContext
+    ) {
+        return innerReduce(
+            aggregations,
+            reduceContext,
+            (buckets, context) -> this.reduceSampledBucket(buckets, context, samplingContext),
+            reduceContext.isFinalReduce() ? samplingContext::inverseScale : l -> l,
+            delayedBucket -> delayedBucket.getReducedDocCount(reduceContext, samplingContext)
+        );
+    }
+
+    private InternalAggregation innerReduce(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        BiFunction<List<B>, AggregationReduceContext, B> sameKeyReducer,
+        LongToLongFunction countScaler,
+        Function<DelayedBucket<B>, Long> getLazyDocCount
+    ) {
         long sumDocCountError = 0;
         long[] otherDocCount = new long[] { 0 };
         A referenceTerms = null;
@@ -300,13 +348,21 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
         BucketOrder thisReduceOrder;
         List<B> result;
         if (reduceContext.isFinalReduce()) {
+            // It's important to scale this before updating it with the reduced buckets as this value
+            // keeps track of the sampled other doc count from the other aggregations that we have merged
+            otherDocCount[0] = countScaler.apply(otherDocCount[0]);
+            if (sumDocCountError != -1) {
+                sumDocCountError = countScaler.apply(sumDocCountError);
+            }
             TopBucketBuilder<B> top = TopBucketBuilder.build(
                 getRequiredSize(),
                 getOrder(),
-                removed -> { otherDocCount[0] += removed.getDocCount(); }
+                // The bucket may or may not be reduced at this point, we need to make sure our doc_count is scaled if we are sampled
+                removed -> otherDocCount[0] += (getLazyDocCount.apply(removed))
             );
-            thisReduceOrder = reduceBuckets(aggregations, reduceContext, bucket -> {
-                if (bucket.getDocCount() >= getMinDocCount()) {
+            thisReduceOrder = reduceBuckets(aggregations, reduceContext, sameKeyReducer, bucket -> {
+                // The bucket may or may not be reduced at this point, we need to make sure our doc_count is scaled if we are sampled
+                if (getLazyDocCount.apply(bucket) >= getMinDocCount()) {
                     top.add(bucket);
                 }
                 return true;
@@ -320,7 +376,7 @@ public abstract class AbstractInternalTerms<A extends AbstractInternalTerms<A, B
              */
             boolean canPrune = isKeyOrder(getOrder()) && getMinDocCount() == 0;
             result = new ArrayList<>();
-            thisReduceOrder = reduceBuckets(aggregations, reduceContext, bucket -> {
+            thisReduceOrder = reduceBuckets(aggregations, reduceContext, sameKeyReducer, bucket -> {
                 result.add(bucket.reduced());
                 return false == canPrune || result.size() < getRequiredSize();
             });

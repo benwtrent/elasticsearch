@@ -23,6 +23,8 @@ import org.elasticsearch.search.aggregations.InternalOrder;
 import org.elasticsearch.search.aggregations.KeyComparable;
 import org.elasticsearch.search.aggregations.bucket.IteratorAndCurrent;
 import org.elasticsearch.search.aggregations.bucket.MultiBucketsAggregation;
+import org.elasticsearch.search.aggregations.support.LongToLongFunction;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
@@ -34,6 +36,8 @@ import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.LongConsumer;
 
 /**
@@ -288,7 +292,11 @@ public final class InternalDateHistogram extends InternalMultiBucketAggregation<
         return new Bucket(prototype.key, prototype.docCount, prototype.keyed, prototype.format, aggregations);
     }
 
-    private List<Bucket> reduceBuckets(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
+    private List<Bucket> reduceBuckets(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        BiFunction<List<Bucket>, AggregationReduceContext, Bucket> bucketReducer
+    ) {
 
         final PriorityQueue<IteratorAndCurrent<Bucket>> pq = new PriorityQueue<>(aggregations.size()) {
             @Override
@@ -314,7 +322,7 @@ public final class InternalDateHistogram extends InternalMultiBucketAggregation<
 
                 if (top.current().key != key) {
                     // the key changes, reduce what we already buffered and reset the buffer for current buckets
-                    final Bucket reduced = reduceBucket(currentBuckets, reduceContext);
+                    final Bucket reduced = bucketReducer.apply(currentBuckets, reduceContext);
                     if (reduced.getDocCount() >= minDocCount || reduceContext.isFinalReduce() == false) {
                         reducedBuckets.add(reduced);
                     }
@@ -334,7 +342,7 @@ public final class InternalDateHistogram extends InternalMultiBucketAggregation<
             } while (pq.size() > 0);
 
             if (currentBuckets.isEmpty() == false) {
-                final Bucket reduced = reduceBucket(currentBuckets, reduceContext);
+                final Bucket reduced = bucketReducer.apply(currentBuckets, reduceContext);
                 if (reduced.getDocCount() >= minDocCount || reduceContext.isFinalReduce() == false) {
                     reducedBuckets.add(reduced);
                 }
@@ -350,6 +358,23 @@ public final class InternalDateHistogram extends InternalMultiBucketAggregation<
      */
     @Override
     protected Bucket reduceBucket(List<Bucket> buckets, AggregationReduceContext context) {
+        return innerReduceBucket(buckets, internalAggregations -> InternalAggregations.reduce(internalAggregations, context), l -> l);
+    }
+
+    @Override
+    protected Bucket reduceSampledBucket(List<Bucket> buckets, AggregationReduceContext context, SamplingContext samplingContext) {
+        return innerReduceBucket(
+            buckets,
+            internalAggregations -> InternalAggregations.reduceSampled(internalAggregations, context, samplingContext),
+            context.isFinalReduce() ? samplingContext::inverseScale : l -> l
+        );
+    }
+
+    private Bucket innerReduceBucket(
+        List<Bucket> buckets,
+        Function<List<InternalAggregations>, InternalAggregations> aggReducer,
+        LongToLongFunction countScaler
+    ) {
         assert buckets.size() > 0;
         List<InternalAggregations> aggregations = new ArrayList<>(buckets.size());
         long docCount = 0;
@@ -357,7 +382,8 @@ public final class InternalDateHistogram extends InternalMultiBucketAggregation<
             docCount += bucket.docCount;
             aggregations.add((InternalAggregations) bucket.getAggregations());
         }
-        InternalAggregations aggs = InternalAggregations.reduce(aggregations, context);
+        docCount = countScaler.apply(docCount);
+        InternalAggregations aggs = aggReducer.apply(aggregations);
         return createBucket(buckets.get(0).key, docCount, aggs);
     }
 
@@ -373,7 +399,11 @@ public final class InternalDateHistogram extends InternalMultiBucketAggregation<
      */
     private static final int REPORT_EMPTY_EVERY = 10_000;
 
-    private void addEmptyBuckets(List<Bucket> list, AggregationReduceContext reduceContext) {
+    private void addEmptyBuckets(
+        List<Bucket> list,
+        AggregationReduceContext reduceContext,
+        Function<List<InternalAggregations>, InternalAggregations> aggReducer
+    ) {
         /*
          * Make sure we have space for the empty buckets we're going to add by
          * counting all of the empties we plan to add and firing them into
@@ -395,7 +425,7 @@ public final class InternalDateHistogram extends InternalMultiBucketAggregation<
         iterateEmptyBuckets(list, list.listIterator(), counter);
         reduceContext.consumeBucketsAndMaybeBreak(counter.size);
 
-        InternalAggregations reducedEmptySubAggs = InternalAggregations.reduce(List.of(emptyBucketInfo.subAggregations), reduceContext);
+        InternalAggregations reducedEmptySubAggs = aggReducer.apply(List.of(emptyBucketInfo.subAggregations));
         ListIterator<Bucket> iter = list.listIterator();
         iterateEmptyBuckets(list, iter, key -> iter.add(new InternalDateHistogram.Bucket(key, 0, keyed, format, reducedEmptySubAggs)));
     }
@@ -458,11 +488,39 @@ public final class InternalDateHistogram extends InternalMultiBucketAggregation<
 
     @Override
     public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
-        List<Bucket> reducedBuckets = reduceBuckets(aggregations, reduceContext);
+        return innerReduce(
+            aggregations,
+            reduceContext,
+            this::reduceBucket,
+            internalAggregations -> InternalAggregations.reduce(internalAggregations, reduceContext)
+        );
+    }
+
+    @Override
+    public InternalAggregation reduceSampled(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        SamplingContext samplingContext
+    ) {
+        return innerReduce(
+            aggregations,
+            reduceContext,
+            (bs, context) -> this.reduceSampledBucket(bs, context, samplingContext),
+            internalAggregations -> InternalAggregations.reduceSampled(internalAggregations, reduceContext, samplingContext)
+        );
+    }
+
+    private InternalAggregation innerReduce(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        BiFunction<List<Bucket>, AggregationReduceContext, Bucket> bucketReducer,
+        Function<List<InternalAggregations>, InternalAggregations> aggReducer
+    ) {
+        List<Bucket> reducedBuckets = reduceBuckets(aggregations, reduceContext, bucketReducer);
         boolean alreadyAccountedForBuckets = false;
         if (reduceContext.isFinalReduce()) {
             if (minDocCount == 0) {
-                addEmptyBuckets(reducedBuckets, reduceContext);
+                addEmptyBuckets(reducedBuckets, reduceContext, aggReducer);
                 alreadyAccountedForBuckets = true;
             }
             if (InternalOrder.isKeyDesc(order)) {

@@ -16,6 +16,8 @@ import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.InternalAggregations;
 import org.elasticsearch.search.aggregations.InternalMultiBucketAggregation;
 import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
+import org.elasticsearch.search.aggregations.support.LongToLongFunction;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.search.aggregations.support.ValueType;
 import org.elasticsearch.search.aggregations.support.ValuesSourceType;
 import org.elasticsearch.xcontent.XContentBuilder;
@@ -25,6 +27,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 public class InternalRange<B extends InternalRange.Bucket, R extends InternalRange<B, R>> extends InternalMultiBucketAggregation<R, B>
     implements
@@ -335,9 +339,26 @@ public class InternalRange<B extends InternalRange.Bucket, R extends InternalRan
         return getFactory().createBucket(aggregations, prototype);
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
+        return innerReduce(aggregations, reduceContext, this::reduceBucket);
+    }
+
+    @Override
+    public InternalAggregation reduceSampled(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        SamplingContext samplingContext
+    ) {
+        return innerReduce(aggregations, reduceContext, (bs, context) -> this.reduceSampledBucket(bs, context, samplingContext));
+    }
+
+    @SuppressWarnings("unchecked")
+    private InternalAggregation innerReduce(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        BiFunction<List<B>, AggregationReduceContext, B> bucketReducer
+    ) {
         reduceContext.consumeBucketsAndMaybeBreak(ranges.size());
         @SuppressWarnings("rawtypes")
         List<B>[] rangeList = new List[ranges.size()];
@@ -354,13 +375,30 @@ public class InternalRange<B extends InternalRange.Bucket, R extends InternalRan
 
         final List<B> ranges = new ArrayList<>();
         for (int i = 0; i < this.ranges.size(); ++i) {
-            ranges.add(reduceBucket(rangeList[i], reduceContext));
+            ranges.add(bucketReducer.apply(rangeList[i], reduceContext));
         }
         return getFactory().create(name, ranges, format, keyed, getMetadata());
     }
 
     @Override
-    protected B reduceBucket(List<B> buckets, AggregationReduceContext context) {
+    protected final B reduceBucket(List<B> buckets, AggregationReduceContext context) {
+        return innerReduceBucket(buckets, internalAggregations -> InternalAggregations.reduce(internalAggregations, context), l -> l);
+    }
+
+    @Override
+    protected final B reduceSampledBucket(List<B> buckets, AggregationReduceContext context, SamplingContext samplingContext) {
+        return innerReduceBucket(
+            buckets,
+            internalAggregations -> InternalAggregations.reduceSampled(internalAggregations, context, samplingContext),
+            context.isFinalReduce() ? samplingContext::inverseScale : l -> l
+        );
+    }
+
+    private B innerReduceBucket(
+        List<B> buckets,
+        Function<List<InternalAggregations>, InternalAggregations> aggReducer,
+        LongToLongFunction countScaler
+    ) {
         assert buckets.size() > 0;
         long docCount = 0;
         List<InternalAggregations> aggregationsList = new ArrayList<>(buckets.size());
@@ -368,7 +406,6 @@ public class InternalRange<B extends InternalRange.Bucket, R extends InternalRan
             docCount += bucket.docCount;
             aggregationsList.add(bucket.aggregations);
         }
-        final InternalAggregations aggs = InternalAggregations.reduce(aggregationsList, context);
         Bucket prototype = buckets.get(0);
         return getFactory().createBucket(
             prototype.key,
@@ -376,8 +413,8 @@ public class InternalRange<B extends InternalRange.Bucket, R extends InternalRan
             prototype.originalFrom,
             prototype.to,
             prototype.originalTo,
-            docCount,
-            aggs,
+            countScaler.apply(docCount),
+            aggReducer.apply(aggregationsList),
             keyed,
             format
         );

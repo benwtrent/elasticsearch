@@ -9,9 +9,11 @@
 package org.elasticsearch.search.aggregations;
 
 import org.elasticsearch.search.aggregations.support.AggregationContext;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.elasticsearch.search.aggregations.support.AggregationUsageService.OTHER_SUBTYPE;
 
@@ -79,5 +81,17 @@ public abstract class AggregatorFactory {
      */
     public String getStatsSubtype() {
         return OTHER_SUBTYPE;
+    }
+
+    /**
+     * Climbs up the aggregation factory tree to find the sampling context if one exists.
+     * @return Optional SamplingContext
+     */
+    public Optional<SamplingContext> getSamplingContext() {
+        if (parent != null) {
+            return parent.getSamplingContext();
+        } else {
+            return Optional.empty();
+        }
     }
 }

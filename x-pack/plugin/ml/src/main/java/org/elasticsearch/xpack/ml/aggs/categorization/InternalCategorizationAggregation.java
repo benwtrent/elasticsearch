@@ -20,6 +20,8 @@ import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.InternalAggregations;
 import org.elasticsearch.search.aggregations.InternalMultiBucketAggregation;
 import org.elasticsearch.search.aggregations.bucket.MultiBucketsAggregation;
+import org.elasticsearch.search.aggregations.support.LongToLongFunction;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xcontent.ToXContentFragment;
 import org.elasticsearch.xcontent.XContentBuilder;
 
@@ -30,6 +32,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 import static org.elasticsearch.xpack.ml.aggs.categorization.CategorizationBytesRefHash.WILD_CARD_REF;
 
@@ -54,14 +57,18 @@ public class InternalCategorizationAggregation extends InternalMultiBucketAggreg
             return docCount;
         }
 
-        public Bucket reduce(BucketKey bucketKey, AggregationReduceContext reduceContext) {
+        public Bucket reduce(
+            BucketKey bucketKey,
+            Function<List<InternalAggregations>, InternalAggregations> aggReducer,
+            LongToLongFunction countScaler
+        ) {
             List<InternalAggregations> innerAggs = new ArrayList<>(toReduce.size());
             long totalDocCount = 0;
             for (Bucket bucket : toReduce) {
                 innerAggs.add(bucket.aggregations);
                 totalDocCount += bucket.docCount;
             }
-            return new Bucket(bucketKey, totalDocCount, InternalAggregations.reduce(innerAggs, reduceContext));
+            return new Bucket(bucketKey, countScaler.apply(totalDocCount), aggReducer.apply(innerAggs));
         }
 
         public DelayedCategorizationBucket add(Bucket bucket) {
@@ -352,6 +359,34 @@ public class InternalCategorizationAggregation extends InternalMultiBucketAggreg
 
     @Override
     public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
+        return innerReduce(
+            aggregations,
+            reduceContext,
+            internalAggregations -> InternalAggregations.reduce(internalAggregations, reduceContext),
+            l -> l
+        );
+    }
+
+    @Override
+    public InternalAggregation reduceSampled(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        SamplingContext context
+    ) {
+        return innerReduce(
+            aggregations,
+            reduceContext,
+            internalAggregations -> InternalAggregations.reduceSampled(internalAggregations, reduceContext, context),
+            reduceContext.isFinalReduce() ? context::inverseScale : l -> l
+        );
+    }
+
+    private InternalAggregation innerReduce(
+        List<InternalAggregation> aggregations,
+        AggregationReduceContext reduceContext,
+        Function<List<InternalAggregations>, InternalAggregations> aggReducer,
+        LongToLongFunction countScaler
+    ) {
         try (CategorizationBytesRefHash hash = new CategorizationBytesRefHash(new BytesRefHash(1L, reduceContext.bigArrays()))) {
             CategorizationTokenTree categorizationTokenTree = new CategorizationTokenTree(
                 maxUniqueTokens,
@@ -397,7 +432,7 @@ public class InternalCategorizationAggregation extends InternalMultiBucketAggreg
             for (Map.Entry<BucketKey, DelayedCategorizationBucket> keyAndBuckets : mergedBuckets.entrySet()) {
                 final BucketKey key = keyAndBuckets.getKey();
                 DelayedCategorizationBucket bucket = keyAndBuckets.getValue();
-                Bucket newBucket = bucket.reduce(key, reduceContext);
+                Bucket newBucket = bucket.reduce(key, aggReducer, countScaler);
                 if ((newBucket.docCount >= minDocCount) || reduceContext.isFinalReduce() == false) {
                     Bucket removed = pq.insertWithOverflow(newBucket);
                     if (removed == null) {
@@ -428,6 +463,11 @@ public class InternalCategorizationAggregation extends InternalMultiBucketAggreg
                 Arrays.asList(bucketList)
             );
         }
+    }
+
+    @Override
+    protected Bucket reduceSampledBucket(List<Bucket> buckets, AggregationReduceContext context, SamplingContext samplingContext) {
+        return super.reduceSampledBucket(buckets, context, samplingContext);
     }
 
     public int getMaxUniqueTokens() {

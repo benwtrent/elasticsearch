@@ -8,6 +8,8 @@
 
 package org.elasticsearch.search.aggregations;
 
+import org.elasticsearch.search.aggregations.support.SamplingContext;
+
 import java.util.List;
 import java.util.function.BiFunction;
 
@@ -57,9 +59,30 @@ public final class DelayedBucket<B extends InternalMultiBucketAggregation.Intern
         if (reduced == null) {
             reduceContext.consumeBucketsAndMaybeBreak(1);
             reduced = reduce.apply(toReduce, reduceContext);
+            docCount = reduced.getDocCount();
             toReduce = null;
         }
         return reduced;
+    }
+
+    /**
+     * Useful when you need to make sure to have the reduced doc count, even if you are not sure if this has been reduced or not.
+     *
+     * This does NOT reduce the buckets, but instead scales the manual doc count result if necessary.
+     * @param aggregationReduceContext the current aggregation reduction context
+     * @param context the sampling context
+     * @return the doc count
+     */
+    public long getReducedDocCount(AggregationReduceContext aggregationReduceContext, SamplingContext context) {
+        if (reduced != null) {
+            return docCount;
+        } else {
+            if (aggregationReduceContext.isFinalReduce()) {
+                return context.inverseScale(getDocCount());
+            } else {
+                return getDocCount();
+            }
+        }
     }
 
     /**
