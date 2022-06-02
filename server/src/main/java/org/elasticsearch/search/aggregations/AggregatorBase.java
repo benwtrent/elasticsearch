@@ -105,6 +105,7 @@ public abstract class AggregatorBase extends Aggregator {
         addRequestCircuitBreakerBytes(DEFAULT_WEIGHT);
     }
 
+
     /**
      * Returns a converter for point values if it's safe to use the indexed data instead of
      * doc values.  Generally, this means that the query has no filters or scripts, the aggregation is

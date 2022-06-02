@@ -14,6 +14,7 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.core.Releasable;
 import org.elasticsearch.search.aggregations.support.AggregationPath;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.search.sort.SortOrder;
 import org.elasticsearch.xcontent.DeprecationHandler;
 import org.elasticsearch.xcontent.ParseField;
@@ -22,6 +23,8 @@ import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.Iterator;
+import java.util.Optional;
+import java.util.OptionalDouble;
 import java.util.function.BiConsumer;
 
 /**
@@ -176,6 +179,18 @@ public abstract class Aggregator extends BucketCollector implements Releasable {
      * Get the aggregators running under this one.
      */
     public abstract Aggregator[] subAggregators();
+
+    public Optional<int[]> getBootstrappedCounts() {
+        if (parent() != null) {
+            return parent().getBootstrappedCounts();
+        } else {
+            return Optional.empty();
+        }
+    }
+
+    public OptionalDouble calculateBootstrappedErrorRate(SamplingContext samplingContext, long bucketOrd) {
+        return OptionalDouble.empty();
+    }
 
     /** Aggregation mode for sub aggregations. */
     public enum SubAggCollectionMode implements Writeable {

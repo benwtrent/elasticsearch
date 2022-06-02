@@ -22,6 +22,7 @@ import org.elasticsearch.search.aggregations.bucket.global.GlobalAggregator;
 import org.elasticsearch.search.aggregations.bucket.terms.LongKeyedBucketOrds;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.aggregations.support.AggregationPath;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.search.sort.SortOrder;
 
 import java.io.IOException;
@@ -32,6 +33,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.OptionalDouble;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.IntConsumer;
@@ -428,4 +430,10 @@ public abstract class BucketsAggregator extends AggregatorBase {
         // Set LeafReaderContext to the doc_count provider
         docCountProvider.setLeafReaderContext(ctx);
     }
+
+    @Override
+    public OptionalDouble calculateBootstrappedErrorRate(SamplingContext samplingContext, long bucketOrd) {
+        return OptionalDouble.empty();
+    }
+
 }

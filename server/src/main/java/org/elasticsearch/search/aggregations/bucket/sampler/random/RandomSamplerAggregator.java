@@ -14,6 +14,7 @@ import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Scorer;
 import org.apache.lucene.search.Weight;
 import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.hppc.BitMixer;
 import org.elasticsearch.common.CheckedSupplier;
 import org.elasticsearch.search.aggregations.Aggregator;
 import org.elasticsearch.search.aggregations.AggregatorFactories;
@@ -26,12 +27,17 @@ import org.elasticsearch.search.aggregations.support.AggregationContext;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.Optional;
+import java.util.SplittableRandom;
 
 public class RandomSamplerAggregator extends BucketsAggregator implements SingleBucketAggregator {
 
     private final int seed;
     private final double probability;
     private final CheckedSupplier<Weight, IOException> weightSupplier;
+    private final int numberBootstrappedBuckets;
+    private final FastOnePoisson fastOnePoisson;
+    private volatile int[] bootstrapped;
 
     RandomSamplerAggregator(
         String name,
@@ -53,6 +59,9 @@ public class RandomSamplerAggregator extends BucketsAggregator implements Single
             );
         }
         this.weightSupplier = weightSupplier;
+        this.numberBootstrappedBuckets = 10;
+        this.bootstrapped = new int[numberBootstrappedBuckets];
+        this.fastOnePoisson = new FastOnePoisson(new SplittableRandom(BitMixer.mix(context.shardRandomSeed() ^ seed)));
     }
 
     @Override
@@ -68,6 +77,11 @@ public class RandomSamplerAggregator extends BucketsAggregator implements Single
                 metadata()
             )
         );
+    }
+
+    @Override
+    public Optional<int[]> getBootstrappedCounts() {
+        return Optional.of(bootstrapped);
     }
 
     @Override
@@ -115,6 +129,10 @@ public class RandomSamplerAggregator extends BucketsAggregator implements Single
         try {
             // Iterate every document provided by the scorer iterator
             for (int docId = docIt.nextDoc(); docId != DocIdSetIterator.NO_MORE_DOCS; docId = docIt.nextDoc()) {
+                bootstrapped = new int[numberBootstrappedBuckets];
+                for (int i = 0; i < numberBootstrappedBuckets; i++) {
+                    bootstrapped[i] = fastOnePoisson.next();
+                }
                 // If liveDocs is null, that means that every doc is a live doc, no need to check if it has been deleted or not
                 if (liveDocs == null || liveDocs.get(docIt.docID())) {
                     collectBucket(sub, docIt.docID(), 0);
