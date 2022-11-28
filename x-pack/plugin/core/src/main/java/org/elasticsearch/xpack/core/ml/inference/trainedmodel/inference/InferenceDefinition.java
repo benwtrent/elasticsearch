@@ -69,7 +69,7 @@ public class InferenceDefinition {
         return size;
     }
 
-    InferenceModel getTrainedModel() {
+    public InferenceModel getTrainedModel() {
         return trainedModel;
     }
 

@@ -19,6 +19,8 @@ import org.elasticsearch.xpack.core.ml.inference.preprocessing.OneHotEncoding;
 import org.elasticsearch.xpack.core.ml.inference.preprocessing.PreProcessor;
 import org.elasticsearch.xpack.core.ml.inference.preprocessing.StrictlyParsedPreProcessor;
 import org.elasticsearch.xpack.core.ml.inference.preprocessing.TargetMeanEncoding;
+import org.elasticsearch.xpack.core.ml.inference.preprocessing.ltr.ScriptScoreProcessor;
+import org.elasticsearch.xpack.core.ml.inference.preprocessing.ltr.TermStats;
 import org.elasticsearch.xpack.core.ml.inference.results.ClassificationInferenceResults;
 import org.elasticsearch.xpack.core.ml.inference.results.FillMaskResults;
 import org.elasticsearch.xpack.core.ml.inference.results.InferenceResults;
@@ -137,6 +139,20 @@ public class MlInferenceNamedXContentProvider implements NamedXContentProvider {
                 (p, c) -> Multi.fromXContentLenient(p, (PreProcessor.PreProcessorParseContext) c)
             )
         );
+        namedXContent.add(
+            new NamedXContentRegistry.Entry(
+                LenientlyParsedPreProcessor.class,
+                ScriptScoreProcessor.NAME,
+                (p, c) -> ScriptScoreProcessor.fromXContentLenient(p, (PreProcessor.PreProcessorParseContext) c)
+            )
+        );
+        namedXContent.add(
+            new NamedXContentRegistry.Entry(
+                LenientlyParsedPreProcessor.class,
+                TermStats.NAME,
+                (p, c) -> TermStats.fromXContentLenient(p, (PreProcessor.PreProcessorParseContext) c)
+            )
+        );
 
         // PreProcessing Strict
         namedXContent.add(
@@ -179,6 +195,20 @@ public class MlInferenceNamedXContentProvider implements NamedXContentProvider {
                 StrictlyParsedPreProcessor.class,
                 Multi.NAME,
                 (p, c) -> Multi.fromXContentStrict(p, (PreProcessor.PreProcessorParseContext) c)
+            )
+        );
+        namedXContent.add(
+            new NamedXContentRegistry.Entry(
+                StrictlyParsedPreProcessor.class,
+                ScriptScoreProcessor.NAME,
+                (p, c) -> ScriptScoreProcessor.fromXContentStrict(p, (PreProcessor.PreProcessorParseContext) c)
+            )
+        );
+        namedXContent.add(
+            new NamedXContentRegistry.Entry(
+                StrictlyParsedPreProcessor.class,
+                TermStats.NAME,
+                (p, c) -> TermStats.fromXContentLenient(p, (PreProcessor.PreProcessorParseContext) c)
             )
         );
 
@@ -545,6 +575,12 @@ public class MlInferenceNamedXContentProvider implements NamedXContentProvider {
         );
         namedWriteables.add(new NamedWriteableRegistry.Entry(PreProcessor.class, NGram.NAME.getPreferredName(), NGram::new));
         namedWriteables.add(new NamedWriteableRegistry.Entry(PreProcessor.class, Multi.NAME.getPreferredName(), Multi::new));
+        namedWriteables.add(
+            new NamedWriteableRegistry.Entry(PreProcessor.class, ScriptScoreProcessor.NAME.getPreferredName(), ScriptScoreProcessor::new)
+        );
+        namedWriteables.add(
+            new NamedWriteableRegistry.Entry(PreProcessor.class, TermStats.NAME.getPreferredName(), ScriptScoreProcessor::new)
+        );
 
         // Model
         namedWriteables.add(new NamedWriteableRegistry.Entry(TrainedModel.class, Tree.NAME.getPreferredName(), Tree::new));
