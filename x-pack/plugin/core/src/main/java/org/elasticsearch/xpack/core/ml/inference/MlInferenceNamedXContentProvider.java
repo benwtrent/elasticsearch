@@ -19,7 +19,7 @@ import org.elasticsearch.xpack.core.ml.inference.preprocessing.OneHotEncoding;
 import org.elasticsearch.xpack.core.ml.inference.preprocessing.PreProcessor;
 import org.elasticsearch.xpack.core.ml.inference.preprocessing.StrictlyParsedPreProcessor;
 import org.elasticsearch.xpack.core.ml.inference.preprocessing.TargetMeanEncoding;
-import org.elasticsearch.xpack.core.ml.inference.preprocessing.ltr.ScriptScoreProcessor;
+import org.elasticsearch.xpack.core.ml.inference.preprocessing.ltr.QueryScoreProcessor;
 import org.elasticsearch.xpack.core.ml.inference.preprocessing.ltr.TermStats;
 import org.elasticsearch.xpack.core.ml.inference.results.ClassificationInferenceResults;
 import org.elasticsearch.xpack.core.ml.inference.results.FillMaskResults;
@@ -45,6 +45,8 @@ import org.elasticsearch.xpack.core.ml.inference.trainedmodel.InferenceConfigUpd
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.LenientlyParsedInferenceConfig;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.LenientlyParsedTrainedModel;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.LenientlyParsedTrainedModelLocation;
+import org.elasticsearch.xpack.core.ml.inference.trainedmodel.LtrConfig;
+import org.elasticsearch.xpack.core.ml.inference.trainedmodel.LtrConfigUpdate;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.MPNetTokenization;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.MPNetTokenizationUpdate;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.NerConfig;
@@ -142,8 +144,8 @@ public class MlInferenceNamedXContentProvider implements NamedXContentProvider {
         namedXContent.add(
             new NamedXContentRegistry.Entry(
                 LenientlyParsedPreProcessor.class,
-                ScriptScoreProcessor.NAME,
-                (p, c) -> ScriptScoreProcessor.fromXContentLenient(p, (PreProcessor.PreProcessorParseContext) c)
+                QueryScoreProcessor.NAME,
+                (p, c) -> QueryScoreProcessor.fromXContentLenient(p, (PreProcessor.PreProcessorParseContext) c)
             )
         );
         namedXContent.add(
@@ -200,15 +202,15 @@ public class MlInferenceNamedXContentProvider implements NamedXContentProvider {
         namedXContent.add(
             new NamedXContentRegistry.Entry(
                 StrictlyParsedPreProcessor.class,
-                ScriptScoreProcessor.NAME,
-                (p, c) -> ScriptScoreProcessor.fromXContentStrict(p, (PreProcessor.PreProcessorParseContext) c)
+                QueryScoreProcessor.NAME,
+                (p, c) -> QueryScoreProcessor.fromXContentStrict(p, (PreProcessor.PreProcessorParseContext) c)
             )
         );
         namedXContent.add(
             new NamedXContentRegistry.Entry(
                 StrictlyParsedPreProcessor.class,
                 TermStats.NAME,
-                (p, c) -> TermStats.fromXContentLenient(p, (PreProcessor.PreProcessorParseContext) c)
+                (p, c) -> TermStats.fromXContentStrict(p, (PreProcessor.PreProcessorParseContext) c)
             )
         );
 
@@ -429,6 +431,12 @@ public class MlInferenceNamedXContentProvider implements NamedXContentProvider {
                 TextSimilarityConfig::fromXContentLenient
             )
         );
+        namedXContent.add(
+            new NamedXContentRegistry.Entry(StrictlyParsedInferenceConfig.class, LtrConfig.NAME, LtrConfig::fromXContentStrict)
+        );
+        namedXContent.add(
+            new NamedXContentRegistry.Entry(LenientlyParsedInferenceConfig.class, LtrConfig.NAME, LtrConfig::fromXContentLenient)
+        );
 
         // Inference Configs Update
         namedXContent.add(
@@ -500,6 +508,9 @@ public class MlInferenceNamedXContentProvider implements NamedXContentProvider {
                 new ParseField(TextSimilarityConfigUpdate.NAME),
                 TextSimilarityConfigUpdate::fromXContentStrict
             )
+        );
+        namedXContent.add(
+            new NamedXContentRegistry.Entry(InferenceConfigUpdate.class, LtrConfigUpdate.NAME, LtrConfigUpdate::fromXContentStrict)
         );
 
         // Inference models
@@ -576,11 +587,9 @@ public class MlInferenceNamedXContentProvider implements NamedXContentProvider {
         namedWriteables.add(new NamedWriteableRegistry.Entry(PreProcessor.class, NGram.NAME.getPreferredName(), NGram::new));
         namedWriteables.add(new NamedWriteableRegistry.Entry(PreProcessor.class, Multi.NAME.getPreferredName(), Multi::new));
         namedWriteables.add(
-            new NamedWriteableRegistry.Entry(PreProcessor.class, ScriptScoreProcessor.NAME.getPreferredName(), ScriptScoreProcessor::new)
+            new NamedWriteableRegistry.Entry(PreProcessor.class, QueryScoreProcessor.NAME.getPreferredName(), QueryScoreProcessor::new)
         );
-        namedWriteables.add(
-            new NamedWriteableRegistry.Entry(PreProcessor.class, TermStats.NAME.getPreferredName(), ScriptScoreProcessor::new)
-        );
+        namedWriteables.add(new NamedWriteableRegistry.Entry(PreProcessor.class, TermStats.NAME.getPreferredName(), TermStats::new));
 
         // Model
         namedWriteables.add(new NamedWriteableRegistry.Entry(TrainedModel.class, Tree.NAME.getPreferredName(), Tree::new));
@@ -667,6 +676,7 @@ public class MlInferenceNamedXContentProvider implements NamedXContentProvider {
             new NamedWriteableRegistry.Entry(InferenceConfig.class, QuestionAnsweringConfig.NAME, QuestionAnsweringConfig::new)
         );
         namedWriteables.add(new NamedWriteableRegistry.Entry(InferenceConfig.class, TextSimilarityConfig.NAME, TextSimilarityConfig::new));
+        namedWriteables.add(new NamedWriteableRegistry.Entry(InferenceConfig.class, LtrConfig.NAME.getPreferredName(), LtrConfig::new));
 
         // Inference Configs Updates
         namedWriteables.add(
@@ -720,6 +730,9 @@ public class MlInferenceNamedXContentProvider implements NamedXContentProvider {
         );
         namedWriteables.add(
             new NamedWriteableRegistry.Entry(InferenceConfigUpdate.class, TextSimilarityConfigUpdate.NAME, TextSimilarityConfigUpdate::new)
+        );
+        namedWriteables.add(
+            new NamedWriteableRegistry.Entry(InferenceConfigUpdate.class, LtrConfigUpdate.NAME.getPreferredName(), LtrConfigUpdate::new)
         );
 
         // Location

@@ -69,6 +69,10 @@ public class InferenceDefinition {
         return size;
     }
 
+    public List<PreProcessor> processors() {
+        return preProcessors;
+    }
+
     public InferenceModel getTrainedModel() {
         return trainedModel;
     }

@@ -8,8 +8,10 @@ package org.elasticsearch.xpack.core.ml.inference.preprocessing;
 
 import org.apache.lucene.util.Accountable;
 import org.elasticsearch.common.io.stream.NamedWriteable;
+import org.elasticsearch.index.query.QueryRewriteContext;
 import org.elasticsearch.xpack.core.ml.utils.NamedXContentObject;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
@@ -63,5 +65,9 @@ public interface PreProcessor extends NamedXContentObject, NamedWriteable, Accou
     boolean isCustom();
 
     String getOutputFieldType(String outputField);
+
+    default PreProcessor rewriteWithParams(QueryRewriteContext ctx, Map<String, Object> params) throws IOException {
+        return this;
+    }
 
 }

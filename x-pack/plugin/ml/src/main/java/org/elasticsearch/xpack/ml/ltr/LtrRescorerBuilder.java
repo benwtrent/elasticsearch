@@ -23,9 +23,14 @@ import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xpack.core.ml.action.GetTrainedModelsAction;
 import org.elasticsearch.xpack.core.ml.inference.InferenceToXContentCompressor;
 import org.elasticsearch.xpack.core.ml.inference.TrainedModelConfig;
+import org.elasticsearch.xpack.core.ml.inference.preprocessing.PreProcessor;
+import org.elasticsearch.xpack.core.ml.inference.trainedmodel.EmptyConfigUpdate;
+import org.elasticsearch.xpack.core.ml.inference.trainedmodel.InferenceConfigUpdate;
+import org.elasticsearch.xpack.core.ml.inference.trainedmodel.LtrConfig;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.inference.InferenceDefinition;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -33,10 +38,16 @@ import java.util.function.Supplier;
 public class LtrRescorerBuilder extends RescorerBuilder<LtrRescorerBuilder> {
 
     private static final ParseField MODEL = new ParseField("model_id");
+    private static final ParseField INFERENCE_CONFIG = new ParseField("inference_config");
 
     private static final ObjectParser<Builder, Void> PARSER = new ObjectParser<>("ltr", false, Builder::new);
     static {
         PARSER.declareString(Builder::setModelId, MODEL);
+        PARSER.declareNamedObject(
+            Builder::setInferenceConfigUpdate,
+            (p, c, n) -> p.namedObject(InferenceConfigUpdate.class, n, true),
+            INFERENCE_CONFIG
+        );
     }
 
     public static LtrRescorerBuilder fromXContent(XContentParser parser) {
@@ -44,22 +55,26 @@ public class LtrRescorerBuilder extends RescorerBuilder<LtrRescorerBuilder> {
     }
 
     private final String modelId;
+    private final InferenceConfigUpdate inferenceConfigUpdate;
     private final Supplier<InferenceDefinition> inferenceDefinitionSupplier;
 
-    public LtrRescorerBuilder(String modelId) {
+    public LtrRescorerBuilder(String modelId, InferenceConfigUpdate inferenceConfigUpdate) {
         this.modelId = modelId;
         this.inferenceDefinitionSupplier = null;
+        this.inferenceConfigUpdate = inferenceConfigUpdate == null ? new EmptyConfigUpdate() : inferenceConfigUpdate;
     }
 
-    public LtrRescorerBuilder(Supplier<InferenceDefinition> inferenceDefinitionSupplier) {
+    public LtrRescorerBuilder(Supplier<InferenceDefinition> inferenceDefinitionSupplier, InferenceConfigUpdate inferenceConfigUpdate) {
         this.modelId = null;
         this.inferenceDefinitionSupplier = inferenceDefinitionSupplier;
+        this.inferenceConfigUpdate = inferenceConfigUpdate == null ? new EmptyConfigUpdate() : inferenceConfigUpdate;
     }
 
     public LtrRescorerBuilder(StreamInput input) throws IOException {
         super(input);
         this.modelId = input.readString();
         this.inferenceDefinitionSupplier = null;
+        this.inferenceConfigUpdate = input.readNamedWriteable(InferenceConfigUpdate.class);
     }
 
     @Override
@@ -75,13 +90,33 @@ public class LtrRescorerBuilder extends RescorerBuilder<LtrRescorerBuilder> {
     @Override
     public RescorerBuilder<LtrRescorerBuilder> rewrite(QueryRewriteContext ctx) throws IOException {
         if (inferenceDefinitionSupplier != null) {
+            if (inferenceDefinitionSupplier.get() == null) {
+                return this;
+            }
             // probably need to make inference def serializable
+            LtrConfig updated = (LtrConfig) inferenceConfigUpdate.apply(LtrConfig.EMPTY_PARAMS);
+            InferenceDefinition inferenceDefinition = inferenceDefinitionSupplier.get();
+            List<PreProcessor> rewritten = new ArrayList<>(inferenceDefinition.processors().size());
+            boolean didRewrite = false;
+            for (PreProcessor preprocessor : inferenceDefinition.processors()) {
+                PreProcessor toAdd = preprocessor.rewriteWithParams(ctx, updated.getParams());
+                if (toAdd != preprocessor) {
+                    didRewrite = true;
+                }
+                rewritten.add(toAdd);
+            }
+            if (didRewrite) {
+                return new LtrRescorerBuilder(
+                    () -> new InferenceDefinition(inferenceDefinition.getTrainedModel(), rewritten),
+                    inferenceConfigUpdate
+                );
+            }
             return this;
         }
         SetOnce<InferenceDefinition> inferenceDefinitionSetOnce = new SetOnce<>();
         ctx.registerAsyncAction((c, l) -> {
             // TODO get inference definition from cache if possible
-            // internal action
+            // new internal action
             c.execute(
                 GetTrainedModelsAction.INSTANCE,
                 new GetTrainedModelsAction.Request(modelId, List.of(), Set.of(GetTrainedModelsAction.Includes.DEFINITION)),
@@ -98,7 +133,7 @@ public class LtrRescorerBuilder extends RescorerBuilder<LtrRescorerBuilder> {
                 }, l::onFailure)
             );
         });
-        return new LtrRescorerBuilder(inferenceDefinitionSetOnce::get);
+        return new LtrRescorerBuilder(inferenceDefinitionSetOnce::get, inferenceConfigUpdate);
     }
 
     @Override
@@ -107,13 +142,14 @@ public class LtrRescorerBuilder extends RescorerBuilder<LtrRescorerBuilder> {
             throw new IllegalStateException("supplier must be null, can't serialize suppliers, missing a rewriteAndFetch?");
         }
         out.writeString(modelId);
-
+        out.writeNamedWriteable(inferenceConfigUpdate);
     }
 
     @Override
     protected void doXContent(XContentBuilder builder, Params params) throws IOException {
         builder.startObject("ltr");
         builder.field(MODEL.getPreferredName(), modelId);
+        // TODO inference update toxcontent?!?!?!?
         builder.endObject();
     }
 
@@ -124,13 +160,18 @@ public class LtrRescorerBuilder extends RescorerBuilder<LtrRescorerBuilder> {
 
     private static class Builder {
         private String modelId;
+        private InferenceConfigUpdate inferenceConfigUpdate;
 
         public void setModelId(String modelId) {
             this.modelId = modelId;
         }
 
+        public void setInferenceConfigUpdate(InferenceConfigUpdate inferenceConfigUpdate) {
+            this.inferenceConfigUpdate = inferenceConfigUpdate;
+        }
+
         LtrRescorerBuilder build() {
-            return new LtrRescorerBuilder(modelId);
+            return new LtrRescorerBuilder(modelId, inferenceConfigUpdate);
         }
     }
 }

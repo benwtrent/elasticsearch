@@ -151,6 +151,7 @@ public class TreeInferenceModel implements InferenceModel {
         if (preparedForInference == false) {
             throw ExceptionsHelper.serverError("model is not prepared for inference");
         }
+        LOGGER.info("Infer tree {}", Arrays.toString(features));
         double[][] featureImportance = config.requestingImportance() ? featureImportance(features) : new double[0][];
 
         return buildResult(getLeaf(features), featureImportance, featureDecoderMap, config);

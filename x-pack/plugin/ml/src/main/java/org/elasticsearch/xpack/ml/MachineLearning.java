@@ -75,6 +75,7 @@ import org.elasticsearch.repositories.RepositoriesService;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestHandler;
 import org.elasticsearch.script.ScriptService;
+import org.elasticsearch.search.fetch.FetchSubPhase;
 import org.elasticsearch.threadpool.ExecutorBuilder;
 import org.elasticsearch.threadpool.ScalingExecutorBuilder;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -355,6 +356,8 @@ import org.elasticsearch.xpack.ml.job.process.normalizer.NormalizerFactory;
 import org.elasticsearch.xpack.ml.job.process.normalizer.NormalizerProcessFactory;
 import org.elasticsearch.xpack.ml.job.snapshot.upgrader.SnapshotUpgradeTaskExecutor;
 import org.elasticsearch.xpack.ml.job.task.OpenJobPersistentTasksExecutor;
+import org.elasticsearch.xpack.ml.ltr.CreateFeaturesFetchSubPhase;
+import org.elasticsearch.xpack.ml.ltr.CreateFeaturesSearchExtBuilder;
 import org.elasticsearch.xpack.ml.ltr.LtrRescorerBuilder;
 import org.elasticsearch.xpack.ml.notifications.AnomalyDetectionAuditor;
 import org.elasticsearch.xpack.ml.notifications.DataFrameAnalyticsAuditor;
@@ -2095,5 +2098,15 @@ public class MachineLearning extends Plugin
     @Override
     public List<RescorerSpec<?>> getRescorers() {
         return List.of(new RescorerSpec<>("ltr", LtrRescorerBuilder::new, LtrRescorerBuilder::fromXContent));
+    }
+
+    @Override
+    public List<SearchExtSpec<?>> getSearchExts() {
+        return List.of(new SearchExtSpec<>("ltr", CreateFeaturesSearchExtBuilder::new, CreateFeaturesSearchExtBuilder::fromXContent));
+    }
+
+    @Override
+    public List<FetchSubPhase> getFetchSubPhases(FetchPhaseConstructionContext context) {
+        return singletonList(new CreateFeaturesFetchSubPhase());
     }
 }
