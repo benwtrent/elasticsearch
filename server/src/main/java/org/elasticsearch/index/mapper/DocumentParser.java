@@ -11,9 +11,12 @@ package org.elasticsearch.index.mapper;
 import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.Query;
+import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.common.Explicit;
 import org.elasticsearch.common.regex.Regex;
 import org.elasticsearch.common.xcontent.XContentHelper;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.fielddata.FieldDataContext;
 import org.elasticsearch.index.fielddata.IndexFieldDataCache;
@@ -37,6 +40,7 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -97,9 +101,10 @@ public final class DocumentParser {
         assert context.path.pathAsText("").isEmpty() : "found leftover path elements: " + context.path.pathAsText("");
 
         Mapping dynamicUpdate = createDynamicUpdate(context);
+        List<BiConsumer<Client, ActionListener<Tuple<String, Object>>>> asyncs = createAsyncs(context);
 
         // if a mappingUpdate is required, the parsing will be triggered again
-        if (dynamicUpdate == null) {
+        if (dynamicUpdate == null && asyncs == null) {
             documentParsingObserver.setIndexName(mappingParserContext.getIndexSettings().getIndex().getName());
             documentParsingObserver.close();
         }
@@ -111,7 +116,8 @@ public final class DocumentParser {
             context.reorderParentAndGetDocs(),
             context.sourceToParse().source(),
             context.sourceToParse().getXContentType(),
-            dynamicUpdate
+            dynamicUpdate,
+            asyncs
         ) {
             @Override
             public String documentDescription() {
@@ -252,6 +258,13 @@ public final class DocumentParser {
         }
         RootObjectMapper root = rootBuilder.build(MapperBuilderContext.root(context.mappingLookup().isSourceSynthetic()));
         return context.mappingLookup().getMapping().mappingUpdate(root);
+    }
+
+    static List<BiConsumer<Client, ActionListener<Tuple<String, Object>>>> createAsyncs(DocumentParserContext context) {
+        if (context.asyncActions.isEmpty()) {
+            return null;
+        }
+        return context.asyncActions;
     }
 
     static void parseObjectOrNested(DocumentParserContext context) throws IOException {

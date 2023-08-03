@@ -973,6 +973,9 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             if (update != null) {
                 return new Engine.IndexResult(update, operation.parsedDoc().id());
             }
+            if (operation.parsedDoc().asyncActions != null && operation.parsedDoc().asyncActions.isEmpty() == false) {
+                return new Engine.IndexResult(operation.parsedDoc().asyncActions, operation.parsedDoc().id());
+            }
         } catch (Exception e) {
             // We treat any exception during parsing and or mapping update as a document level failure
             // with the exception side effects of closing the shard. Since we don't have the shard, we

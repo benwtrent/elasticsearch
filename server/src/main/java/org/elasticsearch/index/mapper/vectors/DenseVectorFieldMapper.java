@@ -173,7 +173,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
         }
     }
 
-    private static FieldType getDenseVectorFieldType(
+    public static FieldType getDenseVectorFieldType(
         int dimension,
         VectorEncoding vectorEncoding,
         VectorSimilarityFunction similarityFunction
@@ -632,7 +632,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
         ElementType.FLOAT
     );
 
-    enum VectorSimilarity {
+    public enum VectorSimilarity {
         L2_NORM(VectorSimilarityFunction.EUCLIDEAN) {
             @Override
             float score(float similarity, ElementType elementType, int dim) {
@@ -663,6 +663,10 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
         VectorSimilarity(VectorSimilarityFunction function) {
             this.function = function;
+        }
+
+        public static VectorSimilarity fromString(String value) {
+            return VectorSimilarity.valueOf(value.toUpperCase(Locale.ROOT));
         }
 
         @Override
@@ -809,6 +813,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             throw new IllegalArgumentException("Field [" + name() + "] of type [" + typeName() + "] doesn't support term queries");
         }
 
+        @Override
         public Query createKnnQuery(byte[] queryVector, int numCands, Query filter, Float similarityThreshold) {
             if (isIndexed() == false) {
                 throw new IllegalArgumentException(
@@ -846,6 +851,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             return knnQuery;
         }
 
+        @Override
         public Query createKnnQuery(float[] queryVector, int numCands, Query filter, Float similarityThreshold) {
             if (isIndexed() == false) {
                 throw new IllegalArgumentException(

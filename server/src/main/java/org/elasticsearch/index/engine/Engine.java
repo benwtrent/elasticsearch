@@ -29,6 +29,7 @@ import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.support.PlainActionFuture;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.lucene.Lucene;
@@ -44,6 +45,7 @@ import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Releasable;
 import org.elasticsearch.core.Releasables;
 import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.VersionType;
 import org.elasticsearch.index.mapper.DocumentParser;
 import org.elasticsearch.index.mapper.IdFieldMapper;
@@ -85,6 +87,7 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -389,6 +392,7 @@ public abstract class Engine implements Closeable {
         private final Exception failure;
         private final SetOnce<Boolean> freeze = new SetOnce<>();
         private final Mapping requiredMappingUpdate;
+        private final List<BiConsumer<Client, ActionListener<Tuple<String, Object>>>> asyncActions;
         private final String id;
         private Translog.Location translogLocation;
         private long took;
@@ -402,6 +406,7 @@ public abstract class Engine implements Closeable {
             this.requiredMappingUpdate = null;
             this.resultType = Type.FAILURE;
             this.id = id;
+            this.asyncActions = null;
         }
 
         protected Result(Operation.TYPE operationType, long version, long term, long seqNo, String id) {
@@ -413,6 +418,7 @@ public abstract class Engine implements Closeable {
             this.requiredMappingUpdate = null;
             this.resultType = Type.SUCCESS;
             this.id = id;
+            this.asyncActions = null;
         }
 
         protected Result(Operation.TYPE operationType, Mapping requiredMappingUpdate, String id) {
@@ -424,6 +430,23 @@ public abstract class Engine implements Closeable {
             this.requiredMappingUpdate = requiredMappingUpdate;
             this.resultType = Type.MAPPING_UPDATE_REQUIRED;
             this.id = id;
+            this.asyncActions = null;
+        }
+
+        protected Result(
+            Operation.TYPE operationType,
+            List<BiConsumer<Client, ActionListener<Tuple<String, Object>>>> asyncActions,
+            String id
+        ) {
+            this.operationType = operationType;
+            this.version = Versions.NOT_FOUND;
+            this.seqNo = UNASSIGNED_SEQ_NO;
+            this.term = UNASSIGNED_PRIMARY_TERM;
+            this.failure = null;
+            this.requiredMappingUpdate = null;
+            this.resultType = Type.ASYNC_FETCH_REQUIRED;
+            this.id = id;
+            this.asyncActions = asyncActions;
         }
 
         /** whether the operation was successful, has failed or was aborted due to a mapping update */
@@ -455,6 +478,10 @@ public abstract class Engine implements Closeable {
          */
         public Mapping getRequiredMappingUpdate() {
             return requiredMappingUpdate;
+        }
+
+        public List<BiConsumer<Client, ActionListener<Tuple<String, Object>>>> getAsyncActions() {
+            return asyncActions;
         }
 
         /** get the translog location after executing the operation */
@@ -503,7 +530,8 @@ public abstract class Engine implements Closeable {
         public enum Type {
             SUCCESS,
             FAILURE,
-            MAPPING_UPDATE_REQUIRED
+            MAPPING_UPDATE_REQUIRED,
+            ASYNC_FETCH_REQUIRED
         }
     }
 
@@ -530,6 +558,11 @@ public abstract class Engine implements Closeable {
 
         public IndexResult(Mapping requiredMappingUpdate, String id) {
             super(Operation.TYPE.INDEX, requiredMappingUpdate, id);
+            this.created = false;
+        }
+
+        public IndexResult(List<BiConsumer<Client, ActionListener<Tuple<String, Object>>>> asyncActions, String id) {
+            super(Operation.TYPE.INDEX, asyncActions, id);
             this.created = false;
         }
 

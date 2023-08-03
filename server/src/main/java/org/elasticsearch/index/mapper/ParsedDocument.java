@@ -11,13 +11,17 @@ package org.elasticsearch.index.mapper;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.StoredField;
 import org.apache.lucene.util.BytesRef;
+import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.mapper.MapperService.MergeReason;
 import org.elasticsearch.xcontent.XContentType;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 /**
  * The result of parsing a document.
@@ -37,6 +41,7 @@ public class ParsedDocument {
     private XContentType xContentType;
 
     private Mapping dynamicMappingsUpdate;
+    public List<BiConsumer<Client, ActionListener<Tuple<String, Object>>>> asyncActions;
 
     /**
      * Create a no-op tombstone document
@@ -105,6 +110,28 @@ public class ParsedDocument {
         this.source = source;
         this.dynamicMappingsUpdate = dynamicMappingsUpdate;
         this.xContentType = xContentType;
+    }
+
+    public ParsedDocument(
+        Field version,
+        SeqNoFieldMapper.SequenceIDFields seqID,
+        String id,
+        String routing,
+        List<LuceneDocument> documents,
+        BytesReference source,
+        XContentType xContentType,
+        Mapping dynamicMappingsUpdate,
+        List<BiConsumer<Client, ActionListener<Tuple<String, Object>>>> asyncActions
+    ) {
+        this.version = version;
+        this.seqID = seqID;
+        this.id = id;
+        this.routing = routing;
+        this.documents = documents;
+        this.source = source;
+        this.dynamicMappingsUpdate = dynamicMappingsUpdate;
+        this.xContentType = xContentType;
+        this.asyncActions = asyncActions;
     }
 
     public String id() {

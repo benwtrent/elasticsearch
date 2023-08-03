@@ -28,6 +28,8 @@ import org.elasticsearch.action.support.replication.TransportWriteAction;
 import org.elasticsearch.action.update.UpdateHelper;
 import org.elasticsearch.action.update.UpdateRequest;
 import org.elasticsearch.action.update.UpdateResponse;
+import org.elasticsearch.client.internal.Client;
+import org.elasticsearch.client.internal.OriginSettingClient;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.ClusterStateObserver;
 import org.elasticsearch.cluster.action.index.MappingUpdatedAction;
@@ -38,6 +40,7 @@ import org.elasticsearch.common.compress.CompressedXContent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.util.concurrent.CountDown;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Strings;
@@ -56,6 +59,7 @@ import org.elasticsearch.index.translog.Translog;
 import org.elasticsearch.indices.ExecutorSelector;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.indices.SystemIndices;
+import org.elasticsearch.ingest.IngestService;
 import org.elasticsearch.node.NodeClosedException;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportRequestOptions;
@@ -63,8 +67,11 @@ import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xcontent.XContentType;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
@@ -81,6 +88,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
     private final UpdateHelper updateHelper;
     private final MappingUpdatedAction mappingUpdatedAction;
     private final Consumer<Runnable> postWriteAction;
+    private final Client client;
 
     @Inject
     public TransportShardBulkAction(
@@ -94,7 +102,8 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
         UpdateHelper updateHelper,
         ActionFilters actionFilters,
         IndexingPressure indexingPressure,
-        SystemIndices systemIndices
+        SystemIndices systemIndices,
+        Client client
     ) {
         super(
             settings,
@@ -112,6 +121,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
             indexingPressure,
             systemIndices
         );
+        this.client = new OriginSettingClient(client, IngestService.INGEST_ORIGIN);
         this.updateHelper = updateHelper;
         this.mappingUpdatedAction = mappingUpdatedAction;
         this.postWriteAction = WriteAckDelay.create(settings, threadPool);
@@ -134,7 +144,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
         ActionListener<PrimaryResult<BulkShardRequest, BulkShardResponse>> listener
     ) {
         ClusterStateObserver observer = new ClusterStateObserver(clusterService, request.timeout(), logger, threadPool.getThreadContext());
-        performOnPrimary(request, primary, updateHelper, threadPool::absoluteTimeInMillis, (update, shardId, mappingListener) -> {
+        performOnPrimary(client, request, primary, updateHelper, threadPool::absoluteTimeInMillis, (update, shardId, mappingListener) -> {
             assert update != null;
             assert shardId != null;
             mappingUpdatedAction.updateMappingOnMaster(shardId.getIndex(), update, mappingListener);
@@ -178,6 +188,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
         String executorName
     ) {
         performOnPrimary(
+            null,
             request,
             primary,
             updateHelper,
@@ -193,6 +204,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
     }
 
     public static void performOnPrimary(
+        Client client,
         BulkShardRequest request,
         IndexShard primary,
         UpdateHelper updateHelper,
@@ -209,7 +221,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
 
             private final Executor executor = threadPool.executor(executorName);
 
-            private final BulkPrimaryExecutionContext context = new BulkPrimaryExecutionContext(request, primary);
+            private final BulkPrimaryExecutionContext context = new BulkPrimaryExecutionContext(request, primary, client);
 
             final long startBulkTime = System.nanoTime();
 
@@ -352,6 +364,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
                 request.getDynamicTemplates(),
                 request.pipelinesHaveRun() == false
             );
+            sourceToParse.additionalInfo = request.additionalData;
             result = primary.applyIndexOperationOnPrimary(
                 version,
                 request.versionType(),
@@ -404,6 +417,38 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
                     itemDoneListener.onResponse(null);
                 }
             });
+            return false;
+        } else if (result.getResultType() == Engine.Result.Type.ASYNC_FETCH_REQUIRED) {
+            logger.info("ASYNC REQUIRED?!??!!?!?");
+            IndexRequest currentRequest = context.getRequestToExecute();
+            IndexRequest request = new IndexRequest(currentRequest.index()).id(currentRequest.id())
+                .routing(currentRequest.routing())
+                .source(currentRequest.source(), currentRequest.getContentType())
+                .setIfSeqNo(currentRequest.ifSeqNo())
+                .setIfPrimaryTerm(currentRequest.ifPrimaryTerm())
+                .waitForActiveShards(currentRequest.waitForActiveShards())
+                .timeout(currentRequest.timeout())
+                .setRefreshPolicy(currentRequest.getRefreshPolicy());
+            CountDown countDown = new CountDown(result.getAsyncActions().size());
+            ActionListener<Tuple<String, Object>> internalListener = ActionListener.wrap(o -> {
+                request.additionalData.put(o.v1(), o.v2());
+                if (countDown.countDown()) {
+                    context.updateCurrent(request);
+                    context.resetForAsyncFetchRetry();
+                    itemDoneListener.onResponse(null);
+                }
+            }, e -> {
+                if (countDown.fastForward()) {
+                    onComplete(exceptionToResult(e, primary, isDelete, version, result.getId()), context, updateResult);
+                    itemDoneListener.onResponse(null);
+                }
+            });
+            // make a copy to prevent concurrent modification exception
+            List<BiConsumer<Client, ActionListener<Tuple<String, Object>>>> biConsumers = new ArrayList<>(result.getAsyncActions());
+            result.getAsyncActions().clear();
+            for (BiConsumer<Client, ActionListener<Tuple<String, Object>>> action : biConsumers) {
+                action.accept(context.client, internalListener);
+            }
             return false;
         } else {
             onComplete(result, context, updateResult);
@@ -621,6 +666,7 @@ public class TransportShardBulkAction extends TransportWriteAction<BulkShardRequ
                     Map.of(),
                     false
                 );
+                sourceToParse.additionalInfo = indexRequest.additionalData;
                 result = replica.applyIndexOperationOnReplica(
                     primaryResponse.getSeqNo(),
                     primaryResponse.getPrimaryTerm(),

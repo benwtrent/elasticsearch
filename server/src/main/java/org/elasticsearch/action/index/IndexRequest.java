@@ -41,6 +41,7 @@ import org.elasticsearch.xcontent.XContentType;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -117,6 +118,8 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
 
     private Map<String, String> dynamicTemplates = Map.of();
 
+    public Map<String, Object> additionalData = new HashMap<>();
+
     /**
      * rawTimestamp field is used on the coordinate node, it doesn't need to be serialised.
      */
@@ -166,6 +169,7 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
         if (in.getTransportVersion().onOrAfter(PIPELINES_HAVE_RUN_FIELD_ADDED)) {
             pipelinesHaveRun = in.readBoolean();
         }
+        additionalData = in.readMap(StreamInput::readString, StreamInput::readGenericValue);
     }
 
     public IndexRequest() {
@@ -726,6 +730,7 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
         if (out.getTransportVersion().onOrAfter(PIPELINES_HAVE_RUN_FIELD_ADDED)) {
             out.writeBoolean(pipelinesHaveRun);
         }
+        out.writeMap(additionalData, StreamOutput::writeString, StreamOutput::writeGenericValue);
     }
 
     @Override

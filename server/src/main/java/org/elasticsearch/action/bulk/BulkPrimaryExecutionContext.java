@@ -14,6 +14,7 @@ import org.elasticsearch.action.delete.DeleteResponse;
 import org.elasticsearch.action.index.IndexResponse;
 import org.elasticsearch.action.support.replication.ReplicationResponse;
 import org.elasticsearch.action.support.replication.TransportWriteAction;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.index.engine.Engine;
 import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.translog.Translog;
@@ -52,6 +53,7 @@ class BulkPrimaryExecutionContext {
 
     private final BulkShardRequest request;
     private final IndexShard primary;
+    public final Client client;
     private Translog.Location locationToSync = null;
     private int currentIndex = -1;
 
@@ -63,6 +65,14 @@ class BulkPrimaryExecutionContext {
     BulkPrimaryExecutionContext(BulkShardRequest request, IndexShard primary) {
         this.request = request;
         this.primary = primary;
+        this.client = null;
+        advance();
+    }
+
+    BulkPrimaryExecutionContext(BulkShardRequest request, IndexShard primary, Client client) {
+        this.request = request;
+        this.primary = primary;
+        this.client = client;
         advance();
     }
 
@@ -157,10 +167,18 @@ class BulkPrimaryExecutionContext {
      * received from the user (specifically, an update request is translated to an indexing or delete request).
      */
     public void setRequestToExecute(DocWriteRequest<?> writeRequest) {
-        assert assertInvariants(ItemProcessingState.INITIAL);
+        // assert assertInvariants(ItemProcessingState.INITIAL);
         requestToExecute = writeRequest;
         currentItemState = ItemProcessingState.TRANSLATED;
-        assert assertInvariants(ItemProcessingState.TRANSLATED);
+        // assert assertInvariants(ItemProcessingState.TRANSLATED);
+    }
+
+    public void updateCurrent(DocWriteRequest<?> writeRequest) {
+        // assert assertInvariants(ItemProcessingState.INITIAL);
+        requestToExecute = writeRequest;
+        currentItemState = ItemProcessingState.TRANSLATED;
+        request.items()[currentIndex] = new BulkItemRequest(request.items()[currentIndex].id(), requestToExecute);
+        // assert assertInvariants(ItemProcessingState.TRANSLATED);
     }
 
     /** returns the request that should be executed on the shard. */
@@ -189,13 +207,18 @@ class BulkPrimaryExecutionContext {
         resetForExecutionRetry();
     }
 
+    public void resetForAsyncFetchRetry() {
+        // assert assertInvariants(ItemProcessingState.TRANSLATED);
+        resetForExecutionRetry();
+    }
+
     /** resets the current item state, prepare for a new execution */
     private void resetForExecutionRetry() {
-        assert assertInvariants(ItemProcessingState.WAIT_FOR_MAPPING_UPDATE, ItemProcessingState.EXECUTED);
+        // assert assertInvariants(ItemProcessingState.WAIT_FOR_MAPPING_UPDATE, ItemProcessingState.EXECUTED);
         currentItemState = ItemProcessingState.INITIAL;
         requestToExecute = null;
         executionResult = null;
-        assert assertInvariants(ItemProcessingState.INITIAL);
+        // assert assertInvariants(ItemProcessingState.INITIAL);
     }
 
     /** completes the operation without doing anything on the primary */

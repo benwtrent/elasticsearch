@@ -11,7 +11,10 @@ package org.elasticsearch.index.mapper;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.index.IndexableField;
+import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.common.time.DateFormatter;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.analysis.IndexAnalyzers;
 import org.elasticsearch.xcontent.FilterXContentParserWrapper;
@@ -26,6 +29,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiConsumer;
 
 /**
  * Context used when parsing incoming documents. Holds everything that is needed to parse a document as well as
@@ -93,6 +97,7 @@ public abstract class DocumentParserContext {
     private String id;
     private Field version;
     private SeqNoFieldMapper.SequenceIDFields seqID;
+    public List<BiConsumer<Client, ActionListener<Tuple<String, Object>>>> asyncActions = new ArrayList<>();
 
     private DocumentParserContext(
         MappingLookup mappingLookup,

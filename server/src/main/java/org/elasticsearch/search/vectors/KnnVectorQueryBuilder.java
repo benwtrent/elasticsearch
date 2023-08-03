@@ -16,8 +16,6 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.mapper.MappedFieldType;
-import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
-import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.DenseVectorFieldType;
 import org.elasticsearch.index.query.AbstractQueryBuilder;
 import org.elasticsearch.index.query.MatchNoneQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
@@ -227,12 +225,6 @@ public class KnnVectorQueryBuilder extends AbstractQueryBuilder<KnnVectorQueryBu
             throw new IllegalArgumentException("field [" + fieldName + "] does not exist in the mapping");
         }
 
-        if (fieldType instanceof DenseVectorFieldType == false) {
-            throw new IllegalArgumentException(
-                "[" + NAME + "] queries are only supported on [" + DenseVectorFieldMapper.CONTENT_TYPE + "] fields"
-            );
-        }
-
         BooleanQuery.Builder builder = new BooleanQuery.Builder();
         for (QueryBuilder query : this.filterQueries) {
             builder.add(query.toQuery(context), BooleanClause.Occur.FILTER);
@@ -240,10 +232,9 @@ public class KnnVectorQueryBuilder extends AbstractQueryBuilder<KnnVectorQueryBu
         BooleanQuery booleanQuery = builder.build();
         Query filterQuery = booleanQuery.clauses().isEmpty() ? null : booleanQuery;
 
-        DenseVectorFieldType vectorFieldType = (DenseVectorFieldType) fieldType;
         return queryVector != null
-            ? vectorFieldType.createKnnQuery(queryVector, numCands, filterQuery, vectorSimilarity)
-            : vectorFieldType.createKnnQuery(byteQueryVector, numCands, filterQuery, vectorSimilarity);
+            ? fieldType.createKnnQuery(queryVector, numCands, filterQuery, vectorSimilarity)
+            : fieldType.createKnnQuery(byteQueryVector, numCands, filterQuery, vectorSimilarity);
     }
 
     @Override

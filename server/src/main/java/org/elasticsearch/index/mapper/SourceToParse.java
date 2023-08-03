@@ -13,6 +13,7 @@ import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.xcontent.XContentType;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
@@ -28,6 +29,8 @@ public class SourceToParse {
 
     private final Map<String, String> dynamicTemplates;
     private boolean toBeReported;
+
+    public Map<String, Object> additionalInfo = new HashMap<>();
 
     public SourceToParse(
         @Nullable String id,

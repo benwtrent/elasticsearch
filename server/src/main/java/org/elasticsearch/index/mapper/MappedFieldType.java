@@ -386,6 +386,14 @@ public abstract class MappedFieldType {
         );
     }
 
+    public Query createKnnQuery(byte[] queryVector, int numCands, Query filter, Float similarityThreshold) {
+        throw new IllegalArgumentException("[" + name() + "] does not support knn queries");
+    }
+
+    public Query createKnnQuery(float[] queryVector, int numCands, Query filter, Float similarityThreshold) {
+        throw new IllegalArgumentException("[" + name() + "] does not support knn queries");
+    }
+
     /**
      * Create an {@link IntervalsSource} for the given term.
      */
