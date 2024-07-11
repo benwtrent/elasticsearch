@@ -282,3 +282,77 @@
         index: test_alias
         body: {"aggs": {"sig_terms": {"significant_terms": {"field": "field1"}}}}
   - match: { aggregations.sig_terms.bg_count: 2 }
+
+---
+"Test sig terms bucket filtering":
+  - requires:
+      cluster_features: ["aggregations.significant_terms.bucket_properties"]
+      reason: requires the significant terms bucket properties
+  - do:
+      indices.create:
+        index:  goodbad
+        body:
+          settings:
+            number_of_shards: "1"
+          mappings:
+            properties:
+              class:
+                type: keyword
+
+  - do:
+      bulk:
+        index: goodbad
+        refresh: true
+        body:
+          - '{ "index": {"_id": "1"} }'
+          - '{ "class": "good" }'
+          - '{ "index": {"_id": "2"} }'
+          - '{ "class": "good" }'
+          - '{ "index": {"_id": "3"} }'
+          - '{ "class": "bad" }'
+          - '{ "index": {"_id": "4"} }'
+          - '{ "class": "bad" }'
+          - '{ "index": {"_id": "5"} }'
+          - '{ "class": "good" }'
+          - '{ "index": {"_id": "6"} }'
+          - '{ "class": "bad" }'
+          - '{ "index": {"_id": "7"} }'
+          - '{ "class": "bad" }'
+  - do:
+      search:
+        index: goodbad
+        size: 0
+        body: >
+            {
+              "size": 0,
+              "aggs": {
+                "class": {
+                  "terms": {
+                    "field": "class"
+                  },
+                  "aggs": {
+                    "sig_term": {
+                      "significant_terms": {
+                        "field": "class"
+                      },
+                      "aggs": {
+                        "selector": {
+                          "bucket_selector": {
+                            "buckets_path": {
+                              "v": "_sig_score"
+                            },
+                            "gap_policy": "insert_zeros",
+                            "script": "params.v > 1"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+  - match: {aggregations.class.buckets.0.key: bad}
+  - length : {aggregations.class.buckets.0.sig_term.buckets: 0}
+  - match: {aggregations.class.buckets.1.key: good}
+  - length : {aggregations.class.buckets.1.sig_term.buckets: 1}

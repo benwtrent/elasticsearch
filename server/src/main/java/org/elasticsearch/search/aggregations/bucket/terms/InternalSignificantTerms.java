@@ -11,6 +11,7 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.util.ObjectObjectPagedHashMap;
 import org.elasticsearch.core.Releasables;
+import org.elasticsearch.features.NodeFeature;
 import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.search.aggregations.AggregationErrors;
 import org.elasticsearch.search.aggregations.AggregationReduceContext;
@@ -40,7 +41,11 @@ public abstract class InternalSignificantTerms<A extends InternalSignificantTerm
     implements
         SignificantTerms {
 
+    public static final NodeFeature EXTRACTABLE_BUCKET_PROPERTIES = new NodeFeature("aggregations.significant_terms.bucket_properties");
+
     public static final String SCORE = "score";
+    public static final String BUCKET_SIGNIFICANCE_SCORE_PROPERTY = "_sig_score";
+    public static final String BUCKET_BACKGROUND_COUNT_PROPERTY = "_bg_count";
     public static final String BG_COUNT = "bg_count";
 
     @SuppressWarnings("PMD.ConstructorCallsOverridableMethod")
@@ -166,6 +171,26 @@ public abstract class InternalSignificantTerms<A extends InternalSignificantTerm
             aggregations.toXContentInternal(builder, params);
             builder.endObject();
             return builder;
+        }
+
+        @Override
+        public Object getProperty(String containingAggName, List<String> path) {
+            if (path.isEmpty()) {
+                return this;
+            }
+            // we are gathering properties directly in this bucket, since `score` & `bg_count` are specialized
+            // field names (meaning sub-aggs could have the same name), we need to be lenient here
+            // assuming intent that if the size is `1`, these individual properties are desired.
+            if (path.size() == 1) {
+                String property = path.get(0);
+                if (property.equals(BUCKET_SIGNIFICANCE_SCORE_PROPERTY)) {
+                    return getSignificanceScore();
+                }
+                if (property.equals(BUCKET_BACKGROUND_COUNT_PROPERTY)) {
+                    return getSupersetDf();
+                }
+            }
+            return super.getProperty(containingAggName, path);
         }
 
         protected abstract XContentBuilder keyToXContent(XContentBuilder builder) throws IOException;

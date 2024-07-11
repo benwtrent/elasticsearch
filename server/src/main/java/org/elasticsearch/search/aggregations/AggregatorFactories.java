@@ -500,7 +500,8 @@ public class AggregatorFactories {
                 for (String bucketsPath : bucketsPaths) {
                     List<AggregationPath.PathElement> bucketsPathElements = AggregationPath.parse(bucketsPath).getPathElements();
                     String firstAggName = bucketsPathElements.get(0).name();
-                    if (bucketsPath.equals("_count") || bucketsPath.equals("_key")) {
+                    // TODO Is there a better way to validate bucket properties?
+                    if (InternalMultiBucketAggregation.BUCKET_PROPERTIES.contains(bucketsPath)) {
                         continue;
                     } else if (aggBuildersMap.containsKey(firstAggName)) {
                         AggregationBuilder aggBuilder = aggBuildersMap.get(firstAggName);

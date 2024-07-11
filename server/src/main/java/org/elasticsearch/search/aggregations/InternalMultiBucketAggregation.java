@@ -19,13 +19,28 @@ import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
+
+import static org.elasticsearch.search.aggregations.bucket.terms.InternalSignificantTerms.BUCKET_BACKGROUND_COUNT_PROPERTY;
+import static org.elasticsearch.search.aggregations.bucket.terms.InternalSignificantTerms.BUCKET_SIGNIFICANCE_SCORE_PROPERTY;
 
 @SuppressWarnings("rawtypes")
 public abstract class InternalMultiBucketAggregation<
     A extends InternalMultiBucketAggregation,
     B extends InternalMultiBucketAggregation.InternalBucket> extends InternalAggregation implements MultiBucketsAggregation {
+
+    public static final String BUCKET_COUNT_PROP = "_count";
+    public static final String BUCKET_KEY_PROP = "_key";
+
+    // TODO Is there a better way to validate properties?
+    public static final Set<String> BUCKET_PROPERTIES = Set.of(
+        BUCKET_COUNT_PROP,
+        BUCKET_KEY_PROP,
+        BUCKET_SIGNIFICANCE_SCORE_PROPERTY,
+        BUCKET_BACKGROUND_COUNT_PROPERTY
+    );
 
     /**
      * When we pre-count the empty buckets we report them periodically
@@ -242,12 +257,12 @@ public abstract class InternalMultiBucketAggregation<
             }
             InternalAggregations aggregations = getAggregations();
             String aggName = path.get(0);
-            if (aggName.equals("_count")) {
+            if (aggName.equals(BUCKET_COUNT_PROP)) {
                 if (path.size() > 1) {
                     throw new InvalidAggregationPathException("_count must be the last element in the path");
                 }
                 return getDocCount();
-            } else if (aggName.equals("_key")) {
+            } else if (aggName.equals(BUCKET_KEY_PROP)) {
                 if (path.size() > 1) {
                     throw new InvalidAggregationPathException("_key must be the last element in the path");
                 }
