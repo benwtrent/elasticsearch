@@ -63,7 +63,7 @@
 23:-XX:CompileCommand=dontinline,java/lang/invoke/MethodHandle.asTypeUncached
 
 # Lucene 10: apply MADV_NORMAL advice to enable more aggressive readahead
--Dorg.apache.lucene.store.defaultReadAdvice=normal
+# don't specify for experiment-Dorg.apache.lucene.store.defaultReadAdvice=normal
 
 ## heap dumps
 
