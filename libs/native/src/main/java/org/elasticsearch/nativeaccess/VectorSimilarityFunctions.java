@@ -40,4 +40,6 @@ public interface VectorSimilarityFunctions {
      * vector data bytes. The third argument is the length of the vector data.
      */
     MethodHandle squareDistanceHandle7u();
+
+    MethodHandle int4BitDotProductHandle();
 }

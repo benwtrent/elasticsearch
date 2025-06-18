@@ -9,6 +9,8 @@
 
 package org.elasticsearch.index.codec.vectors;
 
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.apache.lucene.codecs.hnsw.DefaultFlatVectorScorer;
 import org.apache.lucene.codecs.hnsw.FlatFieldVectorsWriter;
 import org.apache.lucene.codecs.hnsw.FlatVectorsFormat;
@@ -47,6 +49,7 @@ import static org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.MAX_
 
 public class ES814ScalarQuantizedVectorsFormat extends FlatVectorsFormat {
 
+    protected static final Logger logger = LogManager.getLogger(ES814ScalarQuantizedVectorsFormat.class);
     static final String NAME = "ES814ScalarQuantizedVectorsFormat";
     private static final int ALLOWED_BITS = (1 << 8) | (1 << 7) | (1 << 4);
 

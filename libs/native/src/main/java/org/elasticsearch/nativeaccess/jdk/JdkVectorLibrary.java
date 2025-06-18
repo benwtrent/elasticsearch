@@ -31,6 +31,7 @@ public final class JdkVectorLibrary implements VectorLibrary {
 
     static final MethodHandle dot7u$mh;
     static final MethodHandle sqr7u$mh;
+    static final MethodHandle int4Bit$mh;
 
     static final VectorSimilarityFunctions INSTANCE;
 
@@ -65,6 +66,11 @@ public final class JdkVectorLibrary implements VectorLibrary {
                         LinkerHelperUtil.critical()
                     );
                 }
+                int4Bit$mh = downcallHandle(
+                    "int4Bit",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT),
+                    LinkerHelperUtil.critical()
+                );
                 INSTANCE = new JdkVectorSimilarityFunctions();
             } else {
                 if (caps < 0) {
@@ -74,6 +80,7 @@ public final class JdkVectorLibrary implements VectorLibrary {
                 }
                 dot7u$mh = null;
                 sqr7u$mh = null;
+                int4Bit$mh = null;
                 INSTANCE = null;
             }
         } catch (Throwable t) {
@@ -129,6 +136,11 @@ public final class JdkVectorLibrary implements VectorLibrary {
             return sqr7u(a, b, length);
         }
 
+        static int int4BitDotProd(MemorySegment a, MemorySegment b, int length) {
+            assert length >= 0;
+            return int4Bit(a, b, length);
+        }
+
         private static int dot7u(MemorySegment a, MemorySegment b, int length) {
             try {
                 return (int) JdkVectorLibrary.dot7u$mh.invokeExact(a, b, length);
@@ -145,8 +157,17 @@ public final class JdkVectorLibrary implements VectorLibrary {
             }
         }
 
+        private static int int4Bit(MemorySegment a, MemorySegment b, int length) {
+            try {
+                return (int) JdkVectorLibrary.int4Bit$mh.invokeExact(a, b, length);
+            } catch (Throwable t) {
+                throw new AssertionError(t);
+            }
+        }
+
         static final MethodHandle DOT_HANDLE_7U;
         static final MethodHandle SQR_HANDLE_7U;
+        static final MethodHandle DOT_HANDLE_4B;
 
         static {
             try {
@@ -154,6 +175,7 @@ public final class JdkVectorLibrary implements VectorLibrary {
                 var mt = MethodType.methodType(int.class, MemorySegment.class, MemorySegment.class, int.class);
                 DOT_HANDLE_7U = lookup.findStatic(JdkVectorSimilarityFunctions.class, "dotProduct7u", mt);
                 SQR_HANDLE_7U = lookup.findStatic(JdkVectorSimilarityFunctions.class, "squareDistance7u", mt);
+                DOT_HANDLE_4B = lookup.findStatic(JdkVectorSimilarityFunctions.class, "int4BitDotProd", mt);
             } catch (NoSuchMethodException | IllegalAccessException e) {
                 throw new RuntimeException(e);
             }
@@ -167,6 +189,11 @@ public final class JdkVectorLibrary implements VectorLibrary {
         @Override
         public MethodHandle squareDistanceHandle7u() {
             return SQR_HANDLE_7U;
+        }
+
+        @Override
+        public MethodHandle int4BitDotProductHandle() {
+            return DOT_HANDLE_4B;
         }
     }
 }

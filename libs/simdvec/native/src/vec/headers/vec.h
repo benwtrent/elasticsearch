@@ -20,3 +20,5 @@ EXPORT int vec_caps();
 EXPORT int32_t dot7u(int8_t* a, int8_t* b, size_t dims);
 
 EXPORT int32_t sqr7u(int8_t *a, int8_t *b, size_t length);
+
+EXPORT int32_t int4Bit(uint8_t* query, uint8_t* doc, size_t dims);
