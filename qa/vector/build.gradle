@@ -49,6 +49,11 @@ tasks.register("checkVec", JavaExec) {
   if (System.getenv("DO_PROFILING") != null) {
     jvmArgs '-XX:StartFlightRecording=dumponexit=true,maxsize=250M,filename=knn.jfr,settings=profile.jfc'
   }
+  // log the java version
+  doFirst {
+    println "Java version: ${System.getProperty("java.version")}"
+    println "RunTime Java version: ${buildParams.getRuntimeJavaVersion().map { it.majorVersion.toInteger() }.get()}"
+  }
 }
 
 tasks.register("checkVecHelp", JavaExec) {
