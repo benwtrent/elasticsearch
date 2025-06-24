@@ -53,9 +53,9 @@ public class Similarities {
         }
     }
 
-    public static int int4BitDotProduct(MemorySegment a, MemorySegment b, long offset, int length) {
+    public static int int4BitDotProduct(MemorySegment a, MemorySegment b, long offset, MemorySegment scores, int count, int length) {
         try {
-            return (int) INT4_BIT_DP.invokeExact(a, b, offset, length);
+            return (int) INT4_BIT_DP.invokeExact(a, b, offset, scores, count, length);
         } catch (Throwable e) {
             if (e instanceof Error err) {
                 throw err;

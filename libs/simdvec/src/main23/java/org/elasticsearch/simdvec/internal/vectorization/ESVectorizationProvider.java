@@ -13,8 +13,8 @@ import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.util.Constants;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
-import org.elasticsearch.simdvec.ES91OSQVectorsScorer;
 import org.elasticsearch.simdvec.ES91Int4VectorsScorer;
+import org.elasticsearch.simdvec.ES91OSQVectorsScorer;
 
 import java.io.IOException;
 import java.util.Locale;

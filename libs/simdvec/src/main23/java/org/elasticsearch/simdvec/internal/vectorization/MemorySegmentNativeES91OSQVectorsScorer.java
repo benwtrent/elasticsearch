@@ -51,6 +51,7 @@ public final class MemorySegmentNativeES91OSQVectorsScorer extends ES91OSQVector
     public static int discretize(int value, int bucket) {
         return ((value + (bucket - 1)) / bucket) * bucket;
     }
+
     private final int discretizedDimensions;
 
     public MemorySegmentNativeES91OSQVectorsScorer(IndexInput in, int dimensions, MemorySegment memorySegment) {
@@ -138,12 +139,10 @@ public final class MemorySegmentNativeES91OSQVectorsScorer extends ES91OSQVector
     }
 
     private long quantizeScore128(byte[] q) throws IOException {
-        return int4BitDotProduct(
-            MemorySegment.ofArray(q),
-            memorySegment,
-            in.getFilePointer(),
-            discretizedDimensions
-        );
+        float[] scores = new float[1];
+        MemorySegment scoresSegment = MemorySegment.ofArray(scores);
+        int4BitDotProduct(MemorySegment.ofArray(q), memorySegment, in.getFilePointer(), scoresSegment, 1, discretizedDimensions);
+        return (long) scores[0];
     }
 
     @Override
@@ -165,14 +164,8 @@ public final class MemorySegmentNativeES91OSQVectorsScorer extends ES91OSQVector
     private void quantizeScore128Bulk(byte[] q, int count, float[] scores) throws IOException {
         long initialOffset = in.getFilePointer();
         MemorySegment query = MemorySegment.ofArray(q);
-        for (int iter = 0; iter < count; iter++) {
-            scores[iter] = int4BitDotProduct(
-                query,
-                memorySegment,
-                initialOffset + iter * (discretizedDimensions / 8),
-                discretizedDimensions
-            );
-        }
+        MemorySegment scoresSegment = MemorySegment.ofArray(scores);
+        int4BitDotProduct(query, memorySegment, initialOffset, scoresSegment, count, discretizedDimensions);
         in.skipBytes(count * (discretizedDimensions / 8));
     }
 

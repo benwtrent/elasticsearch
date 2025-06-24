@@ -69,7 +69,7 @@ public final class JdkVectorLibrary implements VectorLibrary {
                 }
                 int4Bit$mh = downcallHandle(
                     "int4Bit",
-                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT),
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT, JAVA_INT),
                     LinkerHelperUtil.critical()
                 );
                 INSTANCE = new JdkVectorSimilarityFunctions();
@@ -137,9 +137,9 @@ public final class JdkVectorLibrary implements VectorLibrary {
             return sqr7u(a, b, length);
         }
 
-        static int int4BitDotProd(MemorySegment a, MemorySegment b, long offset, int length) {
+        static int int4BitDotProd(MemorySegment a, MemorySegment b, long offset, MemorySegment s, int count, int length) {
             assert length >= 0;
-            return int4Bit(a, b, offset, length);
+            return int4Bit(a, b, offset, s, count, length);
         }
 
         private static int dot7u(MemorySegment a, MemorySegment b, int length) {
@@ -158,9 +158,9 @@ public final class JdkVectorLibrary implements VectorLibrary {
             }
         }
 
-        private static int int4Bit(MemorySegment a, MemorySegment b, long offset, int length) {
+        private static int int4Bit(MemorySegment a, MemorySegment b, long offset, MemorySegment s, int count, int length) {
             try {
-                return (int) JdkVectorLibrary.int4Bit$mh.invokeExact(a, b, offset, length);
+                return (int) JdkVectorLibrary.int4Bit$mh.invokeExact(a, b, offset, s, count, length);
             } catch (Throwable t) {
                 throw new AssertionError(t);
             }
@@ -174,7 +174,15 @@ public final class JdkVectorLibrary implements VectorLibrary {
             try {
                 var lookup = MethodHandles.lookup();
                 var mt = MethodType.methodType(int.class, MemorySegment.class, MemorySegment.class, int.class);
-                var mt2 = MethodType.methodType(int.class, MemorySegment.class, MemorySegment.class, long.class, int.class);
+                var mt2 = MethodType.methodType(
+                    int.class,
+                    MemorySegment.class,
+                    MemorySegment.class,
+                    long.class,
+                    MemorySegment.class,
+                    int.class,
+                    int.class
+                );
                 DOT_HANDLE_7U = lookup.findStatic(JdkVectorSimilarityFunctions.class, "dotProduct7u", mt);
                 SQR_HANDLE_7U = lookup.findStatic(JdkVectorSimilarityFunctions.class, "squareDistance7u", mt);
                 DOT_HANDLE_4B = lookup.findStatic(JdkVectorSimilarityFunctions.class, "int4BitDotProd", mt2);

@@ -133,30 +133,32 @@ EXPORT int32_t sqr7u(int8_t* a, int8_t* b, size_t dims) {
     return res;
 }
 
-EXPORT int32_t int4Bit(uint8_t* query, uint8_t* doc, int64_t offset, size_t dims) {
+EXPORT int32_t int4Bit(uint8_t* query, uint8_t* doc, int64_t offset, float32_t* scores, size_t count, size_t dims) {
     const size_t bits = (dims + 7) / 8;
     const size_t stride = (bits / 8) * 8;
     int32_t res = 0;
     int i = 0;
     // assumption that the query bits are 4, and doc bits are singular
-    int32_t dot_qo = 0;
-    for (size_t j = 0; j < 4; j++) {
-      const uint8_t* query_j = query + j * bits;
-
-      uint64_t count_dot = 0;
-      for (size_t i = 0; i < stride; i += 8) {
-          const uint64_t qv = *(const uint64_t*)(query_j + i);
-          const uint64_t yv = *(const uint64_t*)(doc + i + offset);
-          count_dot += __builtin_popcountll(qv & yv);
+    for (size_t idx = 0; idx < count; idx++) {
+      int32_t dot_qo = 0;
+      int64_t currOffset = offset + idx * bits;
+      for (size_t j = 0; j < 4; j++) {
+       const uint8_t* query_j = query + j * bits;
+       uint64_t count_dot = 0;
+       for (size_t i = 0; i < stride; i += 8) {
+         const uint64_t qv = *(const uint64_t*)(query_j + i);
+         const uint64_t yv = *(const uint64_t*)(doc + i + currOffset);
+         count_dot += __builtin_popcountll(qv & yv);
+       }
+       for (size_t i = stride; i < bits; i++) {
+         const uint8_t qv = *(query_j + i);
+         const uint8_t yv = *(doc + i + currOffset);
+         count_dot += __builtin_popcountll(qv & yv);
+       }
+       dot_qo += (count_dot << j);
       }
-
-      for (size_t i = stride; i < bits; i++) {
-          const uint8_t qv = *(query_j + i);
-          const uint8_t yv = *(doc + i + offset);
-          count_dot += __builtin_popcountll(qv & yv);
-      }
-      dot_qo += (count_dot << j);
+      scores[idx] = (float32_t)dot_qo;
     }
+    return count;
+ }
 
-    return dot_qo;
-}

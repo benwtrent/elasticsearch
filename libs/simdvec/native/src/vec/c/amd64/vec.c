@@ -188,6 +188,6 @@ EXPORT int32_t sqr7u(int8_t* a, int8_t* b, size_t dims) {
     return res;
 }
 
-EXPORT int32_t int4Bit(uint8_t* query, uint8_t* doc, int64_t offset, size_t dims) {
+EXPORT int32_t int4Bit(uint8_t* query, uint8_t* doc, int64_t offset, float32_t* scores, size_t count, size_t dims) {
   return 0;
 }
