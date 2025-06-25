@@ -17,6 +17,7 @@ import org.apache.lucene.codecs.hnsw.FlatVectorsFormat;
 import org.apache.lucene.codecs.lucene99.Lucene99FlatVectorsFormat;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.SegmentWriteState;
+import org.elasticsearch.index.codec.vectors.es818.DirectIOLucene99FlatVectorsFormat;
 
 import java.io.IOException;
 
@@ -43,6 +44,7 @@ import java.io.IOException;
  *
  */
 public class IVFVectorsFormat extends KnnVectorsFormat {
+    static final boolean USE_DIRECT_IO = Boolean.parseBoolean(System.getProperty("vector.rescoring.directio", "true"));
 
     public static final String NAME = "IVFVectorsFormat";
     // centroid ordinals -> centroid values, offsets
@@ -55,9 +57,9 @@ public class IVFVectorsFormat extends KnnVectorsFormat {
     public static final int VERSION_START = 0;
     public static final int VERSION_CURRENT = VERSION_START;
 
-    private static final FlatVectorsFormat rawVectorFormat = new Lucene99FlatVectorsFormat(
-        FlatVectorScorerUtil.getLucene99FlatVectorsScorer()
-    );
+    private static final FlatVectorsFormat rawVectorFormat = USE_DIRECT_IO
+        ? new DirectIOLucene99FlatVectorsFormat(FlatVectorScorerUtil.getLucene99FlatVectorsScorer())
+        : new Lucene99FlatVectorsFormat(FlatVectorScorerUtil.getLucene99FlatVectorsScorer());
 
     // This dynamically sets the cluster probe based on the `k` requested and the number of clusters.
     // useful when searching with 'efSearch' type parameters instead of requiring a specific nprobe.
