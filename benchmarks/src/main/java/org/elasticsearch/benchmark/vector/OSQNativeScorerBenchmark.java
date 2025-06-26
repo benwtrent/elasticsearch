@@ -54,8 +54,9 @@ public class OSQNativeScorerBenchmark {
     int dims;
 
     int length;
+    int bulkSize = ES91OSQVectorsScorer.BULK_SIZE;
 
-    int numVectors = ES91OSQVectorsScorer.BULK_SIZE;
+    int numVectors = bulkSize;
     int numQueries = 10;
 
     byte[][] binaryVectors;
@@ -81,8 +82,8 @@ public class OSQNativeScorerBenchmark {
 
         Directory dir = new MMapDirectory(Files.createTempDirectory("vectorData"));
         IndexOutput out = dir.createOutput("vectors", IOContext.DEFAULT);
-        for (int i = 0; i < numVectors; i += ES91OSQVectorsScorer.BULK_SIZE) {
-            for (int j = 0; j < ES91OSQVectorsScorer.BULK_SIZE; j++) {
+        for (int i = 0; i < numVectors; i += bulkSize) {
+            for (int j = 0; j < bulkSize; j++) {
                 out.writeBytes(binaryVectors[i + j], 0, binaryVectors[i + j].length);
             }
         }
@@ -95,8 +96,8 @@ public class OSQNativeScorerBenchmark {
         }
 
         scratch = new byte[length];
-        scorer = ESVectorizationProvider.getInstance().newES91OSQVectorsScorer(in, dims);
-        scratchScores = new float[16];
+        scorer = ESVectorizationProvider.getInstance().newES91OSQVectorsScorer(in, length);
+        scratchScores = new float[bulkSize];
     }
 
     @Benchmark
@@ -104,10 +105,10 @@ public class OSQNativeScorerBenchmark {
     public void scoreFromMemorySegmentBulk(Blackhole bh) throws IOException {
         for (int j = 0; j < numQueries; j++) {
             in.seek(0);
-            for (int i = 0; i < numVectors; i += 16) {
+            for (int i = 0; i < numVectors; i += bulkSize) {
                 scorer.quantizeScoreBulk(
                     binaryQueries[j],
-                    16,
+                    bulkSize,
                     scratchScores
                 );
                 bh.consume(scratchScores);

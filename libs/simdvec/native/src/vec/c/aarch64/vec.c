@@ -153,7 +153,7 @@ EXPORT int32_t int4Bit(uint8_t* query, uint8_t* doc, int64_t offset, float32_t* 
        for (size_t i = stride; i < bits; i++) {
          const uint8_t qv = *(query_j + i);
          const uint8_t yv = *(doc_idx + i);
-         count_dot += __builtin_popcountll(qv & yv);
+         count_dot += __builtin_popcount(qv & yv);
        }
        dot_qo += (count_dot << j);
       }
