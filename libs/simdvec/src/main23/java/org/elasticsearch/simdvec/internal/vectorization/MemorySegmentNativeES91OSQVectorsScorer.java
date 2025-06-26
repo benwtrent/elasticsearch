@@ -139,10 +139,43 @@ public final class MemorySegmentNativeES91OSQVectorsScorer extends ES91OSQVector
     }
 
     private long quantizeScore128(byte[] q) throws IOException {
-        float[] scores = new float[1];
-        MemorySegment scoresSegment = MemorySegment.ofArray(scores);
-        int4BitDotProduct(MemorySegment.ofArray(q), memorySegment, in.getFilePointer(), scoresSegment, 1, discretizedDimensions);
-        return (long) scores[0];
+        long subRet0 = 0;
+        long subRet1 = 0;
+        long subRet2 = 0;
+        long subRet3 = 0;
+        int i = 0;
+        long offset = in.getFilePointer();
+
+        var sum0 = IntVector.zero(INT_SPECIES_128);
+        var sum1 = IntVector.zero(INT_SPECIES_128);
+        var sum2 = IntVector.zero(INT_SPECIES_128);
+        var sum3 = IntVector.zero(INT_SPECIES_128);
+        int limit = ByteVector.SPECIES_128.loopBound(length);
+        for (; i < limit; i += ByteVector.SPECIES_128.length(), offset += INT_SPECIES_128.vectorByteSize()) {
+            var vd = IntVector.fromMemorySegment(INT_SPECIES_128, memorySegment, offset, ByteOrder.LITTLE_ENDIAN);
+            var vq0 = ByteVector.fromArray(BYTE_SPECIES_128, q, i).reinterpretAsInts();
+            var vq1 = ByteVector.fromArray(BYTE_SPECIES_128, q, i + length).reinterpretAsInts();
+            var vq2 = ByteVector.fromArray(BYTE_SPECIES_128, q, i + length * 2).reinterpretAsInts();
+            var vq3 = ByteVector.fromArray(BYTE_SPECIES_128, q, i + length * 3).reinterpretAsInts();
+            sum0 = sum0.add(vd.and(vq0).lanewise(VectorOperators.BIT_COUNT));
+            sum1 = sum1.add(vd.and(vq1).lanewise(VectorOperators.BIT_COUNT));
+            sum2 = sum2.add(vd.and(vq2).lanewise(VectorOperators.BIT_COUNT));
+            sum3 = sum3.add(vd.and(vq3).lanewise(VectorOperators.BIT_COUNT));
+        }
+        subRet0 += sum0.reduceLanes(VectorOperators.ADD);
+        subRet1 += sum1.reduceLanes(VectorOperators.ADD);
+        subRet2 += sum2.reduceLanes(VectorOperators.ADD);
+        subRet3 += sum3.reduceLanes(VectorOperators.ADD);
+        // tail as bytes
+        in.seek(offset);
+        for (; i < length; i++) {
+            int dValue = in.readByte() & 0xFF;
+            subRet0 += Integer.bitCount((dValue & q[i]) & 0xFF);
+            subRet1 += Integer.bitCount((dValue & q[i + length]) & 0xFF);
+            subRet2 += Integer.bitCount((dValue & q[i + 2 * length]) & 0xFF);
+            subRet3 += Integer.bitCount((dValue & q[i + 3 * length]) & 0xFF);
+        }
+        return subRet0 + (subRet1 << 1) + (subRet2 << 2) + (subRet3 << 3);
     }
 
     @Override
