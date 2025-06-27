@@ -35,6 +35,8 @@ import java.nio.file.Files;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
+import static org.elasticsearch.simdvec.ES91OSQVectorsScorer.BULK_SIZE;
+
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
@@ -54,9 +56,9 @@ public class OSQNativeScorerBenchmark {
     int dims;
 
     int length;
-    int bulkSize = ES91OSQVectorsScorer.BULK_SIZE;
+    int bulkSize = BULK_SIZE;
 
-    int numVectors = bulkSize;
+    int numVectors = bulkSize * 12;
     int numQueries = 10;
 
     byte[][] binaryVectors;
@@ -101,8 +103,24 @@ public class OSQNativeScorerBenchmark {
     }
 
     @Benchmark
-    @Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
+    @Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector", "-Dorg.elasticsearch.nativeaccess.enableVectorLibrary=false" })
     public void scoreFromMemorySegmentBulk(Blackhole bh) throws IOException {
+        for (int j = 0; j < numQueries; j++) {
+            in.seek(0);
+            for (int i = 0; i < numVectors; i += bulkSize) {
+                scorer.quantizeScoreBulk(
+                    binaryQueries[j],
+                    bulkSize,
+                    scratchScores
+                );
+                bh.consume(scratchScores);
+            }
+        }
+    }
+
+    @Benchmark
+    @Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
+    public void scoreFromMemoryNativeSegmentBulk(Blackhole bh) throws IOException {
         for (int j = 0; j < numQueries; j++) {
             in.seek(0);
             for (int i = 0; i < numVectors; i += bulkSize) {

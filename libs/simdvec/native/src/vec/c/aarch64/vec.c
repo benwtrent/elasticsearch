@@ -133,7 +133,7 @@ EXPORT int32_t sqr7u(int8_t* a, int8_t* b, size_t dims) {
     return res;
 }
 
-EXPORT int32_t int4Bit(uint8_t* query, uint8_t* doc, int64_t offset, float32_t* scores, size_t count, size_t dims) {
+EXPORT int32_t int4Bit(uint8_t* query, uint8_t* doc, int64_t offset, int* scores, int count, int dims) {
     const size_t bits = dims / 8;
     const size_t stride = (bits / 8) * 8;
     int32_t res = 0;
@@ -153,11 +153,11 @@ EXPORT int32_t int4Bit(uint8_t* query, uint8_t* doc, int64_t offset, float32_t* 
        for (size_t i = stride; i < bits; i++) {
          const uint8_t qv = *(query_j + i);
          const uint8_t yv = *(doc_idx + i);
-         count_dot += __builtin_popcount(qv & yv);
+         count_dot += __builtin_popcountll(qv & yv);
        }
        dot_qo += (count_dot << j);
       }
-      scores[idx] = (float32_t)dot_qo;
+      scores[idx] = dot_qo;
     }
     return count;
  }
