@@ -33,18 +33,18 @@ import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.hnsw.NeighborQueue;
 import org.elasticsearch.core.IOUtils;
-import org.elasticsearch.search.vectors.IVFKnnSearchStrategy;
+import org.elasticsearch.search.vectors.DiskBBQKnnSearchStrategy;
 
 import java.io.IOException;
 import java.util.function.IntPredicate;
 
 import static org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsReader.SIMILARITY_FUNCTIONS;
-import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.DYNAMIC_NPROBE;
+import static org.elasticsearch.index.codec.vectors.DiskBBQVectorsFormat.DYNAMIC_NPROBE;
 
 /**
- * Reader for IVF vectors. This reader is used to read the IVF vectors from the index.
+ * Reader for DiskBBQ vectors. This reader is used to read the DiskBBQ vectors from the index.
  */
-public abstract class IVFVectorsReader extends KnnVectorsReader {
+public abstract class DiskBBQVectorsReader extends KnnVectorsReader {
 
     private final IndexInput ivfCentroids, ivfClusters;
     private final SegmentReadState state;
@@ -53,12 +53,12 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
     private final FlatVectorsReader rawVectorsReader;
 
     @SuppressWarnings("this-escape")
-    protected IVFVectorsReader(SegmentReadState state, FlatVectorsReader rawVectorsReader) throws IOException {
+    protected DiskBBQVectorsReader(SegmentReadState state, FlatVectorsReader rawVectorsReader) throws IOException {
         this.state = state;
         this.fieldInfos = state.fieldInfos;
         this.rawVectorsReader = rawVectorsReader;
         this.fields = new IntObjectHashMap<>();
-        String meta = IndexFileNames.segmentFileName(state.segmentInfo.name, state.segmentSuffix, IVFVectorsFormat.IVF_META_EXTENSION);
+        String meta = IndexFileNames.segmentFileName(state.segmentInfo.name, state.segmentSuffix, DiskBBQVectorsFormat.IVF_META_EXTENSION);
 
         int versionMeta = -1;
         boolean success = false;
@@ -67,9 +67,9 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             try {
                 versionMeta = CodecUtil.checkIndexHeader(
                     ivfMeta,
-                    IVFVectorsFormat.NAME,
-                    IVFVectorsFormat.VERSION_START,
-                    IVFVectorsFormat.VERSION_CURRENT,
+                    DiskBBQVectorsFormat.NAME,
+                    DiskBBQVectorsFormat.VERSION_START,
+                    DiskBBQVectorsFormat.VERSION_CURRENT,
                     state.segmentInfo.getId(),
                     state.segmentSuffix
                 );
@@ -79,8 +79,20 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             } finally {
                 CodecUtil.checkFooter(ivfMeta, priorE);
             }
-            ivfCentroids = openDataInput(state, versionMeta, IVFVectorsFormat.CENTROID_EXTENSION, IVFVectorsFormat.NAME, state.context);
-            ivfClusters = openDataInput(state, versionMeta, IVFVectorsFormat.CLUSTER_EXTENSION, IVFVectorsFormat.NAME, state.context);
+            ivfCentroids = openDataInput(
+                state,
+                versionMeta,
+                DiskBBQVectorsFormat.CENTROID_EXTENSION,
+                DiskBBQVectorsFormat.NAME,
+                state.context
+            );
+            ivfClusters = openDataInput(
+                state,
+                versionMeta,
+                DiskBBQVectorsFormat.CLUSTER_EXTENSION,
+                DiskBBQVectorsFormat.NAME,
+                state.context
+            );
             success = true;
         } finally {
             if (success == false) {
@@ -106,8 +118,8 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             final int versionVectorData = CodecUtil.checkIndexHeader(
                 in,
                 codecName,
-                IVFVectorsFormat.VERSION_START,
-                IVFVectorsFormat.VERSION_CURRENT,
+                DiskBBQVectorsFormat.VERSION_START,
+                DiskBBQVectorsFormat.VERSION_CURRENT,
                 state.segmentInfo.getId(),
                 state.segmentSuffix
             );
@@ -235,7 +247,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         AbstractKnnCollector knnCollectorImpl = (AbstractKnnCollector) knnCollector;
         int nProbe = DYNAMIC_NPROBE;
         // Search strategy may be null if this is being called from checkIndex (e.g. from a test)
-        if (knnCollector.getSearchStrategy() instanceof IVFKnnSearchStrategy ivfSearchStrategy) {
+        if (knnCollector.getSearchStrategy() instanceof DiskBBQKnnSearchStrategy ivfSearchStrategy) {
             nProbe = ivfSearchStrategy.getNProbe();
         }
 

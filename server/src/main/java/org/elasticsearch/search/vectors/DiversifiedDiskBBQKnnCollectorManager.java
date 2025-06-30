@@ -18,11 +18,11 @@ import org.apache.lucene.util.BitSet;
 
 import java.io.IOException;
 
-public class DiversifiedIVFKnnCollectorManager implements KnnCollectorManager {
+public class DiversifiedDiskBBQKnnCollectorManager implements KnnCollectorManager {
     private final int k;
     private final BitSetProducer parentsFilter;
 
-    DiversifiedIVFKnnCollectorManager(int k, BitSetProducer parentsFilter) {
+    DiversifiedDiskBBQKnnCollectorManager(int k, BitSetProducer parentsFilter) {
         this.k = k;
         this.parentsFilter = parentsFilter;
     }

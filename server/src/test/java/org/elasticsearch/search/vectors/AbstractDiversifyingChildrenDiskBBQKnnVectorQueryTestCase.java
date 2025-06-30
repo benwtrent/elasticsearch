@@ -47,7 +47,7 @@ import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.tests.util.LuceneTestCase;
 import org.apache.lucene.tests.util.TestUtil;
 import org.elasticsearch.common.logging.LogConfigurator;
-import org.elasticsearch.index.codec.vectors.IVFVectorsFormat;
+import org.elasticsearch.index.codec.vectors.DiskBBQVectorsFormat;
 import org.junit.Before;
 
 import java.io.IOException;
@@ -63,7 +63,7 @@ import static org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS;
 /**
  * Mostly copied from Lucene
  */
-abstract class AbstractDiversifyingChildrenIVFKnnVectorQueryTestCase extends LuceneTestCase {
+abstract class AbstractDiversifyingChildrenDiskBBQKnnVectorQueryTestCase extends LuceneTestCase {
 
     static String encodeInts(int[] i) {
         return Arrays.toString(i);
@@ -93,7 +93,9 @@ abstract class AbstractDiversifyingChildrenIVFKnnVectorQueryTestCase extends Luc
     @Before
     public void setUp() throws Exception {
         super.setUp();
-        format = new IVFVectorsFormat(random().nextInt(IVFVectorsFormat.MIN_VECTORS_PER_CLUSTER, IVFVectorsFormat.MAX_VECTORS_PER_CLUSTER));
+        format = new DiskBBQVectorsFormat(
+            random().nextInt(DiskBBQVectorsFormat.MIN_VECTORS_PER_CLUSTER, DiskBBQVectorsFormat.MAX_VECTORS_PER_CLUSTER)
+        );
     }
 
     abstract Query getDiversifyingChildrenKnnQuery(

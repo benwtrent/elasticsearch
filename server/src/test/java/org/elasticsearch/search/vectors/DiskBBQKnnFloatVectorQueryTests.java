@@ -23,11 +23,11 @@ import java.io.IOException;
 
 import static com.carrotsearch.randomizedtesting.RandomizedTest.randomFloat;
 
-public class IVFKnnFloatVectorQueryTests extends AbstractIVFKnnVectorQueryTestCase {
+public class DiskBBQKnnFloatVectorQueryTests extends AbstractDiskBBQKnnVectorQueryTestCase {
 
     @Override
-    IVFKnnFloatVectorQuery getKnnVectorQuery(String field, float[] query, int k, Query queryFilter, int nProbe) {
-        return new IVFKnnFloatVectorQuery(field, query, k, k, queryFilter, nProbe);
+    DiskBBQKnnFloatVectorQuery getKnnVectorQuery(String field, float[] query, int k, Query queryFilter, int nProbe) {
+        return new DiskBBQKnnFloatVectorQuery(field, query, k, k, queryFilter, nProbe);
     }
 
     @Override
@@ -55,15 +55,15 @@ public class IVFKnnFloatVectorQueryTests extends AbstractIVFKnnVectorQueryTestCa
             Directory indexStore = getIndexStore("field", new float[] { 0, 1 }, new float[] { 1, 2 }, new float[] { 0, 0 });
             IndexReader reader = DirectoryReader.open(indexStore)
         ) {
-            AbstractIVFKnnVectorQuery query = getKnnVectorQuery("field", new float[] { 0.0f, 1.0f }, 10);
-            assertEquals("IVFKnnFloatVectorQuery:field[0.0,...][10]", query.toString("ignored"));
+            AbstractDiskBBQKnnVectorQuery query = getKnnVectorQuery("field", new float[] { 0.0f, 1.0f }, 10);
+            assertEquals("DiskBBQKnnFloatVectorQuery:field[0.0,...][10]", query.toString("ignored"));
 
             assertDocScoreQueryToString(query.rewrite(newSearcher(reader)));
 
             // test with filter
             Query filter = new TermQuery(new Term("id", "text"));
             query = getKnnVectorQuery("field", new float[] { 0.0f, 1.0f }, 10, filter);
-            assertEquals("IVFKnnFloatVectorQuery:field[0.0,...][10][id:text]", query.toString("ignored"));
+            assertEquals("DiskBBQKnnFloatVectorQuery:field[0.0,...][10][id:text]", query.toString("ignored"));
         }
     }
 }

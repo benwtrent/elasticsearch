@@ -31,7 +31,7 @@ import org.elasticsearch.index.IndexVersions;
 import org.elasticsearch.index.codec.CodecService;
 import org.elasticsearch.index.codec.LegacyPerFieldMapperCodec;
 import org.elasticsearch.index.codec.PerFieldMapperCodec;
-import org.elasticsearch.index.codec.vectors.IVFVectorsFormat;
+import org.elasticsearch.index.codec.vectors.DiskBBQVectorsFormat;
 import org.elasticsearch.index.mapper.DocumentMapper;
 import org.elasticsearch.index.mapper.DocumentParsingException;
 import org.elasticsearch.index.mapper.LuceneDocument;
@@ -66,9 +66,9 @@ import java.util.Set;
 import static org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsFormat.DEFAULT_BEAM_WIDTH;
 import static org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsFormat.DEFAULT_MAX_CONN;
 import static org.apache.lucene.tests.index.BaseKnnVectorsFormatTestCase.randomNormalizedVector;
-import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.DYNAMIC_NPROBE;
+import static org.elasticsearch.index.codec.vectors.DiskBBQVectorsFormat.DYNAMIC_NPROBE;
 import static org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.DEFAULT_OVERSAMPLE;
-import static org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.IVF_FORMAT;
+import static org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.DISK_BBQ_FORMAT;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
@@ -1352,7 +1352,7 @@ public class DenseVectorFieldMapperTests extends MapperTestCase {
     public void testAggregatableConsistency() {}
 
     public void testIVFParsing() throws IOException {
-        assumeTrue("feature flag [ivf_format] must be enabled", IVF_FORMAT.isEnabled());
+        assumeTrue("feature flag [disk_bbq_format] must be enabled", DISK_BBQ_FORMAT.isEnabled());
         {
             DocumentMapper mapperService = createDocumentMapper(fieldMapping(b -> {
                 b.field("type", "dense_vector");
@@ -1360,7 +1360,7 @@ public class DenseVectorFieldMapperTests extends MapperTestCase {
                 b.field("index", true);
                 b.field("similarity", "dot_product");
                 b.startObject("index_options");
-                b.field("type", "bbq_ivf");
+                b.field("type", "bbq_disk");
                 b.endObject();
             }));
 
@@ -1369,7 +1369,7 @@ public class DenseVectorFieldMapperTests extends MapperTestCase {
                 .fieldType()
                 .getIndexOptions();
             assertEquals(3.0F, indexOptions.rescoreVector.oversample(), 0.0F);
-            assertEquals(IVFVectorsFormat.DEFAULT_VECTORS_PER_CLUSTER, indexOptions.clusterSize);
+            assertEquals(DiskBBQVectorsFormat.DEFAULT_VECTORS_PER_CLUSTER, indexOptions.clusterSize);
             assertEquals(DYNAMIC_NPROBE, indexOptions.defaultNProbe);
         }
         {
@@ -1379,7 +1379,7 @@ public class DenseVectorFieldMapperTests extends MapperTestCase {
                 b.field("index", true);
                 b.field("similarity", "dot_product");
                 b.startObject("index_options");
-                b.field("type", "bbq_ivf");
+                b.field("type", "bbq_disk");
                 b.field("cluster_size", 1000);
                 b.field("default_n_probe", 10);
                 b.field(DenseVectorFieldMapper.RescoreVector.NAME, Map.of("oversample", 2.0f));
@@ -1397,7 +1397,7 @@ public class DenseVectorFieldMapperTests extends MapperTestCase {
     }
 
     public void testIVFParsingFailureInRelease() {
-        assumeFalse("feature flag [ivf_format] must be disabled", IVF_FORMAT.isEnabled());
+        assumeFalse("feature flag [disk_bbq_format] must be disabled", DISK_BBQ_FORMAT.isEnabled());
 
         Exception e = expectThrows(
             MapperParsingException.class,
@@ -1406,7 +1406,7 @@ public class DenseVectorFieldMapperTests extends MapperTestCase {
                     b -> b.field("type", "dense_vector")
                         .field("dims", dims)
                         .startObject("index_options")
-                        .field("type", "bbq_ivf")
+                        .field("type", "bbq_disk")
                         .endObject()
                 )
             )
@@ -2789,8 +2789,8 @@ public class DenseVectorFieldMapperTests extends MapperTestCase {
         assertEquals(expectedString, knnVectorsFormat.toString());
     }
 
-    public void testKnnBBQIVFVectorsFormat() throws IOException {
-        assumeTrue("feature flag [ivf_format] must be enabled", IVF_FORMAT.isEnabled());
+    public void testKnnBBQDiskBBQVectorsFormat() throws IOException {
+        assumeTrue("feature flag [disk_bbq_format] must be enabled", DISK_BBQ_FORMAT.isEnabled());
         final int dims = randomIntBetween(64, 4096);
         MapperService mapperService = createMapperService(fieldMapping(b -> {
             b.field("type", "dense_vector");
@@ -2798,7 +2798,7 @@ public class DenseVectorFieldMapperTests extends MapperTestCase {
             b.field("index", true);
             b.field("similarity", "dot_product");
             b.startObject("index_options");
-            b.field("type", "bbq_ivf");
+            b.field("type", "bbq_disk");
             b.endObject();
         }));
         CodecService codecService = new CodecService(mapperService, BigArrays.NON_RECYCLING_INSTANCE);
@@ -2814,7 +2814,7 @@ public class DenseVectorFieldMapperTests extends MapperTestCase {
             assertThat(codec, instanceOf(LegacyPerFieldMapperCodec.class));
             knnVectorsFormat = ((LegacyPerFieldMapperCodec) codec).getKnnVectorsFormatForField("field");
         }
-        String expectedString = "IVFVectorsFormat(vectorPerCluster=384)";
+        String expectedString = "DiskBBQVectorsFormat(vectorPerCluster=384)";
         assertEquals(expectedString, knnVectorsFormat.toString());
     }
 

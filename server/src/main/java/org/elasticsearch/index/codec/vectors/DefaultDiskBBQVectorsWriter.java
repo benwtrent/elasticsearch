@@ -33,16 +33,17 @@ import static org.elasticsearch.index.codec.vectors.BQVectorUtils.discretize;
 import static org.elasticsearch.index.codec.vectors.BQVectorUtils.packAsBinary;
 
 /**
- * Default implementation of {@link IVFVectorsWriter}. It uses {@link HierarchicalKMeans} algorithm to
+ * Default implementation of {@link DiskBBQVectorsWriter}. It uses {@link HierarchicalKMeans} algorithm to
  * partition the vector space, and then stores the centroids and posting list in a sequential
- * fashion.
+ * fashion, quantized using {@link OptimizedScalarQuantizer}.
  */
-public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
-    private static final Logger logger = LogManager.getLogger(DefaultIVFVectorsWriter.class);
+public class DefaultDiskBBQVectorsWriter extends DiskBBQVectorsWriter {
+    private static final Logger logger = LogManager.getLogger(DefaultDiskBBQVectorsWriter.class);
 
     private final int vectorPerCluster;
 
-    public DefaultIVFVectorsWriter(SegmentWriteState state, FlatVectorsWriter rawVectorDelegate, int vectorPerCluster) throws IOException {
+    public DefaultDiskBBQVectorsWriter(SegmentWriteState state, FlatVectorsWriter rawVectorDelegate, int vectorPerCluster)
+        throws IOException {
         super(state, rawVectorDelegate);
         this.vectorPerCluster = vectorPerCluster;
     }

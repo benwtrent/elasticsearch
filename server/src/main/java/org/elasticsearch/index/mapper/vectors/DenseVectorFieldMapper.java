@@ -44,12 +44,12 @@ import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.features.NodeFeature;
 import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.IndexVersions;
+import org.elasticsearch.index.codec.vectors.DiskBBQVectorsFormat;
 import org.elasticsearch.index.codec.vectors.ES813FlatVectorFormat;
 import org.elasticsearch.index.codec.vectors.ES813Int8FlatVectorFormat;
 import org.elasticsearch.index.codec.vectors.ES814HnswScalarQuantizedVectorsFormat;
 import org.elasticsearch.index.codec.vectors.ES815BitFlatVectorFormat;
 import org.elasticsearch.index.codec.vectors.ES815HnswBitVectorsFormat;
-import org.elasticsearch.index.codec.vectors.IVFVectorsFormat;
 import org.elasticsearch.index.codec.vectors.es818.ES818BinaryQuantizedVectorsFormat;
 import org.elasticsearch.index.codec.vectors.es818.ES818HnswBinaryQuantizedVectorsFormat;
 import org.elasticsearch.index.fielddata.FieldDataContext;
@@ -76,12 +76,12 @@ import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
 import org.elasticsearch.search.lookup.Source;
 import org.elasticsearch.search.vectors.DenseVectorQuery;
-import org.elasticsearch.search.vectors.DiversifyingChildrenIVFKnnFloatVectorQuery;
+import org.elasticsearch.search.vectors.DiskBBQKnnFloatVectorQuery;
+import org.elasticsearch.search.vectors.DiversifyingChildrenDiskBBQKnnFloatVectorQuery;
 import org.elasticsearch.search.vectors.ESDiversifyingChildrenByteKnnVectorQuery;
 import org.elasticsearch.search.vectors.ESDiversifyingChildrenFloatKnnVectorQuery;
 import org.elasticsearch.search.vectors.ESKnnByteVectorQuery;
 import org.elasticsearch.search.vectors.ESKnnFloatVectorQuery;
-import org.elasticsearch.search.vectors.IVFKnnFloatVectorQuery;
 import org.elasticsearch.search.vectors.RescoreKnnVectorQuery;
 import org.elasticsearch.search.vectors.VectorData;
 import org.elasticsearch.search.vectors.VectorSimilarityQuery;
@@ -109,8 +109,8 @@ import java.util.stream.Stream;
 import static org.elasticsearch.cluster.metadata.IndexMetadata.SETTING_INDEX_VERSION_CREATED;
 import static org.elasticsearch.common.Strings.format;
 import static org.elasticsearch.common.xcontent.XContentParserUtils.ensureExpectedToken;
-import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.MAX_VECTORS_PER_CLUSTER;
-import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.MIN_VECTORS_PER_CLUSTER;
+import static org.elasticsearch.index.codec.vectors.DiskBBQVectorsFormat.MAX_VECTORS_PER_CLUSTER;
+import static org.elasticsearch.index.codec.vectors.DiskBBQVectorsFormat.MIN_VECTORS_PER_CLUSTER;
 
 /**
  * A {@link FieldMapper} for indexing a dense vector of floats.
@@ -120,7 +120,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
     private static final float EPS = 1e-3f;
     public static final int BBQ_MIN_DIMS = 64;
 
-    public static final FeatureFlag IVF_FORMAT = new FeatureFlag("ivf_format");
+    public static final FeatureFlag DISK_BBQ_FORMAT = new FeatureFlag("disk_bbq_format");
 
     public static boolean isNotUnitVector(float magnitude) {
         return Math.abs(magnitude - 1.0f) > EPS;
@@ -1628,11 +1628,11 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 return dims >= BBQ_MIN_DIMS;
             }
         },
-        BBQ_IVF("bbq_ivf", true) {
+        BBQ_DISK("bbq_disk", true) {
             @Override
             public DenseVectorIndexOptions parseIndexOptions(String fieldName, Map<String, ?> indexOptionsMap, IndexVersion indexVersion) {
                 Object clusterSizeNode = indexOptionsMap.remove("cluster_size");
-                int clusterSize = IVFVectorsFormat.DEFAULT_VECTORS_PER_CLUSTER;
+                int clusterSize = DiskBBQVectorsFormat.DEFAULT_VECTORS_PER_CLUSTER;
                 if (clusterSizeNode != null) {
                     clusterSize = XContentMapValues.nodeIntegerValue(clusterSizeNode);
                     if (clusterSize < MIN_VECTORS_PER_CLUSTER || clusterSize > MAX_VECTORS_PER_CLUSTER) {
@@ -1661,7 +1661,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                     }
                 }
                 MappingParser.checkNoRemainingFields(fieldName, indexOptionsMap);
-                return new BBQIVFIndexOptions(clusterSize, nProbe, rescoreVector);
+                return new DISKBBQIndexOptions(clusterSize, nProbe, rescoreVector);
             }
 
             @Override
@@ -1676,7 +1676,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
             @Override
             public boolean isEnabled() {
-                return IVF_FORMAT.isEnabled();
+                return DISK_BBQ_FORMAT.isEnabled();
             }
         };
 
@@ -2203,12 +2203,12 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
     }
 
-    static class BBQIVFIndexOptions extends QuantizedIndexOptions {
+    static class DISKBBQIndexOptions extends QuantizedIndexOptions {
         final int clusterSize;
         final int defaultNProbe;
 
-        BBQIVFIndexOptions(int clusterSize, int defaultNProbe, RescoreVector rescoreVector) {
-            super(VectorIndexType.BBQ_IVF, rescoreVector);
+        DISKBBQIndexOptions(int clusterSize, int defaultNProbe, RescoreVector rescoreVector) {
+            super(VectorIndexType.BBQ_DISK, rescoreVector);
             this.clusterSize = clusterSize;
             this.defaultNProbe = defaultNProbe;
         }
@@ -2216,7 +2216,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
         @Override
         KnnVectorsFormat getVectorsFormat(ElementType elementType) {
             assert elementType == ElementType.FLOAT;
-            return new IVFVectorsFormat(clusterSize);
+            return new DiskBBQVectorsFormat(clusterSize);
         }
 
         @Override
@@ -2226,7 +2226,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
         @Override
         boolean doEquals(DenseVectorIndexOptions other) {
-            BBQIVFIndexOptions that = (BBQIVFIndexOptions) other;
+            DISKBBQIndexOptions that = (DISKBBQIndexOptions) other;
             return clusterSize == that.clusterSize
                 && defaultNProbe == that.defaultNProbe
                 && Objects.equals(rescoreVector, that.rescoreVector);
@@ -2568,9 +2568,9 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 numCands = Math.max(adjustedK, numCands);
             }
             Query knnQuery;
-            if (indexOptions instanceof BBQIVFIndexOptions bbqIndexOptions) {
+            if (indexOptions instanceof DISKBBQIndexOptions bbqIndexOptions) {
                 knnQuery = parentFilter != null
-                    ? new DiversifyingChildrenIVFKnnFloatVectorQuery(
+                    ? new DiversifyingChildrenDiskBBQKnnFloatVectorQuery(
                         name(),
                         queryVector,
                         adjustedK,
@@ -2579,7 +2579,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                         parentFilter,
                         bbqIndexOptions.defaultNProbe
                     )
-                    : new IVFKnnFloatVectorQuery(name(), queryVector, adjustedK, numCands, filter, bbqIndexOptions.defaultNProbe);
+                    : new DiskBBQKnnFloatVectorQuery(name(), queryVector, adjustedK, numCands, filter, bbqIndexOptions.defaultNProbe);
             } else {
                 knnQuery = parentFilter != null
                     ? new ESDiversifyingChildrenFloatKnnVectorQuery(

@@ -14,11 +14,11 @@ import org.apache.lucene.document.KnnFloatVectorField;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.join.BitSetProducer;
 
-public class DiversifyingChildrenIVFKnnFloatVectorQueryTests extends AbstractDiversifyingChildrenIVFKnnVectorQueryTestCase {
+public class DiversifyingChildrenDiskBBQKnnFloatVectorQueryTests extends AbstractDiversifyingChildrenDiskBBQKnnVectorQueryTestCase {
 
     @Override
     Query getDiversifyingChildrenKnnQuery(String fieldName, float[] queryVector, Query childFilter, int k, BitSetProducer parentBitSet) {
-        return new DiversifyingChildrenIVFKnnFloatVectorQuery(fieldName, queryVector, k, k, childFilter, parentBitSet, -1);
+        return new DiversifyingChildrenDiskBBQKnnFloatVectorQuery(fieldName, queryVector, k, k, childFilter, parentBitSet, -1);
     }
 
     @Override

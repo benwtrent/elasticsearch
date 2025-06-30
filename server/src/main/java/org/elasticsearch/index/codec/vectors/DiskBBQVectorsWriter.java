@@ -43,9 +43,9 @@ import static org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsReader.SIMILA
 import static org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS;
 
 /**
- * Base class for IVF vectors writer.
+ * Base class for DiskBBQ vectors writer.
  */
-public abstract class IVFVectorsWriter extends KnnVectorsWriter {
+public abstract class DiskBBQVectorsWriter extends KnnVectorsWriter {
 
     private final List<FieldWriter> fieldWriters = new ArrayList<>();
     private final IndexOutput ivfCentroids, ivfClusters;
@@ -53,47 +53,47 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
     private final FlatVectorsWriter rawVectorDelegate;
 
     @SuppressWarnings("this-escape")
-    protected IVFVectorsWriter(SegmentWriteState state, FlatVectorsWriter rawVectorDelegate) throws IOException {
+    protected DiskBBQVectorsWriter(SegmentWriteState state, FlatVectorsWriter rawVectorDelegate) throws IOException {
         this.rawVectorDelegate = rawVectorDelegate;
         final String metaFileName = IndexFileNames.segmentFileName(
             state.segmentInfo.name,
             state.segmentSuffix,
-            IVFVectorsFormat.IVF_META_EXTENSION
+            DiskBBQVectorsFormat.IVF_META_EXTENSION
         );
 
         final String ivfCentroidsFileName = IndexFileNames.segmentFileName(
             state.segmentInfo.name,
             state.segmentSuffix,
-            IVFVectorsFormat.CENTROID_EXTENSION
+            DiskBBQVectorsFormat.CENTROID_EXTENSION
         );
         final String ivfClustersFileName = IndexFileNames.segmentFileName(
             state.segmentInfo.name,
             state.segmentSuffix,
-            IVFVectorsFormat.CLUSTER_EXTENSION
+            DiskBBQVectorsFormat.CLUSTER_EXTENSION
         );
         boolean success = false;
         try {
             ivfMeta = state.directory.createOutput(metaFileName, state.context);
             CodecUtil.writeIndexHeader(
                 ivfMeta,
-                IVFVectorsFormat.NAME,
-                IVFVectorsFormat.VERSION_CURRENT,
+                DiskBBQVectorsFormat.NAME,
+                DiskBBQVectorsFormat.VERSION_CURRENT,
                 state.segmentInfo.getId(),
                 state.segmentSuffix
             );
             ivfCentroids = state.directory.createOutput(ivfCentroidsFileName, state.context);
             CodecUtil.writeIndexHeader(
                 ivfCentroids,
-                IVFVectorsFormat.NAME,
-                IVFVectorsFormat.VERSION_CURRENT,
+                DiskBBQVectorsFormat.NAME,
+                DiskBBQVectorsFormat.VERSION_CURRENT,
                 state.segmentInfo.getId(),
                 state.segmentSuffix
             );
             ivfClusters = state.directory.createOutput(ivfClustersFileName, state.context);
             CodecUtil.writeIndexHeader(
                 ivfClusters,
-                IVFVectorsFormat.NAME,
-                IVFVectorsFormat.VERSION_CURRENT,
+                DiskBBQVectorsFormat.NAME,
+                DiskBBQVectorsFormat.VERSION_CURRENT,
                 state.segmentInfo.getId(),
                 state.segmentSuffix
             );

@@ -16,12 +16,12 @@ import org.apache.lucene.search.knn.KnnCollectorManager;
 
 import java.util.Objects;
 
-public class DiversifyingChildrenIVFKnnFloatVectorQuery extends IVFKnnFloatVectorQuery {
+public class DiversifyingChildrenDiskBBQKnnFloatVectorQuery extends DiskBBQKnnFloatVectorQuery {
 
     private final BitSetProducer parentsFilter;
 
     /**
-     * Creates a new {@link IVFKnnFloatVectorQuery} with the given parameters.
+     * Creates a new {@link DiskBBQKnnFloatVectorQuery} with the given parameters.
      *
      * @param field         the field to search
      * @param query         the query vector
@@ -31,7 +31,7 @@ public class DiversifyingChildrenIVFKnnFloatVectorQuery extends IVFKnnFloatVecto
      * @param parentsFilter bitset producer for the parent documents
      * @param nProbe        the number of probes to use for the IVF search strategy
      */
-    public DiversifyingChildrenIVFKnnFloatVectorQuery(
+    public DiversifyingChildrenDiskBBQKnnFloatVectorQuery(
         String field,
         float[] query,
         int k,
@@ -46,14 +46,14 @@ public class DiversifyingChildrenIVFKnnFloatVectorQuery extends IVFKnnFloatVecto
 
     @Override
     protected KnnCollectorManager getKnnCollectorManager(int k, IndexSearcher searcher) {
-        return new DiversifiedIVFKnnCollectorManager(k, parentsFilter);
+        return new DiversifiedDiskBBQKnnCollectorManager(k, parentsFilter);
     }
 
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) return false;
         if (super.equals(o) == false) return false;
-        DiversifyingChildrenIVFKnnFloatVectorQuery that = (DiversifyingChildrenIVFKnnFloatVectorQuery) o;
+        DiversifyingChildrenDiskBBQKnnFloatVectorQuery that = (DiversifyingChildrenDiskBBQKnnFloatVectorQuery) o;
         return Objects.equals(parentsFilter, that.parentsFilter);
     }
 

@@ -7,6 +7,7 @@
  * License v3.0 only", or the "Server Side Public License, v 1".
  */
 
+import org.elasticsearch.index.codec.vectors.DiskBBQVectorsFormat;
 import org.elasticsearch.plugins.internal.RestExtension;
 import org.elasticsearch.reservedstate.ReservedStateHandlerProvider;
 
@@ -457,7 +458,7 @@ module org.elasticsearch.server {
             org.elasticsearch.index.codec.vectors.es816.ES816HnswBinaryQuantizedVectorsFormat,
             org.elasticsearch.index.codec.vectors.es818.ES818BinaryQuantizedVectorsFormat,
             org.elasticsearch.index.codec.vectors.es818.ES818HnswBinaryQuantizedVectorsFormat,
-            org.elasticsearch.index.codec.vectors.IVFVectorsFormat;
+            DiskBBQVectorsFormat;
 
     provides org.apache.lucene.codecs.Codec
         with

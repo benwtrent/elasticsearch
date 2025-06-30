@@ -37,12 +37,12 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.lang.String.format;
-import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.MAX_VECTORS_PER_CLUSTER;
-import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.MIN_VECTORS_PER_CLUSTER;
+import static org.elasticsearch.index.codec.vectors.DiskBBQVectorsFormat.MAX_VECTORS_PER_CLUSTER;
+import static org.elasticsearch.index.codec.vectors.DiskBBQVectorsFormat.MIN_VECTORS_PER_CLUSTER;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.oneOf;
 
-public class IVFVectorsFormatTests extends BaseKnnVectorsFormatTestCase {
+public class DiskBBQVectorsFormatTests extends BaseKnnVectorsFormatTestCase {
 
     static {
         LogConfigurator.loadLog4jPlugins();
@@ -53,7 +53,7 @@ public class IVFVectorsFormatTests extends BaseKnnVectorsFormatTestCase {
     @Before
     @Override
     public void setUp() throws Exception {
-        format = new IVFVectorsFormat(random().nextInt(MIN_VECTORS_PER_CLUSTER, IVFVectorsFormat.MAX_VECTORS_PER_CLUSTER));
+        format = new DiskBBQVectorsFormat(random().nextInt(MIN_VECTORS_PER_CLUSTER, DiskBBQVectorsFormat.MAX_VECTORS_PER_CLUSTER));
         super.setUp();
     }
 
@@ -93,10 +93,10 @@ public class IVFVectorsFormatTests extends BaseKnnVectorsFormatTestCase {
         FilterCodec customCodec = new FilterCodec("foo", Codec.getDefault()) {
             @Override
             public KnnVectorsFormat knnVectorsFormat() {
-                return new IVFVectorsFormat(128);
+                return new DiskBBQVectorsFormat(128);
             }
         };
-        String expectedPattern = "IVFVectorsFormat(vectorPerCluster=128)";
+        String expectedPattern = "DiskBBQVectorsFormat(vectorPerCluster=128)";
 
         var defaultScorer = format(Locale.ROOT, expectedPattern, "DefaultFlatVectorScorer");
         var memSegScorer = format(Locale.ROOT, expectedPattern, "Lucene99MemorySegmentFlatVectorsScorer");
@@ -104,8 +104,8 @@ public class IVFVectorsFormatTests extends BaseKnnVectorsFormatTestCase {
     }
 
     public void testLimits() {
-        expectThrows(IllegalArgumentException.class, () -> new IVFVectorsFormat(MIN_VECTORS_PER_CLUSTER - 1));
-        expectThrows(IllegalArgumentException.class, () -> new IVFVectorsFormat(MAX_VECTORS_PER_CLUSTER + 1));
+        expectThrows(IllegalArgumentException.class, () -> new DiskBBQVectorsFormat(MIN_VECTORS_PER_CLUSTER - 1));
+        expectThrows(IllegalArgumentException.class, () -> new DiskBBQVectorsFormat(MAX_VECTORS_PER_CLUSTER + 1));
     }
 
     public void testSimpleOffHeapSize() throws IOException {

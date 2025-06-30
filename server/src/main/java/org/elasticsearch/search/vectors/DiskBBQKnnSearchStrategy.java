@@ -12,10 +12,10 @@ import org.apache.lucene.search.knn.KnnSearchStrategy;
 
 import java.util.Objects;
 
-public class IVFKnnSearchStrategy extends KnnSearchStrategy {
+public class DiskBBQKnnSearchStrategy extends KnnSearchStrategy {
     private final int nProbe;
 
-    IVFKnnSearchStrategy(int nProbe) {
+    DiskBBQKnnSearchStrategy(int nProbe) {
         this.nProbe = nProbe;
     }
 
@@ -27,7 +27,7 @@ public class IVFKnnSearchStrategy extends KnnSearchStrategy {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
-        IVFKnnSearchStrategy that = (IVFKnnSearchStrategy) o;
+        DiskBBQKnnSearchStrategy that = (DiskBBQKnnSearchStrategy) o;
         return nProbe == that.nProbe;
     }
 

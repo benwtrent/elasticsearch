@@ -36,13 +36,13 @@ import static org.elasticsearch.index.codec.vectors.BQVectorUtils.discretize;
 import static org.elasticsearch.simdvec.ES91OSQVectorsScorer.BULK_SIZE;
 
 /**
- * Default implementation of {@link IVFVectorsReader}. It scores the posting lists centroids using
+ * Default implementation of {@link DiskBBQVectorsReader}. It scores the posting lists centroids using
  * brute force and then scores the top ones using the posting list.
  */
-public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeapStats {
+public class DefaultDiskBBQVectorsReader extends DiskBBQVectorsReader implements OffHeapStats {
     private static final float FOUR_BIT_SCALE = 1f / ((1 << 4) - 1);
 
-    public DefaultIVFVectorsReader(SegmentReadState state, FlatVectorsReader rawVectorsReader) throws IOException {
+    public DefaultDiskBBQVectorsReader(SegmentReadState state, FlatVectorsReader rawVectorsReader) throws IOException {
         super(state, rawVectorsReader);
     }
 

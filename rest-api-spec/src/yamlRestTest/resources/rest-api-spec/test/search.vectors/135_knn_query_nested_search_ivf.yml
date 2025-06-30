@@ -1,6 +1,6 @@
 setup:
   - requires:
-      cluster_features: "mapper.ivf_nested_support"
+      cluster_features: "mapper.bbq_disk_nested_support"
       reason: 'ivf nested support required'
   - do:
       indices.create:
@@ -24,7 +24,7 @@ setup:
                     index: true
                     similarity: l2_norm
                     index_options:
-                      type: bbq_ivf
+                      type: bbq_disk
 
           aliases:
             my_alias:

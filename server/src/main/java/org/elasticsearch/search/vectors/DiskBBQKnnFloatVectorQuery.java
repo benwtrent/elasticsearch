@@ -20,13 +20,13 @@ import org.apache.lucene.util.Bits;
 import java.io.IOException;
 import java.util.Arrays;
 
-/** A {@link IVFKnnFloatVectorQuery} that uses the IVF search strategy. */
-public class IVFKnnFloatVectorQuery extends AbstractIVFKnnVectorQuery {
+/** A {@link DiskBBQKnnFloatVectorQuery} that uses the IVF search strategy. */
+public class DiskBBQKnnFloatVectorQuery extends AbstractDiskBBQKnnVectorQuery {
 
     private final float[] query;
 
     /**
-     * Creates a new {@link IVFKnnFloatVectorQuery} with the given parameters.
+     * Creates a new {@link DiskBBQKnnFloatVectorQuery} with the given parameters.
      * @param field the field to search
      * @param query the query vector
      * @param k the number of nearest neighbors to return
@@ -34,7 +34,7 @@ public class IVFKnnFloatVectorQuery extends AbstractIVFKnnVectorQuery {
      * @param filter the filter to apply to the results
      * @param nProbe the number of probes to use for the IVF search strategy
      */
-    public IVFKnnFloatVectorQuery(String field, float[] query, int k, int numCands, Query filter, int nProbe) {
+    public DiskBBQKnnFloatVectorQuery(String field, float[] query, int k, int numCands, Query filter, int nProbe) {
         super(field, nProbe, k, numCands, filter);
         this.query = query;
     }
@@ -61,7 +61,7 @@ public class IVFKnnFloatVectorQuery extends AbstractIVFKnnVectorQuery {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (super.equals(o) == false) return false;
-        IVFKnnFloatVectorQuery that = (IVFKnnFloatVectorQuery) o;
+        DiskBBQKnnFloatVectorQuery that = (DiskBBQKnnFloatVectorQuery) o;
         return Arrays.equals(query, that.query);
     }
 

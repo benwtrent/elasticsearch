@@ -42,9 +42,9 @@ import java.io.IOException;
  * <p> Stores metadata including the number of centroids and their offsets in the clivf file</p>
  *
  */
-public class IVFVectorsFormat extends KnnVectorsFormat {
+public class DiskBBQVectorsFormat extends KnnVectorsFormat {
 
-    public static final String NAME = "IVFVectorsFormat";
+    public static final String NAME = "DiskBBQVectorsFormat";
     // centroid ordinals -> centroid values, offsets
     public static final String CENTROID_EXTENSION = "cenivf";
     // offsets contained in cen_ivf, [vector ordinals, actually just docIds](long varint), quantized
@@ -68,7 +68,7 @@ public class IVFVectorsFormat extends KnnVectorsFormat {
 
     private final int vectorPerCluster;
 
-    public IVFVectorsFormat(int vectorPerCluster) {
+    public DiskBBQVectorsFormat(int vectorPerCluster) {
         super(NAME);
         if (vectorPerCluster < MIN_VECTORS_PER_CLUSTER || vectorPerCluster > MAX_VECTORS_PER_CLUSTER) {
             throw new IllegalArgumentException(
@@ -84,18 +84,18 @@ public class IVFVectorsFormat extends KnnVectorsFormat {
     }
 
     /** Constructs a format using the given graph construction parameters and scalar quantization. */
-    public IVFVectorsFormat() {
+    public DiskBBQVectorsFormat() {
         this(DEFAULT_VECTORS_PER_CLUSTER);
     }
 
     @Override
     public KnnVectorsWriter fieldsWriter(SegmentWriteState state) throws IOException {
-        return new DefaultIVFVectorsWriter(state, rawVectorFormat.fieldsWriter(state), vectorPerCluster);
+        return new DefaultDiskBBQVectorsWriter(state, rawVectorFormat.fieldsWriter(state), vectorPerCluster);
     }
 
     @Override
     public KnnVectorsReader fieldsReader(SegmentReadState state) throws IOException {
-        return new DefaultIVFVectorsReader(state, rawVectorFormat.fieldsReader(state));
+        return new DefaultDiskBBQVectorsReader(state, rawVectorFormat.fieldsReader(state));
     }
 
     @Override
@@ -105,7 +105,7 @@ public class IVFVectorsFormat extends KnnVectorsFormat {
 
     @Override
     public String toString() {
-        return "IVFVectorsFormat(" + "vectorPerCluster=" + vectorPerCluster + ')';
+        return "DiskBBQVectorsFormat(" + "vectorPerCluster=" + vectorPerCluster + ')';
     }
 
 }

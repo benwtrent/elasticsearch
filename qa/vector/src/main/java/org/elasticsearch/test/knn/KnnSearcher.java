@@ -44,9 +44,9 @@ import org.elasticsearch.common.io.Channels;
 import org.elasticsearch.core.PathUtils;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.search.profile.query.QueryProfiler;
+import org.elasticsearch.search.vectors.DiskBBQKnnFloatVectorQuery;
 import org.elasticsearch.search.vectors.ESKnnByteVectorQuery;
 import org.elasticsearch.search.vectors.ESKnnFloatVectorQuery;
-import org.elasticsearch.search.vectors.IVFKnnFloatVectorQuery;
 import org.elasticsearch.search.vectors.QueryProfilerProvider;
 import org.elasticsearch.search.vectors.RescoreKnnVectorQuery;
 
@@ -297,7 +297,7 @@ class KnnSearcher {
         }
         int efSearch = Math.max(topK, this.efSearch);
         if (indexType == KnnIndexTester.IndexType.IVF) {
-            knnQuery = new IVFKnnFloatVectorQuery(VECTOR_FIELD, vector, topK, efSearch, null, nProbe);
+            knnQuery = new DiskBBQKnnFloatVectorQuery(VECTOR_FIELD, vector, topK, efSearch, null, nProbe);
         } else {
             knnQuery = new ESKnnFloatVectorQuery(
                 VECTOR_FIELD,

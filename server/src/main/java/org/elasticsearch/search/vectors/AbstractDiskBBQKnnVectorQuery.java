@@ -43,7 +43,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Callable;
 
-abstract class AbstractIVFKnnVectorQuery extends Query implements QueryProfilerProvider {
+abstract class AbstractDiskBBQKnnVectorQuery extends Query implements QueryProfilerProvider {
 
     static final TopDocs NO_RESULTS = TopDocsCollector.EMPTY_TOPDOCS;
 
@@ -55,7 +55,7 @@ abstract class AbstractIVFKnnVectorQuery extends Query implements QueryProfilerP
     protected final KnnSearchStrategy searchStrategy;
     protected int vectorOpsCount;
 
-    protected AbstractIVFKnnVectorQuery(String field, int nProbe, int k, int numCands, Query filter) {
+    protected AbstractDiskBBQKnnVectorQuery(String field, int nProbe, int k, int numCands, Query filter) {
         if (k < 1) {
             throw new IllegalArgumentException("k must be at least 1, got: " + k);
         }
@@ -70,7 +70,7 @@ abstract class AbstractIVFKnnVectorQuery extends Query implements QueryProfilerP
         this.k = k;
         this.filter = filter;
         this.numCands = numCands;
-        this.searchStrategy = new IVFKnnSearchStrategy(nProbe);
+        this.searchStrategy = new DiskBBQKnnSearchStrategy(nProbe);
     }
 
     @Override
@@ -84,7 +84,7 @@ abstract class AbstractIVFKnnVectorQuery extends Query implements QueryProfilerP
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
-        AbstractIVFKnnVectorQuery that = (AbstractIVFKnnVectorQuery) o;
+        AbstractDiskBBQKnnVectorQuery that = (AbstractDiskBBQKnnVectorQuery) o;
         return k == that.k
             && Objects.equals(field, that.field)
             && Objects.equals(filter, that.filter)
