@@ -83,10 +83,6 @@ public class ESVectorUtilTests extends BaseVectorizationTests {
         assertThat((double) defOrPanamaProvider.getVectorUtilSupport().ipFloatByte(q, d), closeTo(expected, delta));
     }
 
-    public void testBitAndCount() {
-        testBasicBitAndImpl(ESVectorUtil::andBitCountLong);
-    }
-
     public void testIpByteBinInvariants() {
         int iterations = atLeast(10);
         for (int i = 0; i < iterations; i++) {

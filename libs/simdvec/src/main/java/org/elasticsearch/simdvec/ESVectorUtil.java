@@ -33,9 +33,17 @@ public class ESVectorUtil {
             // https://bugs.openjdk.org/browse/JDK-8336000
             BIT_COUNT_MH = Constants.OS_ARCH.equals("aarch64")
                 ? MethodHandles.lookup()
-                    .findStatic(ESVectorUtil.class, "andBitCountInt", MethodType.methodType(int.class, byte[].class, byte[].class))
+                    .findStatic(
+                        ESVectorUtil.class,
+                        "andBitCountInt",
+                        MethodType.methodType(int.class, byte[].class, int.class, byte[].class, int.class)
+                    )
                 : MethodHandles.lookup()
-                    .findStatic(ESVectorUtil.class, "andBitCountLong", MethodType.methodType(int.class, byte[].class, byte[].class));
+                    .findStatic(
+                        ESVectorUtil.class,
+                        "andBitCountLong",
+                        MethodType.methodType(int.class, byte[].class, int.class, byte[].class, int.class)
+                    );
         } catch (NoSuchMethodException | IllegalAccessException e) {
             throw new AssertionError(e);
         }
@@ -55,7 +63,11 @@ public class ESVectorUtil {
         if (q.length != d.length * B_QUERY) {
             throw new IllegalArgumentException("vector dimensions incompatible: " + q.length + "!= " + B_QUERY + " x " + d.length);
         }
-        return IMPL.ipByteBinByte(q, d);
+        return IMPL.ipByteBinByte(q, d, d.length, 0);
+    }
+
+    public static long ipByteBinByte(byte[] q, byte[] d, int length, int offset) {
+        return IMPL.ipByteBinByte(q, d, length, offset);
     }
 
     /**
@@ -103,6 +115,10 @@ public class ESVectorUtil {
         return IMPL.ipFloatByte(q, d);
     }
 
+    public static int andBitCount(byte[] a, byte[] b) {
+        return andBitCount(a, 0, b, 0);
+    }
+
     /**
      * AND bit count computed over signed bytes.
      * Copied from Lucene's XOR implementation
@@ -110,12 +126,12 @@ public class ESVectorUtil {
      * @param b bytes containing another vector, of the same dimension
      * @return the value of the AND bit count of the two vectors
      */
-    public static int andBitCount(byte[] a, byte[] b) {
+    public static int andBitCount(byte[] a, int aOffset, byte[] b, int bOffset) {
         if (a.length != b.length) {
             throw new IllegalArgumentException("vector dimensions differ: " + a.length + "!=" + b.length);
         }
         try {
-            return (int) BIT_COUNT_MH.invokeExact(a, b);
+            return (int) BIT_COUNT_MH.invokeExact(a, aOffset, b, bOffset);
         } catch (Throwable e) {
             if (e instanceof Error err) {
                 throw err;
@@ -128,29 +144,31 @@ public class ESVectorUtil {
     }
 
     /** AND bit count striding over 4 bytes at a time. */
-    static int andBitCountInt(byte[] a, byte[] b) {
+    static int andBitCountInt(byte[] a, int aOffset, byte[] b, int bOffset) {
         int distance = 0, i = 0;
         // limit to number of int values in the array iterating by int byte views
         for (final int upperBound = a.length & -Integer.BYTES; i < upperBound; i += Integer.BYTES) {
-            distance += Integer.bitCount((int) BitUtil.VH_NATIVE_INT.get(a, i) & (int) BitUtil.VH_NATIVE_INT.get(b, i));
+            distance += Integer.bitCount((int) BitUtil.VH_NATIVE_INT.get(a, i + aOffset) & (int) BitUtil.VH_NATIVE_INT.get(b, i + bOffset));
         }
         // tail:
         for (; i < a.length; i++) {
-            distance += Integer.bitCount((a[i] & b[i]) & 0xFF);
+            distance += Integer.bitCount((a[i + aOffset] & b[i + bOffset]) & 0xFF);
         }
         return distance;
     }
 
     /** AND bit count striding over 8 bytes at a time**/
-    static int andBitCountLong(byte[] a, byte[] b) {
+    static int andBitCountLong(byte[] a, int aOffset, byte[] b, int bOffset) {
         int distance = 0, i = 0;
         // limit to number of long values in the array iterating by long byte views
         for (final int upperBound = a.length & -Long.BYTES; i < upperBound; i += Long.BYTES) {
-            distance += Long.bitCount((long) BitUtil.VH_NATIVE_LONG.get(a, i) & (long) BitUtil.VH_NATIVE_LONG.get(b, i));
+            distance += Long.bitCount(
+                (long) BitUtil.VH_NATIVE_LONG.get(a, i + aOffset) & (long) BitUtil.VH_NATIVE_LONG.get(b, i + bOffset)
+            );
         }
         // tail:
         for (; i < a.length; i++) {
-            distance += Integer.bitCount((a[i] & b[i]) & 0xFF);
+            distance += Integer.bitCount((a[i + aOffset] & b[i + bOffset]) & 0xFF);
         }
         return distance;
     }

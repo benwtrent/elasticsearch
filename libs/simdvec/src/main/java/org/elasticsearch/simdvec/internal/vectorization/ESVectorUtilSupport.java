@@ -21,7 +21,11 @@ public interface ESVectorUtilSupport {
      * @param q query vector, {@link #B_QUERY}-bit quantized and striped (see {@code BQSpaceUtils.transposeHalfByte})
      * @param d data vector, 1-bit quantized
      */
-    long ipByteBinByte(byte[] q, byte[] d);
+    long ipByteBinByte(byte[] q, byte[] d, int length, int offset);
+
+    default long ipByteBinByte(byte[] q, byte[] d) {
+        return ipByteBinByte(q, d, d.length, 0);
+    }
 
     int ipByteBit(byte[] q, byte[] d);
 

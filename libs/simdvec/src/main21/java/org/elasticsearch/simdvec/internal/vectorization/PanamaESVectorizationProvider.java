@@ -11,6 +11,7 @@ package org.elasticsearch.simdvec.internal.vectorization;
 
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.MemorySegmentAccessInput;
+import org.elasticsearch.simdvec.ES91BulkInt4VectorsScorer;
 import org.elasticsearch.simdvec.ES91Int4VectorsScorer;
 import org.elasticsearch.simdvec.ES91OSQVectorsScorer;
 
@@ -28,6 +29,17 @@ final class PanamaESVectorizationProvider extends ESVectorizationProvider {
     @Override
     public ESVectorUtilSupport getVectorUtilSupport() {
         return vectorUtilSupport;
+    }
+
+    @Override
+    public ES91BulkInt4VectorsScorer newES91Int4BulkVectorsScorer(IndexInput input, int dimension) throws IOException {
+        if (PanamaESVectorUtilSupport.HAS_FAST_INTEGER_VECTORS && input instanceof MemorySegmentAccessInput msai) {
+            MemorySegment ms = msai.segmentSliceOrNull(0, input.length());
+            if (ms != null) {
+                return new MemorySegmentES91BulkInt4VectorsScorer(input, dimension, ms);
+            }
+        }
+        return new ES91BulkInt4VectorsScorer(input, dimension);
     }
 
     @Override

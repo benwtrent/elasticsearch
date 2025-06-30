@@ -26,8 +26,8 @@ final class DefaultESVectorUtilSupport implements ESVectorUtilSupport {
     DefaultESVectorUtilSupport() {}
 
     @Override
-    public long ipByteBinByte(byte[] q, byte[] d) {
-        return ipByteBinByteImpl(q, d);
+    public long ipByteBinByte(byte[] q, byte[] d, int length, int offset) {
+        return ipByteBinByteImpl(q, d, length, offset);
     }
 
     @Override
@@ -241,20 +241,22 @@ final class DefaultESVectorUtilSupport implements ESVectorUtilSupport {
      * @param d data vector, 1-bit quantized
      * @return  inner product result
      */
-    public static long ipByteBinByteImpl(byte[] q, byte[] d) {
+    public static long ipByteBinByteImpl(byte[] q, byte[] d, int length, int offset) {
         long ret = 0;
-        int size = d.length;
+        int size = length;
         for (int s = 0; s < B_QUERY; s++) { // for each stripe of B_QUERY-bit quantization in q...
             int r = 0;
             long stripeRet = 0;
             // bitwise & the query and data vectors together, 32-bits at a time, and counting up the bits still set
-            for (final int upperBound = d.length & -Integer.BYTES; r < upperBound; r += Integer.BYTES) {
-                stripeRet += Integer.bitCount((int) BitUtil.VH_NATIVE_INT.get(q, s * size + r) & (int) BitUtil.VH_NATIVE_INT.get(d, r));
+            for (final int upperBound = length & -Integer.BYTES; r < upperBound; r += Integer.BYTES) {
+                stripeRet += Integer.bitCount(
+                    (int) BitUtil.VH_NATIVE_INT.get(q, s * size + r) & (int) BitUtil.VH_NATIVE_INT.get(d, r + offset)
+                );
             }
             // handle any tail
             // Java operations on bytes automatically extend to int, so we need to mask back down again in case it sign-extends the int
-            for (; r < d.length; r++) {
-                stripeRet += Integer.bitCount((q[s * size + r] & d[r]) & 0xFF);
+            for (; r < length; r++) {
+                stripeRet += Integer.bitCount((q[s * size + r] & d[r + offset]) & 0xFF);
             }
             // shift the result of the s'th stripe s to the left and add to the result
             ret += stripeRet << s;
