@@ -24,6 +24,7 @@ import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.internal.hppc.IntObjectHashMap;
 import org.apache.lucene.search.AbstractKnnCollector;
 import org.apache.lucene.search.KnnCollector;
+import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.ChecksumIndexInput;
 import org.apache.lucene.store.DataInput;
 import org.apache.lucene.store.IOContext;
@@ -32,6 +33,8 @@ import org.apache.lucene.util.BitSet;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.FixedBitSet;
 import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.search.vectors.IVFKnnSearchStrategy;
 
 import java.io.IOException;
@@ -44,6 +47,8 @@ import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.DYNAMIC_NPR
  * Reader for IVF vectors. This reader is used to read the IVF vectors from the index.
  */
 public abstract class IVFVectorsReader extends KnnVectorsReader {
+
+    private static final Logger logger = LogManager.getLogger(IVFVectorsReader.class);
 
     private final IndexInput ivfCentroids, ivfClusters;
     private final SegmentReadState state;
@@ -253,14 +258,17 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         // Note, numCollected is doing the bare minimum here.
         // TODO do we need to handle nested doc counts similarly to how we handle
         // filtering? E.g. keep exploring until we hit an expected number of parent documents vs. child vectors?
+        OnlineStats estimateVsMaxScored = new OnlineStats();
         while (centroidIterator.hasNext() && (centroidsVisited < nProbe || knnCollectorImpl.numCollected() < knnCollector.k())) {
             ++centroidsVisited;
             // todo do we actually need to know the score???
             long offset = centroidIterator.nextPostingListOffset();
+            float score = centroidIterator.score();
+
             // todo do we need direct access to the raw centroid???, this is used for quantizing, maybe hydrating and quantizing
             // is enough?
-            expectedDocs += scorer.resetPostingsScorer(offset);
-            actualDocs += scorer.visit(knnCollector);
+            expectedDocs += scorer.resetPostingsScorer(offset, score);
+            actualDocs += scorer.visit(knnCollector, estimateVsMaxScored);
         }
         if (acceptDocs != null) {
             float unfilteredRatioVisited = (float) expectedDocs / numVectors;
@@ -268,10 +276,28 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             float expectedScored = Math.min(2 * filteredVectors * unfilteredRatioVisited, expectedDocs / 2f);
             while (centroidIterator.hasNext() && (actualDocs < expectedScored || actualDocs < knnCollector.k())) {
                 long offset = centroidIterator.nextPostingListOffset();
-                scorer.resetPostingsScorer(offset);
-                actualDocs += scorer.visit(knnCollector);
+                float score = centroidIterator.score();
+                scorer.resetPostingsScorer(offset, score);
+                actualDocs += scorer.visit(knnCollector, estimateVsMaxScored);
             }
         }
+        logger.info(
+            "IVF search for centroidsVisited={} expectedDocs={} actualDocs={} estimateVsMaxScored={}",
+            centroidsVisited,
+            expectedDocs,
+            actualDocs,
+            estimateVsMaxScored
+        );
+        // print out the scores for the nearest neighbors gathered
+        TopDocs topDocs = knnCollector.topDocs();
+        OnlineStats scoreStats = new OnlineStats();
+        float[] scores = new float[topDocs.scoreDocs.length];
+        for (int i = 0; i < topDocs.scoreDocs.length; i++) {
+            scoreStats.add(topDocs.scoreDocs[i].score);
+            scores[i] = topDocs.scoreDocs[i].score;
+            knnCollector.collect(topDocs.scoreDocs[i].doc, topDocs.scoreDocs[i].score);
+        }
+        logger.info("scoreStats={}", scoreStats);
     }
 
     @Override
@@ -306,6 +332,54 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         }
     }
 
+    public static class OnlineStats {
+        private double mean = 0.0;
+        private double var = 0.0;
+        private double max = Double.NEGATIVE_INFINITY;
+        private double min = Double.POSITIVE_INFINITY;
+        private int n = 0;
+
+        void reset() {
+            mean = 0.0;
+            var = 0.0;
+            n = 0;
+        }
+
+        void add(double x) {
+            n++;
+            double delta = x - mean;
+            mean += delta / n;
+            var += delta * (x - mean);
+            max = Math.max(max, x);
+            min = Math.min(min, x);
+        }
+
+        float var() {
+            return (float) (var / (n - 1));
+        }
+
+        float mean() {
+            return (float) mean;
+        }
+
+        float max() {
+            return (float) max;
+        }
+
+        float min() {
+            return (float) min;
+        }
+
+        float norm2() {
+            return (float) Math.sqrt(var);
+        }
+
+        public String toString() {
+            return "OnlineStats{mean=" + mean() + ", var=" + var() + ", max=" + max() + ", min=" + min() + ", n=" + n + "}";
+        }
+    }
+
+
     abstract PostingVisitor getPostingVisitor(FieldInfo fieldInfo, IndexInput postingsLists, float[] target, IntPredicate needsScoring)
         throws IOException;
 
@@ -313,15 +387,17 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         boolean hasNext();
 
         long nextPostingListOffset() throws IOException;
+
+        float score() throws IOException;
     }
 
     interface PostingVisitor {
         // TODO maybe we can not specifically pass the centroid...
 
         /** returns the number of documents in the posting list */
-        int resetPostingsScorer(long offset) throws IOException;
+        int resetPostingsScorer(long offset, float centroidScore) throws IOException;
 
         /** returns the number of scored documents */
-        int visit(KnnCollector collector) throws IOException;
+        int visit(KnnCollector collector, OnlineStats estimateVsMaxScored) throws IOException;
     }
 }

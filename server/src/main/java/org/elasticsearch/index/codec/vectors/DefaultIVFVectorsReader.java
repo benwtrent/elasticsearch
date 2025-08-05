@@ -19,6 +19,8 @@ import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.VectorUtil;
 import org.apache.lucene.util.hnsw.NeighborQueue;
 import org.elasticsearch.index.codec.vectors.reflect.OffHeapStats;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.simdvec.ES91OSQVectorsScorer;
 import org.elasticsearch.simdvec.ES92Int7VectorsScorer;
 import org.elasticsearch.simdvec.ESVectorUtil;
@@ -39,6 +41,7 @@ import static org.elasticsearch.simdvec.ES91OSQVectorsScorer.BULK_SIZE;
  * brute force and then scores the top ones using the posting list.
  */
 public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeapStats {
+    private static final Logger logger = LogManager.getLogger(DefaultIVFVectorsReader.class);
 
     // The percentage of centroids that are scored to keep recall
     public static final double CENTROID_SAMPLING_PERCENTAGE = 0.2;
@@ -109,6 +112,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         );
         long offset = centroids.getFilePointer();
         return new CentroidIterator() {
+            float score;
             @Override
             public boolean hasNext() {
                 return neighborQueue.size() > 0;
@@ -116,9 +120,15 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
 
             @Override
             public long nextPostingListOffset() throws IOException {
+                score = neighborQueue.topScore();
                 int centroidOrdinal = neighborQueue.pop();
                 centroids.seek(offset + (long) Long.BYTES * centroidOrdinal);
                 return centroids.readLong();
+            }
+
+            @Override
+            public float score() {
+                return score;
             }
         };
     }
@@ -179,6 +189,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         }
         final long childrenFileOffsets = childrenOffset + centroidQuantizeSize * numCentroids;
         return new CentroidIterator() {
+            float score;
             @Override
             public boolean hasNext() {
                 return neighborQueue.size() > 0;
@@ -186,10 +197,16 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
 
             @Override
             public long nextPostingListOffset() throws IOException {
+                score = neighborQueue.topScore();
                 int centroidOrdinal = neighborQueue.pop();
                 updateQueue(); // add one children if available so the queue remains fully populated
                 centroids.seek(childrenFileOffsets + (long) Long.BYTES * centroidOrdinal);
                 return centroids.readLong();
+            }
+
+            @Override
+            public float score() {
+                return score;
             }
 
             private void updateQueue() throws IOException {
@@ -326,6 +343,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         final float[] centroid;
         long estimatePos;
         long slicePos;
+        float centroidScore;
         OptimizedScalarQuantizer.QuantizationResult queryCorrections;
         DocIdsWriter docIdsWriter = new DocIdsWriter();
 
@@ -363,7 +381,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         }
 
         @Override
-        public int resetPostingsScorer(long offset) throws IOException {
+        public int resetPostingsScorer(long offset, float centroidScore) throws IOException {
             quantized = false;
             indexInput.seek(offset);
             indexInput.readFloats(centroid, 0, centroid.length);
@@ -373,6 +391,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             docIdsScratch = vectors > docIdsScratch.length ? new int[vectors] : docIdsScratch;
             docIdsWriter.readInts(indexInput, vectors, docIdsScratch);
             slicePos = indexInput.getFilePointer();
+            this.centroidScore = centroidScore;
             return vectors;
         }
 
@@ -448,7 +467,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         }
 
         @Override
-        public int visit(KnnCollector knnCollector) throws IOException {
+        public int visit(KnnCollector knnCollector, OnlineStats estimateVsMaxScored) throws IOException {
             // block processing
             int scoredDocs = 0;
             int numBlks = vectors / BULK_SIZE;
@@ -460,13 +479,14 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 }
                 quantizeQueryIfNecessary();
                 // TODO estimate blk score....
+                float blockEstimate = Float.NEGATIVE_INFINITY;
                 if (knnCollector.minCompetitiveSimilarity() > 0) {
                     // let's score against the block estimator and see if we can skip it.
                     indexInput.seek(this.slicePos + (blk * quantizedBlockSize));
                     long qcDist = osqVectorsScorer.quantizeScore(quantizedQueryScratch);
                     indexInput.readFloats(correctiveValues, 0, 3);
                     final int quantizedComponentSum = Short.toUnsignedInt(indexInput.readShort());
-                    float score = osqVectorsScorer.score(
+                    blockEstimate = osqVectorsScorer.score(
                         queryCorrections.lowerInterval(),
                         queryCorrections.upperInterval(),
                         queryCorrections.quantizedComponentSum(),
@@ -479,9 +499,8 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                         correctiveValues[2],
                         qcDist
                     );
-                    if (score < knnCollector.minCompetitiveSimilarity() * 0.9) {
-                        // skip this block
-                        continue;
+                    if (blockEstimate + (knnCollector.minCompetitiveSimilarity() - centroidScore)/2 < knnCollector.minCompetitiveSimilarity()) {
+                        continue; // skip this block
                     }
                 }
                 indexInput.seek(slicePos + (blk * quantizedBlockSize) + quantizedByteLength);
@@ -499,6 +518,9 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                         centroidDp,
                         scores
                     );
+                }
+                if (blockEstimate != Float.NEGATIVE_INFINITY) {
+                    estimateVsMaxScored.add(Math.abs(blockEstimate - maxScore));
                 }
                 if (knnCollector.minCompetitiveSimilarity() < maxScore) {
                     scoredDocs += collect(docIdsScratch, blk, knnCollector, scores);

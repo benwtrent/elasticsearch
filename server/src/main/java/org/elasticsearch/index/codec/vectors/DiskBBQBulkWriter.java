@@ -10,6 +10,8 @@
 package org.elasticsearch.index.codec.vectors;
 
 import org.apache.lucene.store.IndexOutput;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 
 import java.io.IOException;
 
@@ -19,6 +21,8 @@ import java.io.IOException;
  * implementations for different bit sizes strategies.
  */
 abstract class DiskBBQBulkWriter {
+    private static final Logger logger = LogManager.getLogger(DiskBBQBulkWriter.class);
+
     protected final int bulkSize;
     protected final IndexOutput out;
 
@@ -52,7 +56,7 @@ abstract class DiskBBQBulkWriter {
             for (int bit = 0; bit < bitCounts.length; bit++) {
                 int byteIdx = bit / 8;
                 int bitIdx = 7 - (bit % 8);
-                if (bitCounts[bit] > numVectors / 2) {
+                if (bitCounts[bit] >= numVectors / 2) {
                     result[byteIdx] |= (byte) (1 << bitIdx);
                 }
             }
@@ -85,7 +89,6 @@ abstract class DiskBBQBulkWriter {
                     corrections[j] = qvv.getCorrections();
                     lowerInterval += corrections[j].lowerInterval();
                     upperInterval += corrections[j].upperInterval();
-                    targetComponentSum += corrections[j].quantizedComponentSum();
                     additionalCorrection += corrections[j].additionalCorrection();
                 }
                 // average the packed vectors
@@ -93,7 +96,7 @@ abstract class DiskBBQBulkWriter {
                 lowerInterval /= bulkSize;
                 upperInterval /= bulkSize;
                 additionalCorrection /= bulkSize;
-                targetComponentSum /= bulkSize;
+                targetComponentSum = BQVectorUtils.popcount(avged);
                 // write the average packed vector
                 out.writeBytes(avged, avged.length);
                 // write the average corrections
