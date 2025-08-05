@@ -24,7 +24,6 @@ import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.internal.hppc.IntObjectHashMap;
 import org.apache.lucene.search.AbstractKnnCollector;
 import org.apache.lucene.search.KnnCollector;
-import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.ChecksumIndexInput;
 import org.apache.lucene.store.DataInput;
 import org.apache.lucene.store.IOContext;
@@ -258,7 +257,6 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         // Note, numCollected is doing the bare minimum here.
         // TODO do we need to handle nested doc counts similarly to how we handle
         // filtering? E.g. keep exploring until we hit an expected number of parent documents vs. child vectors?
-        OnlineStats estimateVsMaxScored = new OnlineStats();
         while (centroidIterator.hasNext() && (centroidsVisited < nProbe || knnCollectorImpl.numCollected() < knnCollector.k())) {
             ++centroidsVisited;
             // todo do we actually need to know the score???
@@ -268,7 +266,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             // todo do we need direct access to the raw centroid???, this is used for quantizing, maybe hydrating and quantizing
             // is enough?
             expectedDocs += scorer.resetPostingsScorer(offset, score);
-            actualDocs += scorer.visit(knnCollector, estimateVsMaxScored);
+            actualDocs += scorer.visit(knnCollector);
         }
         if (acceptDocs != null) {
             float unfilteredRatioVisited = (float) expectedDocs / numVectors;
@@ -278,26 +276,9 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
                 long offset = centroidIterator.nextPostingListOffset();
                 float score = centroidIterator.score();
                 scorer.resetPostingsScorer(offset, score);
-                actualDocs += scorer.visit(knnCollector, estimateVsMaxScored);
+                actualDocs += scorer.visit(knnCollector);
             }
         }
-        logger.info(
-            "IVF search for centroidsVisited={} expectedDocs={} actualDocs={} estimateVsMaxScored={}",
-            centroidsVisited,
-            expectedDocs,
-            actualDocs,
-            estimateVsMaxScored
-        );
-        // print out the scores for the nearest neighbors gathered
-        TopDocs topDocs = knnCollector.topDocs();
-        OnlineStats scoreStats = new OnlineStats();
-        float[] scores = new float[topDocs.scoreDocs.length];
-        for (int i = 0; i < topDocs.scoreDocs.length; i++) {
-            scoreStats.add(topDocs.scoreDocs[i].score);
-            scores[i] = topDocs.scoreDocs[i].score;
-            knnCollector.collect(topDocs.scoreDocs[i].doc, topDocs.scoreDocs[i].score);
-        }
-        logger.info("scoreStats={}", scoreStats);
     }
 
     @Override
@@ -379,7 +360,6 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         }
     }
 
-
     abstract PostingVisitor getPostingVisitor(FieldInfo fieldInfo, IndexInput postingsLists, float[] target, IntPredicate needsScoring)
         throws IOException;
 
@@ -398,6 +378,6 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         int resetPostingsScorer(long offset, float centroidScore) throws IOException;
 
         /** returns the number of scored documents */
-        int visit(KnnCollector collector, OnlineStats estimateVsMaxScored) throws IOException;
+        int visit(KnnCollector collector) throws IOException;
     }
 }

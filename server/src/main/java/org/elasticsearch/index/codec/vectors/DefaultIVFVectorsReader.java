@@ -113,6 +113,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         long offset = centroids.getFilePointer();
         return new CentroidIterator() {
             float score;
+
             @Override
             public boolean hasNext() {
                 return neighborQueue.size() > 0;
@@ -190,6 +191,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         final long childrenFileOffsets = childrenOffset + centroidQuantizeSize * numCentroids;
         return new CentroidIterator() {
             float score;
+
             @Override
             public boolean hasNext() {
                 return neighborQueue.size() > 0;
@@ -467,7 +469,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         }
 
         @Override
-        public int visit(KnnCollector knnCollector, OnlineStats estimateVsMaxScored) throws IOException {
+        public int visit(KnnCollector knnCollector) throws IOException {
             // block processing
             int scoredDocs = 0;
             int numBlks = vectors / BULK_SIZE;
@@ -480,7 +482,8 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 quantizeQueryIfNecessary();
                 // TODO estimate blk score....
                 float blockEstimate = Float.NEGATIVE_INFINITY;
-                if (knnCollector.minCompetitiveSimilarity() > 0) {
+                // we are hitting further centroids than we have gathered, start checking block estimates for skipping
+                if (knnCollector.minCompetitiveSimilarity() > centroidScore) {
                     // let's score against the block estimator and see if we can skip it.
                     indexInput.seek(this.slicePos + (blk * quantizedBlockSize));
                     long qcDist = osqVectorsScorer.quantizeScore(quantizedQueryScratch);
@@ -499,7 +502,8 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                         correctiveValues[2],
                         qcDist
                     );
-                    if (blockEstimate + (knnCollector.minCompetitiveSimilarity() - centroidScore)/2 < knnCollector.minCompetitiveSimilarity()) {
+                    if (blockEstimate + (knnCollector.minCompetitiveSimilarity() - centroidScore) < knnCollector
+                        .minCompetitiveSimilarity()) {
                         continue; // skip this block
                     }
                 }
@@ -518,9 +522,6 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                         centroidDp,
                         scores
                     );
-                }
-                if (blockEstimate != Float.NEGATIVE_INFINITY) {
-                    estimateVsMaxScored.add(Math.abs(blockEstimate - maxScore));
                 }
                 if (knnCollector.minCompetitiveSimilarity() < maxScore) {
                     scoredDocs += collect(docIdsScratch, blk, knnCollector, scores);
