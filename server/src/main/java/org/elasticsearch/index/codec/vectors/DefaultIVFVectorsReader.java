@@ -355,6 +355,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             final int discretizedDimensions = discretize(fieldInfo.getVectorDimension(), 64);
             quantizedQueryScratch = new byte[QUERY_BITS * discretizedDimensions / 8];
             quantizedByteLength = discretizedDimensions / 8 + (Float.BYTES * 3) + Short.BYTES;
+            // BULK_SIZE vectors and a block estimator
             quantizedBlockSize = (BULK_SIZE + 1) * quantizedByteLength;
             quantizedVectorByteSize = (discretizedDimensions / 8);
             quantizer = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction(), DEFAULT_LAMBDA, 1);
@@ -372,20 +373,17 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             docIdsScratch = vectors > docIdsScratch.length ? new int[vectors] : docIdsScratch;
             docIdsWriter.readInts(indexInput, vectors, docIdsScratch);
             slicePos = indexInput.getFilePointer();
-            // we have a bulk estimator
-            if (vectors >= BULK_SIZE) {
-                estimatePos = slicePos;
-                slicePos += quantizedByteLength;
-            }
             return vectors;
         }
 
-        float scoreIndividually(int offset) throws IOException {
+        float scoreIndividually(int block) throws IOException {
             float maxScore = Float.NEGATIVE_INFINITY;
-            long offsetSlice = slicePos + (offset * quantizedByteLength);
+            int absOffset = block * BULK_SIZE;
+            // get to the slice position for the given block, past the estimator
+            long offsetSlice = slicePos + (block * quantizedBlockSize) + quantizedVectorByteSize;
             // score individually, first the quantized byte chunk
             for (int j = 0; j < BULK_SIZE; j++) {
-                int doc = docIdsScratch[j + offset];
+                int doc = docIdsScratch[j + absOffset];
                 if (doc != -1) {
                     indexInput.seek(offsetSlice + (j * quantizedVectorByteSize));
                     float qcDist = osqVectorsScorer.quantizeScore(quantizedQueryScratch);
@@ -402,7 +400,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             indexInput.readFloats(correctionsAdd, 0, BULK_SIZE);
             // Now apply corrections
             for (int j = 0; j < BULK_SIZE; j++) {
-                int doc = docIdsScratch[offset + j];
+                int doc = docIdsScratch[absOffset + j];
                 if (doc != -1) {
                     scores[j] = osqVectorsScorer.score(
                         queryCorrections.lowerInterval(),
@@ -436,8 +434,9 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             return filtered;
         }
 
-        private static int collect(int[] docIds, int offset, KnnCollector knnCollector, float[] scores) {
+        private static int collect(int[] docIds, int blk, KnnCollector knnCollector, float[] scores) {
             int scoredDocs = 0;
+            int offset = blk * ES91OSQVectorsScorer.BULK_SIZE;
             for (int i = 0; i < ES91OSQVectorsScorer.BULK_SIZE; i++) {
                 int doc = docIds[offset + i];
                 if (doc != -1) {
@@ -452,18 +451,19 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         public int visit(KnnCollector knnCollector) throws IOException {
             // block processing
             int scoredDocs = 0;
-            int limit = vectors - BULK_SIZE + 1;
-            int i = 0;
-            for (; i < limit; i += BULK_SIZE) {
-                int docsToScore = BULK_SIZE - filterDocs(docIdsScratch, i, needsScoring);
+            int numBlks = vectors / BULK_SIZE;
+            int blk = 0;
+            for (; blk < numBlks; blk++) {
+                int docsToScore = BULK_SIZE - filterDocs(docIdsScratch, blk * BULK_SIZE, needsScoring);
                 if (docsToScore == 0) {
                     continue;
                 }
                 quantizeQueryIfNecessary();
-                indexInput.seek(slicePos + i * quantizedByteLength);
-                float maxScore = Float.NEGATIVE_INFINITY;
+                // TODO estimate blk score....
+                indexInput.seek(slicePos + (blk * quantizedBlockSize) + quantizedVectorByteSize);
+                float maxScore;
                 if (docsToScore < BULK_SIZE / 2) {
-                    maxScore = scoreIndividually(i);
+                    maxScore = scoreIndividually(blk);
                 } else {
                     maxScore = osqVectorsScorer.scoreBulk(
                         quantizedQueryScratch,
@@ -477,15 +477,16 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                     );
                 }
                 if (knnCollector.minCompetitiveSimilarity() < maxScore) {
-                    scoredDocs += collect(docIdsScratch, i, knnCollector, scores);
+                    scoredDocs += collect(docIdsScratch, blk, knnCollector, scores);
                 }
             }
-            // process tail
-            for (; i < vectors; i++) {
-                int doc = docIdsScratch[i];
+            // get to the tail
+            long slicePos = this.slicePos + (numBlks * quantizedBlockSize);
+            for (int d = numBlks * BULK_SIZE, posIdx = 0; d < vectors; d++, posIdx++) {
+                int doc = docIdsScratch[d];
                 if (needsScoring.test(doc)) {
                     quantizeQueryIfNecessary();
-                    indexInput.seek(slicePos + i * quantizedByteLength);
+                    indexInput.seek(slicePos + posIdx * quantizedByteLength);
                     float qcDist = osqVectorsScorer.quantizeScore(quantizedQueryScratch);
                     indexInput.readFloats(correctiveValues, 0, 3);
                     final int quantizedComponentSum = Short.toUnsignedInt(indexInput.readShort());
@@ -503,7 +504,9 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                         qcDist
                     );
                     scoredDocs++;
-                    knnCollector.collect(doc, score);
+                    if (knnCollector.minCompetitiveSimilarity() < score) {
+                        knnCollector.collect(doc, score);
+                    }
                 }
             }
             if (scoredDocs > 0) {
