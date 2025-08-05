@@ -40,6 +40,32 @@ public class BQVectorUtils {
         return Math.abs(l1norm - 1.0d) <= EPSILON;
     }
 
+    public static byte[] averageBitwisePacked(byte[][] packedVectors, int vectorLength) {
+        int numVectors = packedVectors.length;
+        int numBytes = (vectorLength + 7) / 8;
+        int[] bitCounts = new int[vectorLength];
+
+        for (byte[] packed : packedVectors) {
+            for (int bit = 0; bit < vectorLength; bit++) {
+                int byteIdx = bit / 8;
+                int bitIdx = 7 - (bit % 8);
+                if (((packed[byteIdx] >> bitIdx) & 1) != 0) {
+                    bitCounts[bit]++;
+                }
+            }
+        }
+
+        byte[] result = new byte[numBytes];
+        for (int bit = 0; bit < vectorLength; bit++) {
+            int byteIdx = bit / 8;
+            int bitIdx = 7 - (bit % 8);
+            if (bitCounts[bit] > numVectors / 2) {
+                result[byteIdx] |= (byte) (1 << bitIdx);
+            }
+        }
+        return result;
+    }
+
     public static void packAsBinary(int[] vector, byte[] packed) {
         for (int i = 0; i < vector.length;) {
             byte result = 0;

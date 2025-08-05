@@ -324,6 +324,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         boolean quantized = false;
         float centroidDp;
         final float[] centroid;
+        long estimatePos;
         long slicePos;
         OptimizedScalarQuantizer.QuantizationResult queryCorrections;
         DocIdsWriter docIdsWriter = new DocIdsWriter();
@@ -334,6 +335,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         final OptimizedScalarQuantizer quantizer;
         final float[] correctiveValues = new float[3];
         final long quantizedVectorByteSize;
+        final long quantizedBlockSize;
 
         MemorySegmentPostingsVisitor(
             float[] target,
@@ -353,6 +355,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             final int discretizedDimensions = discretize(fieldInfo.getVectorDimension(), 64);
             quantizedQueryScratch = new byte[QUERY_BITS * discretizedDimensions / 8];
             quantizedByteLength = discretizedDimensions / 8 + (Float.BYTES * 3) + Short.BYTES;
+            quantizedBlockSize = (BULK_SIZE + 1) * quantizedByteLength;
             quantizedVectorByteSize = (discretizedDimensions / 8);
             quantizer = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction(), DEFAULT_LAMBDA, 1);
             osqVectorsScorer = ESVectorUtil.getES91OSQVectorsScorer(indexInput, fieldInfo.getVectorDimension());
@@ -369,22 +372,28 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             docIdsScratch = vectors > docIdsScratch.length ? new int[vectors] : docIdsScratch;
             docIdsWriter.readInts(indexInput, vectors, docIdsScratch);
             slicePos = indexInput.getFilePointer();
+            // we have a bulk estimator
+            if (vectors >= BULK_SIZE) {
+                estimatePos = slicePos;
+                slicePos += quantizedByteLength;
+            }
             return vectors;
         }
 
         float scoreIndividually(int offset) throws IOException {
             float maxScore = Float.NEGATIVE_INFINITY;
+            long offsetSlice = slicePos + (offset * quantizedByteLength);
             // score individually, first the quantized byte chunk
             for (int j = 0; j < BULK_SIZE; j++) {
                 int doc = docIdsScratch[j + offset];
                 if (doc != -1) {
-                    indexInput.seek(slicePos + (offset * quantizedByteLength) + (j * quantizedVectorByteSize));
+                    indexInput.seek(offsetSlice + (j * quantizedVectorByteSize));
                     float qcDist = osqVectorsScorer.quantizeScore(quantizedQueryScratch);
                     scores[j] = qcDist;
                 }
             }
             // read in all corrections
-            indexInput.seek(slicePos + (offset * quantizedByteLength) + (BULK_SIZE * quantizedVectorByteSize));
+            indexInput.seek(offsetSlice + (BULK_SIZE * quantizedVectorByteSize));
             indexInput.readFloats(correctionsLower, 0, BULK_SIZE);
             indexInput.readFloats(correctionsUpper, 0, BULK_SIZE);
             for (int j = 0; j < BULK_SIZE; j++) {
