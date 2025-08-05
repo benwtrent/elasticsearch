@@ -380,7 +380,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             float maxScore = Float.NEGATIVE_INFINITY;
             int absOffset = block * BULK_SIZE;
             // get to the slice position for the given block, past the estimator
-            long offsetSlice = slicePos + (block * quantizedBlockSize) + quantizedVectorByteSize;
+            long offsetSlice = slicePos + (block * quantizedBlockSize) + quantizedByteLength;
             // score individually, first the quantized byte chunk
             for (int j = 0; j < BULK_SIZE; j++) {
                 int doc = docIdsScratch[j + absOffset];
@@ -460,7 +460,31 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 }
                 quantizeQueryIfNecessary();
                 // TODO estimate blk score....
-                indexInput.seek(slicePos + (blk * quantizedBlockSize) + quantizedVectorByteSize);
+                if (knnCollector.minCompetitiveSimilarity() > 0) {
+                    // let's score against the block estimator and see if we can skip it.
+                    indexInput.seek(this.slicePos + (blk * quantizedBlockSize));
+                    long qcDist = osqVectorsScorer.quantizeScore(quantizedQueryScratch);
+                    indexInput.readFloats(correctiveValues, 0, 3);
+                    final int quantizedComponentSum = Short.toUnsignedInt(indexInput.readShort());
+                    float score = osqVectorsScorer.score(
+                        queryCorrections.lowerInterval(),
+                        queryCorrections.upperInterval(),
+                        queryCorrections.quantizedComponentSum(),
+                        queryCorrections.additionalCorrection(),
+                        fieldInfo.getVectorSimilarityFunction(),
+                        centroidDp,
+                        correctiveValues[0],
+                        correctiveValues[1],
+                        quantizedComponentSum,
+                        correctiveValues[2],
+                        qcDist
+                    );
+                    if (score < knnCollector.minCompetitiveSimilarity() * 0.9) {
+                        // skip this block
+                        continue;
+                    }
+                }
+                indexInput.seek(slicePos + (blk * quantizedBlockSize) + quantizedByteLength);
                 float maxScore;
                 if (docsToScore < BULK_SIZE / 2) {
                     maxScore = scoreIndividually(blk);
