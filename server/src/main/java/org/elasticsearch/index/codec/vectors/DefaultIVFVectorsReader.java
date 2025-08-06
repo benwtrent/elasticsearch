@@ -502,7 +502,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                         correctiveValues[2],
                         qcDist
                     );
-                    if (blockEstimate + (knnCollector.minCompetitiveSimilarity() - centroidScore) < knnCollector
+                    if (blockEstimate + (centroidScore - knnCollector.minCompetitiveSimilarity()) / quantizedComponentSum < knnCollector
                         .minCompetitiveSimilarity()) {
                         continue; // skip this block
                     }
