@@ -46,16 +46,19 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
 
     private final int vectorPerCluster;
     private final int centroidsPerParentCluster;
+    private final float alpha;
 
     public DefaultIVFVectorsWriter(
         SegmentWriteState state,
         FlatVectorsWriter rawVectorDelegate,
         int vectorPerCluster,
-        int centroidsPerParentCluster
+        int centroidsPerParentCluster,
+        float alpha
     ) throws IOException {
         super(state, rawVectorDelegate);
         this.vectorPerCluster = vectorPerCluster;
         this.centroidsPerParentCluster = centroidsPerParentCluster;
+        this.alpha = alpha;
     }
 
     @Override
@@ -458,6 +461,12 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         long nanoTime = System.nanoTime();
 
         // TODO: consider hinting / bootstrapping hierarchical kmeans with the prior segments centroids
+        int vectorPerCluster = alpha == 0f
+            ? this.vectorPerCluster
+            : Math.min(
+                this.vectorPerCluster,
+                Math.toIntExact(Math.round(floatVectorValues.size() / (alpha * Math.sqrt(floatVectorValues.size()))))
+            );
         CentroidAssignments centroidAssignments = buildCentroidAssignments(floatVectorValues, vectorPerCluster);
         float[][] centroids = centroidAssignments.centroids();
         // TODO: for flush we are doing this over the vectors and here centroids which seems duplicative

@@ -95,7 +95,8 @@ abstract class AbstractDiversifyingChildrenIVFKnnVectorQueryTestCase extends Luc
         super.setUp();
         format = new IVFVectorsFormat(
             random().nextInt(IVFVectorsFormat.MIN_VECTORS_PER_CLUSTER, IVFVectorsFormat.MAX_VECTORS_PER_CLUSTER),
-            random().nextInt(IVFVectorsFormat.MIN_CENTROIDS_PER_PARENT_CLUSTER, IVFVectorsFormat.MAX_CENTROIDS_PER_PARENT_CLUSTER)
+            random().nextInt(IVFVectorsFormat.MIN_CENTROIDS_PER_PARENT_CLUSTER, IVFVectorsFormat.MAX_CENTROIDS_PER_PARENT_CLUSTER),
+            1
         );
     }
 

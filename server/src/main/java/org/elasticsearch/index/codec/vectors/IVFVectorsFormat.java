@@ -71,8 +71,9 @@ public class IVFVectorsFormat extends KnnVectorsFormat {
 
     private final int vectorPerCluster;
     private final int centroidsPerParentCluster;
+    private final float clusterAlpha;
 
-    public IVFVectorsFormat(int vectorPerCluster, int centroidsPerParentCluster) {
+    public IVFVectorsFormat(int vectorPerCluster, int centroidsPerParentCluster, float clusterAlpha) {
         super(NAME);
         if (vectorPerCluster < MIN_VECTORS_PER_CLUSTER || vectorPerCluster > MAX_VECTORS_PER_CLUSTER) {
             throw new IllegalArgumentException(
@@ -96,16 +97,23 @@ public class IVFVectorsFormat extends KnnVectorsFormat {
         }
         this.vectorPerCluster = vectorPerCluster;
         this.centroidsPerParentCluster = centroidsPerParentCluster;
+        this.clusterAlpha = 1.0f;
     }
 
     /** Constructs a format using the given graph construction parameters and scalar quantization. */
     public IVFVectorsFormat() {
-        this(DEFAULT_VECTORS_PER_CLUSTER, DEFAULT_CENTROIDS_PER_PARENT_CLUSTER);
+        this(DEFAULT_VECTORS_PER_CLUSTER, DEFAULT_CENTROIDS_PER_PARENT_CLUSTER, 1f);
     }
 
     @Override
     public KnnVectorsWriter fieldsWriter(SegmentWriteState state) throws IOException {
-        return new DefaultIVFVectorsWriter(state, rawVectorFormat.fieldsWriter(state), vectorPerCluster, centroidsPerParentCluster);
+        return new DefaultIVFVectorsWriter(
+            state,
+            rawVectorFormat.fieldsWriter(state),
+            vectorPerCluster,
+            centroidsPerParentCluster,
+            clusterAlpha
+        );
     }
 
     @Override

@@ -58,13 +58,15 @@ public class IVFVectorsFormatTests extends BaseKnnVectorsFormatTestCase {
         if (rarely()) {
             format = new IVFVectorsFormat(
                 random().nextInt(2 * MIN_VECTORS_PER_CLUSTER, IVFVectorsFormat.MAX_VECTORS_PER_CLUSTER),
-                random().nextInt(8, IVFVectorsFormat.MAX_CENTROIDS_PER_PARENT_CLUSTER)
+                random().nextInt(8, IVFVectorsFormat.MAX_CENTROIDS_PER_PARENT_CLUSTER),
+                1
             );
         } else {
             // run with low numbers to force many clusters with parents
             format = new IVFVectorsFormat(
                 random().nextInt(MIN_VECTORS_PER_CLUSTER, 2 * MIN_VECTORS_PER_CLUSTER),
-                random().nextInt(MIN_CENTROIDS_PER_PARENT_CLUSTER, 8)
+                random().nextInt(MIN_CENTROIDS_PER_PARENT_CLUSTER, 8),
+                1
             );
         }
         super.setUp();
@@ -106,7 +108,7 @@ public class IVFVectorsFormatTests extends BaseKnnVectorsFormatTestCase {
         FilterCodec customCodec = new FilterCodec("foo", Codec.getDefault()) {
             @Override
             public KnnVectorsFormat knnVectorsFormat() {
-                return new IVFVectorsFormat(128, 4);
+                return new IVFVectorsFormat(128, 4, 1);
             }
         };
         String expectedPattern = "IVFVectorsFormat(vectorPerCluster=128)";
@@ -117,10 +119,10 @@ public class IVFVectorsFormatTests extends BaseKnnVectorsFormatTestCase {
     }
 
     public void testLimits() {
-        expectThrows(IllegalArgumentException.class, () -> new IVFVectorsFormat(MIN_VECTORS_PER_CLUSTER - 1, 16));
-        expectThrows(IllegalArgumentException.class, () -> new IVFVectorsFormat(MAX_VECTORS_PER_CLUSTER + 1, 16));
-        expectThrows(IllegalArgumentException.class, () -> new IVFVectorsFormat(128, MIN_CENTROIDS_PER_PARENT_CLUSTER - 1));
-        expectThrows(IllegalArgumentException.class, () -> new IVFVectorsFormat(128, MAX_CENTROIDS_PER_PARENT_CLUSTER + 1));
+        expectThrows(IllegalArgumentException.class, () -> new IVFVectorsFormat(MIN_VECTORS_PER_CLUSTER - 1, 16, 1));
+        expectThrows(IllegalArgumentException.class, () -> new IVFVectorsFormat(MAX_VECTORS_PER_CLUSTER + 1, 16, 1));
+        expectThrows(IllegalArgumentException.class, () -> new IVFVectorsFormat(128, MIN_CENTROIDS_PER_PARENT_CLUSTER - 1, 1));
+        expectThrows(IllegalArgumentException.class, () -> new IVFVectorsFormat(128, MAX_CENTROIDS_PER_PARENT_CLUSTER + 1, 1));
     }
 
     public void testSimpleOffHeapSize() throws IOException {

@@ -53,7 +53,8 @@ record CmdLineArgs(
     VectorEncoding vectorEncoding,
     int dimensions,
     boolean earlyTermination,
-    KnnIndexTester.MergePolicyType mergePolicy
+    KnnIndexTester.MergePolicyType mergePolicy,
+    float alpha
 ) implements ToXContentObject {
 
     static final ParseField DOC_VECTORS_FIELD = new ParseField("doc_vectors");
@@ -81,6 +82,7 @@ record CmdLineArgs(
     static final ParseField FILTER_SELECTIVITY_FIELD = new ParseField("filter_selectivity");
     static final ParseField SEED_FIELD = new ParseField("seed");
     static final ParseField MERGE_POLICY_FIELD = new ParseField("merge_policy");
+    static final ParseField ALPHA_FIELD = new ParseField("alpha");
 
     static CmdLineArgs fromXContent(XContentParser parser) throws IOException {
         Builder builder = PARSER.apply(parser, null);
@@ -115,6 +117,7 @@ record CmdLineArgs(
         PARSER.declareFloat(Builder::setFilterSelectivity, FILTER_SELECTIVITY_FIELD);
         PARSER.declareLong(Builder::setSeed, SEED_FIELD);
         PARSER.declareString(Builder::setMergePolicy, MERGE_POLICY_FIELD);
+        PARSER.declareFloat(Builder::setAlpha, ALPHA_FIELD);
     }
 
     @Override
@@ -149,6 +152,10 @@ record CmdLineArgs(
         builder.field(EARLY_TERMINATION_FIELD.getPreferredName(), earlyTermination);
         builder.field(FILTER_SELECTIVITY_FIELD.getPreferredName(), filterSelectivity);
         builder.field(SEED_FIELD.getPreferredName(), seed);
+        if (mergePolicy != null) {
+            builder.field(MERGE_POLICY_FIELD.getPreferredName(), mergePolicy.name().toLowerCase(Locale.ROOT));
+        }
+        builder.field(ALPHA_FIELD.getPreferredName(), alpha);
         return builder.endObject();
     }
 
@@ -183,6 +190,12 @@ record CmdLineArgs(
         private float filterSelectivity = 1f;
         private long seed = 1751900822751L;
         private KnnIndexTester.MergePolicyType mergePolicy = null;
+        private float alpha = 1.0f;
+
+        public Builder setAlpha(float alpha) {
+            this.alpha = alpha;
+            return this;
+        }
 
         public Builder setDocVectors(List<String> docVectors) {
             if (docVectors == null || docVectors.isEmpty()) {
@@ -347,7 +360,8 @@ record CmdLineArgs(
                 vectorEncoding,
                 dimensions,
                 earlyTermination,
-                mergePolicy
+                mergePolicy,
+                alpha
             );
         }
     }
