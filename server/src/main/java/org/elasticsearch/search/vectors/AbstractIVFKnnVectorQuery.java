@@ -55,7 +55,7 @@ abstract class AbstractIVFKnnVectorQuery extends Query implements QueryProfilerP
     protected final KnnSearchStrategy searchStrategy;
     protected int vectorOpsCount;
 
-    protected AbstractIVFKnnVectorQuery(String field, int nProbe, int k, int numCands, Query filter) {
+    protected AbstractIVFKnnVectorQuery(String field, int nProbe, float percent, int k, int numCands, Query filter) {
         if (k < 1) {
             throw new IllegalArgumentException("k must be at least 1, got: " + k);
         }
@@ -70,7 +70,7 @@ abstract class AbstractIVFKnnVectorQuery extends Query implements QueryProfilerP
         this.k = k;
         this.filter = filter;
         this.numCands = numCands;
-        this.searchStrategy = new IVFKnnSearchStrategy(nProbe);
+        this.searchStrategy = new IVFKnnSearchStrategy(nProbe, percent);
     }
 
     @Override

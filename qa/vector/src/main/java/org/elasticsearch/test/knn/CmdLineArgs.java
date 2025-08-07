@@ -54,7 +54,8 @@ record CmdLineArgs(
     int dimensions,
     boolean earlyTermination,
     KnnIndexTester.MergePolicyType mergePolicy,
-    float alpha
+    float alpha,
+    List<Float> percent
 ) implements ToXContentObject {
 
     static final ParseField DOC_VECTORS_FIELD = new ParseField("doc_vectors");
@@ -83,6 +84,7 @@ record CmdLineArgs(
     static final ParseField SEED_FIELD = new ParseField("seed");
     static final ParseField MERGE_POLICY_FIELD = new ParseField("merge_policy");
     static final ParseField ALPHA_FIELD = new ParseField("alpha");
+    static final ParseField PERCENT_FIELD = new ParseField("percent");
 
     static CmdLineArgs fromXContent(XContentParser parser) throws IOException {
         Builder builder = PARSER.apply(parser, null);
@@ -118,6 +120,7 @@ record CmdLineArgs(
         PARSER.declareLong(Builder::setSeed, SEED_FIELD);
         PARSER.declareString(Builder::setMergePolicy, MERGE_POLICY_FIELD);
         PARSER.declareFloat(Builder::setAlpha, ALPHA_FIELD);
+        PARSER.declareFloatArray(Builder::setPercent, PERCENT_FIELD);
     }
 
     @Override
@@ -156,6 +159,7 @@ record CmdLineArgs(
             builder.field(MERGE_POLICY_FIELD.getPreferredName(), mergePolicy.name().toLowerCase(Locale.ROOT));
         }
         builder.field(ALPHA_FIELD.getPreferredName(), alpha);
+        builder.field(PERCENT_FIELD.getPreferredName(), percent);
         return builder.endObject();
     }
 
@@ -191,9 +195,15 @@ record CmdLineArgs(
         private long seed = 1751900822751L;
         private KnnIndexTester.MergePolicyType mergePolicy = null;
         private float alpha = 1.0f;
+        private List<Float> percent = List.of(0.01f);
 
         public Builder setAlpha(float alpha) {
             this.alpha = alpha;
+            return this;
+        }
+
+        public Builder setPercent(List<Float> percent) {
+            this.percent = percent;
             return this;
         }
 
@@ -361,7 +371,8 @@ record CmdLineArgs(
                 dimensions,
                 earlyTermination,
                 mergePolicy,
-                alpha
+                alpha,
+                percent
             );
         }
     }

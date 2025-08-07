@@ -187,9 +187,9 @@ public class KnnIndexTester {
         FormattedResults formattedResults = new FormattedResults();
 
         for (CmdLineArgs cmdLineArgs : cmdLineArgsList) {
-            int[] nProbes = cmdLineArgs.indexType().equals(IndexType.IVF) && cmdLineArgs.numQueries() > 0
-                ? cmdLineArgs.nProbes()
-                : new int[] { 0 };
+            List<Float> percents = cmdLineArgs.indexType().equals(IndexType.IVF) && cmdLineArgs.numQueries() > 0
+                ? cmdLineArgs.percent()
+                : List.of(0f);
             String indexType = cmdLineArgs.indexType().name().toLowerCase(Locale.ROOT);
             Results indexResults = new Results(
                 cmdLineArgs.docVectors().get(0).getFileName().toString(),
@@ -197,8 +197,8 @@ public class KnnIndexTester {
                 cmdLineArgs.numDocs(),
                 cmdLineArgs.filterSelectivity()
             );
-            Results[] results = new Results[nProbes.length];
-            for (int i = 0; i < nProbes.length; i++) {
+            Results[] results = new Results[percents.size()];
+            for (int i = 0; i < percents.size(); i++) {
                 results[i] = new Results(
                     cmdLineArgs.docVectors().get(0).getFileName().toString(),
                     indexType,
@@ -237,8 +237,8 @@ public class KnnIndexTester {
             }
             if (cmdLineArgs.queryVectors() != null && cmdLineArgs.numQueries() > 0) {
                 for (int i = 0; i < results.length; i++) {
-                    int nProbe = nProbes[i];
-                    KnnSearcher knnSearcher = new KnnSearcher(indexPath, cmdLineArgs, nProbe);
+                    float percent = percents.get(i);
+                    KnnSearcher knnSearcher = new KnnSearcher(indexPath, cmdLineArgs, -1, percent);
                     knnSearcher.runSearch(results[i], cmdLineArgs.earlyTermination());
                 }
             }

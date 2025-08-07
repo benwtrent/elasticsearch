@@ -14,13 +14,19 @@ import java.util.Objects;
 
 public class IVFKnnSearchStrategy extends KnnSearchStrategy {
     private final int nProbe;
+    private final float percent;
 
-    IVFKnnSearchStrategy(int nProbe) {
+    IVFKnnSearchStrategy(int nProbe, float percent) {
         this.nProbe = nProbe;
+        this.percent = percent;
     }
 
     public int getNProbe() {
         return nProbe;
+    }
+
+    public float getPercent() {
+        return percent;
     }
 
     @Override
@@ -28,12 +34,12 @@ public class IVFKnnSearchStrategy extends KnnSearchStrategy {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         IVFKnnSearchStrategy that = (IVFKnnSearchStrategy) o;
-        return nProbe == that.nProbe;
+        return nProbe == that.nProbe && Float.compare(that.percent, percent) == 0;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(nProbe);
+        return Objects.hash(nProbe, percent);
     }
 
     @Override

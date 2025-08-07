@@ -108,6 +108,7 @@ class KnnSearcher {
     private final int topK;
     private final int efSearch;
     private final int nProbe;
+    private final float percent;
     private final KnnIndexTester.IndexType indexType;
     private int dim;
     private final VectorSimilarityFunction similarityFunction;
@@ -116,7 +117,7 @@ class KnnSearcher {
     private final int searchThreads;
     private final int numSearchers;
 
-    KnnSearcher(Path indexPath, CmdLineArgs cmdLineArgs, int nProbe) {
+    KnnSearcher(Path indexPath, CmdLineArgs cmdLineArgs, int nProbe, float percent) {
         this.docPath = cmdLineArgs.docVectors();
         this.indexPath = indexPath;
         this.queryPath = cmdLineArgs.queryVectors();
@@ -137,6 +138,7 @@ class KnnSearcher {
         this.numSearchers = cmdLineArgs.numSearchers();
         this.randomSeed = cmdLineArgs.seed();
         this.selectivity = cmdLineArgs.filterSelectivity();
+        this.percent = percent;
     }
 
     void runSearch(KnnIndexTester.Results finalResults, boolean earlyTermination) throws IOException {
@@ -424,7 +426,7 @@ class KnnSearcher {
         }
         int efSearch = Math.max(topK, this.efSearch);
         if (indexType == KnnIndexTester.IndexType.IVF) {
-            knnQuery = new IVFKnnFloatVectorQuery(VECTOR_FIELD, vector, topK, efSearch, filterQuery, nProbe);
+            knnQuery = new IVFKnnFloatVectorQuery(VECTOR_FIELD, vector, topK, efSearch, filterQuery, percent, nProbe);
         } else {
             knnQuery = new ESKnnFloatVectorQuery(
                 VECTOR_FIELD,
