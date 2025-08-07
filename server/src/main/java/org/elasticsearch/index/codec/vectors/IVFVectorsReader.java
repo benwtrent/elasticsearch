@@ -259,7 +259,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         // TODO do we need to handle nested doc counts similarly to how we handle
         // filtering? E.g. keep exploring until we hit an expected number of parent documents vs. child vectors?
         while (centroidIterator.hasNext()
-            && (((float) actualDocs / numVectors) < percent ||knnCollector.minCompetitiveSimilarity() == Float.NEGATIVE_INFINITY)) {
+            && (((float) actualDocs / numVectors) < percent || knnCollector.minCompetitiveSimilarity() == Float.NEGATIVE_INFINITY)) {
             ++centroidsVisited;
             // todo do we actually need to know the score???
             long offset = centroidIterator.nextPostingListOffset();
