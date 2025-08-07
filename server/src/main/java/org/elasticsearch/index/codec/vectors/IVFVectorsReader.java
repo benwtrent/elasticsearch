@@ -22,7 +22,6 @@ import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.VectorEncoding;
 import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.internal.hppc.IntObjectHashMap;
-import org.apache.lucene.search.AbstractKnnCollector;
 import org.apache.lucene.search.KnnCollector;
 import org.apache.lucene.store.ChecksumIndexInput;
 import org.apache.lucene.store.DataInput;
@@ -232,8 +231,6 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             }
             return visitedDocs.getAndSet(docId) == false;
         };
-        assert knnCollector instanceof AbstractKnnCollector;
-        AbstractKnnCollector knnCollectorImpl = (AbstractKnnCollector) knnCollector;
         int nProbe = DYNAMIC_NPROBE;
         float percent = 0.01f;
         // Search strategy may be null if this is being called from checkIndex (e.g. from a test)
@@ -262,7 +259,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         // TODO do we need to handle nested doc counts similarly to how we handle
         // filtering? E.g. keep exploring until we hit an expected number of parent documents vs. child vectors?
         while (centroidIterator.hasNext()
-            && (((float) actualDocs / numVectors) < percent || knnCollectorImpl.numCollected() < knnCollector.k())) {
+            && (((float) actualDocs / numVectors) < percent ||knnCollector.minCompetitiveSimilarity() == Float.NEGATIVE_INFINITY)) {
             ++centroidsVisited;
             // todo do we actually need to know the score???
             long offset = centroidIterator.nextPostingListOffset();
