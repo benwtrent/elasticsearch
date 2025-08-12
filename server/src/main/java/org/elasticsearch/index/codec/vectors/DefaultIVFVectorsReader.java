@@ -474,30 +474,6 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             }
         }
 
-        private float estimateBlockScore(int blk, int stdDeviations) throws IOException {
-            // let's score against the block estimator and see if we can skip it.
-            indexInput.seek(this.slicePos + (blk * quantizedBlockSize));
-            float mean = Float.intBitsToFloat(indexInput.readInt());
-            float stdDev = Float.intBitsToFloat(indexInput.readInt());
-            return mean + (stdDeviations * stdDev);
-            //long qcDist = osqVectorsScorer.quantizeScore(quantizedQueryScratch);
-            //indexInput.readFloats(correctiveValues, 0, 3);
-            //final int quantizedComponentSum = Short.toUnsignedInt(indexInput.readShort());
-            //return osqVectorsScorer.score(
-            //    queryCorrections.lowerInterval(),
-            //    queryCorrections.upperInterval(),
-            //    queryCorrections.quantizedComponentSum(),
-            //    queryCorrections.additionalCorrection(),
-            //    fieldInfo.getVectorSimilarityFunction(),
-            //    centroidDp,
-            //    correctiveValues[0],
-            //    correctiveValues[1],
-            //    quantizedComponentSum,
-            //    correctiveValues[2],
-            //    qcDist
-            //);
-        }
-
         @Override
         public int visit(KnnCollector knnCollector) throws IOException {
             // block processing
@@ -510,19 +486,22 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                     continue;
                 }
                 quantizeQueryIfNecessary();
-                // TODO estimate blk score....
-                float blockEstimate = Float.NEGATIVE_INFINITY;
+                indexInput.seek(this.slicePos + (blk * quantizedBlockSize));
                 float minCompetitiveSimilarity = knnCollector.minCompetitiveSimilarity();
                 // we are hitting further centroids than we have gathered, start checking block estimates for skipping
                 if (minCompetitiveSimilarity > centroidScore) {
+                    float mean = Float.intBitsToFloat(indexInput.readInt());
+                    float stdDev = Float.intBitsToFloat(indexInput.readInt());
                     // let's score against the block estimator and see if we can skip it.
-                    blockEstimate = estimateBlockScore(blk, 0);
-                    if (minCompetitiveSimilarity > (blockEstimate + centroidScore)/2) {
-                        continue; // skip this block
-                    }
+                    // We are very conservative, block size is only 16, and we are looking at 15 std deviations
+                    float blockEstimate = mean + (15 * stdDev);
+
+                    if (minCompetitiveSimilarity > (blockEstimate + centroidScore) / 2) continue; // skip this block
+
+                } else {
+                    indexInput.skipBytes(2 * Float.BYTES); // skip mean
                 }
-                indexInput.seek(slicePos + (blk * quantizedBlockSize) + Float.BYTES * 2);
-                float maxScore;
+                final float maxScore;
                 if (docsToBulkScore < BULK_SIZE / 2) {
                     maxScore = scoreIndividually(blk);
                 } else {

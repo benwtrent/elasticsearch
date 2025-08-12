@@ -37,32 +37,6 @@ abstract class DiskBBQBulkWriter {
         private final OptimizedScalarQuantizer.QuantizationResult[] corrections;
         final byte[][] packed;
 
-        public static byte[] averageBitwisePacked(byte[][] packedVectors) {
-            int numVectors = packedVectors.length;
-            int numBytes = packedVectors[0].length;
-            int[] bitCounts = new int[numBytes * 8];
-
-            for (byte[] packed : packedVectors) {
-                for (int bit = 0; bit < bitCounts.length; bit++) {
-                    int byteIdx = bit / 8;
-                    int bitIdx = 7 - (bit % 8);
-                    if (((packed[byteIdx] >> bitIdx) & 1) != 0) {
-                        bitCounts[bit]++;
-                    }
-                }
-            }
-
-            byte[] result = new byte[numBytes];
-            for (int bit = 0; bit < bitCounts.length; bit++) {
-                int byteIdx = bit / 8;
-                int bitIdx = 7 - (bit % 8);
-                if (bitCounts[bit] >= numVectors / 2) {
-                    result[byteIdx] |= (byte) (1 << bitIdx);
-                }
-            }
-            return result;
-        }
-
         OneBitDiskBBQBulkWriter(int bulkSize, IndexOutput out) {
             super(bulkSize, out);
             this.corrections = new OptimizedScalarQuantizer.QuantizationResult[bulkSize];
@@ -76,29 +50,14 @@ abstract class DiskBBQBulkWriter {
             // take the average of the corrections & the quantize vectors, note, the quantized vectors are in bits
             IVFVectorsReader.OnlineStats onlineStats = new IVFVectorsReader.OnlineStats();
             for (; i < limit; i += bulkSize) {
-
                 for (int j = 0; j < bulkSize; j++) {
                     byte[] qv = qvv.next();
                     packed[j] = qv.clone();
                     corrections[j] = qvv.getCorrections();
                     onlineStats.add(corrections[j].additionalCorrection());
                 }
-                // average the packed vectors
-                //byte[] avged = averageBitwisePacked(packed);
-                //lowerInterval /= bulkSize;
-                //upperInterval /= bulkSize;
-                // avg distance to centroid, norm2 of centered vector or inner product between vector and centroid
                 out.writeInt(Float.floatToIntBits(onlineStats.mean()));
-                out.writeInt(Float.floatToIntBits((float)Math.sqrt(onlineStats.var())));
-                //targetComponentSum = BQVectorUtils.popcount(avged);
-                // write the average packed vector
-                //out.writeBytes(avged, avged.length);
-                // write the average corrections
-                //out.writeInt(Float.floatToIntBits(lowerInterval));
-                //out.writeInt(Float.floatToIntBits(upperInterval));
-                //out.writeInt(Float.floatToIntBits(additionalCorrection));
-                //assert targetComponentSum >= 0 && targetComponentSum <= 0xffff;
-                //out.writeShort((short) targetComponentSum);
+                out.writeInt(Float.floatToIntBits((float) Math.sqrt(onlineStats.var())));
                 for (var qv : packed) {
                     out.writeBytes(qv, qv.length);
                 }
