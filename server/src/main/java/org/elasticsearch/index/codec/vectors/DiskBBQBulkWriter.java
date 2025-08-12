@@ -74,37 +74,31 @@ abstract class DiskBBQBulkWriter {
             int limit = qvv.count() - bulkSize + 1;
             int i = 0;
             // take the average of the corrections & the quantize vectors, note, the quantized vectors are in bits
-            float lowerInterval = 0.0f;
-            float upperInterval = 0.0f;
-            int targetComponentSum = 0;
-            float additionalCorrection = 0.0f;
+            IVFVectorsReader.OnlineStats onlineStats = new IVFVectorsReader.OnlineStats();
             for (; i < limit; i += bulkSize) {
-                lowerInterval = 0.0f;
-                upperInterval = 0.0f;
-                targetComponentSum = 0;
-                additionalCorrection = 0.0f;
+
                 for (int j = 0; j < bulkSize; j++) {
                     byte[] qv = qvv.next();
                     packed[j] = qv.clone();
                     corrections[j] = qvv.getCorrections();
-                    lowerInterval += corrections[j].lowerInterval();
-                    upperInterval += corrections[j].upperInterval();
-                    additionalCorrection += corrections[j].additionalCorrection();
+                    onlineStats.add(corrections[j].additionalCorrection());
                 }
                 // average the packed vectors
-                byte[] avged = averageBitwisePacked(packed);
-                lowerInterval /= bulkSize;
-                upperInterval /= bulkSize;
-                additionalCorrection /= bulkSize;
-                targetComponentSum = BQVectorUtils.popcount(avged);
+                //byte[] avged = averageBitwisePacked(packed);
+                //lowerInterval /= bulkSize;
+                //upperInterval /= bulkSize;
+                // avg distance to centroid, norm2 of centered vector or inner product between vector and centroid
+                out.writeInt(Float.floatToIntBits(onlineStats.mean()));
+                out.writeInt(Float.floatToIntBits((float)Math.sqrt(onlineStats.var())));
+                //targetComponentSum = BQVectorUtils.popcount(avged);
                 // write the average packed vector
-                out.writeBytes(avged, avged.length);
+                //out.writeBytes(avged, avged.length);
                 // write the average corrections
-                out.writeInt(Float.floatToIntBits(lowerInterval));
-                out.writeInt(Float.floatToIntBits(upperInterval));
-                out.writeInt(Float.floatToIntBits(additionalCorrection));
-                assert targetComponentSum >= 0 && targetComponentSum <= 0xffff;
-                out.writeShort((short) targetComponentSum);
+                //out.writeInt(Float.floatToIntBits(lowerInterval));
+                //out.writeInt(Float.floatToIntBits(upperInterval));
+                //out.writeInt(Float.floatToIntBits(additionalCorrection));
+                //assert targetComponentSum >= 0 && targetComponentSum <= 0xffff;
+                //out.writeShort((short) targetComponentSum);
                 for (var qv : packed) {
                     out.writeBytes(qv, qv.length);
                 }

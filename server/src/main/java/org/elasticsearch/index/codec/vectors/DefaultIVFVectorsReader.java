@@ -376,7 +376,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             quantizedQueryScratch = new byte[QUERY_BITS * discretizedDimensions / 8];
             quantizedByteLength = discretizedDimensions / 8 + (Float.BYTES * 3) + Short.BYTES;
             // BULK_SIZE vectors and a block estimator
-            quantizedBlockSize = (BULK_SIZE + 1) * quantizedByteLength;
+            quantizedBlockSize = (BULK_SIZE) * quantizedByteLength + Float.BYTES * 2;
             quantizedVectorByteSize = (discretizedDimensions / 8);
             quantizer = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction(), DEFAULT_LAMBDA, 1);
             osqVectorsScorer = ESVectorUtil.getES91OSQVectorsScorer(indexInput, fieldInfo.getVectorDimension());
@@ -468,6 +468,30 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             }
         }
 
+        private float estimateBlockScore(int blk, int stdDeviations) throws IOException {
+            // let's score against the block estimator and see if we can skip it.
+            indexInput.seek(this.slicePos + (blk * quantizedBlockSize));
+            float mean = Float.intBitsToFloat(indexInput.readInt());
+            float stdDev = Float.intBitsToFloat(indexInput.readInt());
+            return mean + (stdDeviations * stdDev);
+            //long qcDist = osqVectorsScorer.quantizeScore(quantizedQueryScratch);
+            //indexInput.readFloats(correctiveValues, 0, 3);
+            //final int quantizedComponentSum = Short.toUnsignedInt(indexInput.readShort());
+            //return osqVectorsScorer.score(
+            //    queryCorrections.lowerInterval(),
+            //    queryCorrections.upperInterval(),
+            //    queryCorrections.quantizedComponentSum(),
+            //    queryCorrections.additionalCorrection(),
+            //    fieldInfo.getVectorSimilarityFunction(),
+            //    centroidDp,
+            //    correctiveValues[0],
+            //    correctiveValues[1],
+            //    quantizedComponentSum,
+            //    correctiveValues[2],
+            //    qcDist
+            //);
+        }
+
         @Override
         public int visit(KnnCollector knnCollector) throws IOException {
             // block processing
@@ -482,32 +506,16 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 quantizeQueryIfNecessary();
                 // TODO estimate blk score....
                 float blockEstimate = Float.NEGATIVE_INFINITY;
+                float minCompetitiveSimilarity = knnCollector.minCompetitiveSimilarity();
                 // we are hitting further centroids than we have gathered, start checking block estimates for skipping
-                if (knnCollector.minCompetitiveSimilarity() > centroidScore) {
+                if (minCompetitiveSimilarity > centroidScore) {
                     // let's score against the block estimator and see if we can skip it.
-                    indexInput.seek(this.slicePos + (blk * quantizedBlockSize));
-                    long qcDist = osqVectorsScorer.quantizeScore(quantizedQueryScratch);
-                    indexInput.readFloats(correctiveValues, 0, 3);
-                    final int quantizedComponentSum = Short.toUnsignedInt(indexInput.readShort());
-                    blockEstimate = osqVectorsScorer.score(
-                        queryCorrections.lowerInterval(),
-                        queryCorrections.upperInterval(),
-                        queryCorrections.quantizedComponentSum(),
-                        queryCorrections.additionalCorrection(),
-                        fieldInfo.getVectorSimilarityFunction(),
-                        centroidDp,
-                        correctiveValues[0],
-                        correctiveValues[1],
-                        quantizedComponentSum,
-                        correctiveValues[2],
-                        qcDist
-                    );
-                    if (blockEstimate + (centroidScore - knnCollector.minCompetitiveSimilarity()) / quantizedComponentSum < knnCollector
-                        .minCompetitiveSimilarity()) {
+                    blockEstimate = estimateBlockScore(blk, 0);
+                    if (minCompetitiveSimilarity > (blockEstimate + centroidScore)/2) {
                         continue; // skip this block
                     }
                 }
-                indexInput.seek(slicePos + (blk * quantizedBlockSize) + quantizedByteLength);
+                indexInput.seek(slicePos + (blk * quantizedBlockSize) + Float.BYTES * 2);
                 float maxScore;
                 if (docsToBulkScore < BULK_SIZE / 2) {
                     maxScore = scoreIndividually(blk);
@@ -523,7 +531,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                         scores
                     );
                 }
-                if (knnCollector.minCompetitiveSimilarity() < maxScore) {
+                if (minCompetitiveSimilarity < maxScore) {
                     collectBulk(docIdsScratch, blk, knnCollector, scores);
                 }
                 scoredDocs += docsToBulkScore;
