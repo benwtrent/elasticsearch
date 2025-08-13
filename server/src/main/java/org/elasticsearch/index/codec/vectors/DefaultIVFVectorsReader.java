@@ -485,22 +485,18 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 if (docsToBulkScore == 0) {
                     continue;
                 }
-                quantizeQueryIfNecessary();
                 indexInput.seek(this.slicePos + (blk * quantizedBlockSize));
                 float minCompetitiveSimilarity = knnCollector.minCompetitiveSimilarity();
                 // we are hitting further centroids than we have gathered, start checking block estimates for skipping
                 if (minCompetitiveSimilarity > centroidScore) {
                     float mean = Float.intBitsToFloat(indexInput.readInt());
                     float stdDev = Float.intBitsToFloat(indexInput.readInt());
-                    // let's score against the block estimator and see if we can skip it.
-                    // We are very conservative, block size is only 16, and we are looking at 15 std deviations
-                    float blockEstimate = mean + (15 * stdDev);
-
-                    if (minCompetitiveSimilarity > (blockEstimate + centroidScore) / 2) continue; // skip this block
-
+                    float blockEstimate = (mean + centroidScore) / 2f + 8 * stdDev;
+                    if (minCompetitiveSimilarity > blockEstimate) continue; // skip this block
                 } else {
                     indexInput.skipBytes(2 * Float.BYTES); // skip mean
                 }
+                quantizeQueryIfNecessary();
                 final float maxScore;
                 if (docsToBulkScore < BULK_SIZE / 2) {
                     maxScore = scoreIndividually(blk);
