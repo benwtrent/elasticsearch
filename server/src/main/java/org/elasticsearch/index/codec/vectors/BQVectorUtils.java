@@ -40,33 +40,7 @@ public class BQVectorUtils {
         return Math.abs(l1norm - 1.0d) <= EPSILON;
     }
 
-    public static byte[] averageBitwisePacked(byte[][] packedVectors, int vectorLength) {
-        int numVectors = packedVectors.length;
-        int numBytes = (vectorLength + 7) / 8;
-        int[] bitCounts = new int[vectorLength];
-
-        for (byte[] packed : packedVectors) {
-            for (int bit = 0; bit < vectorLength; bit++) {
-                int byteIdx = bit / 8;
-                int bitIdx = 7 - (bit % 8);
-                if (((packed[byteIdx] >> bitIdx) & 1) != 0) {
-                    bitCounts[bit]++;
-                }
-            }
-        }
-
-        byte[] result = new byte[numBytes];
-        for (int bit = 0; bit < vectorLength; bit++) {
-            int byteIdx = bit / 8;
-            int bitIdx = 7 - (bit % 8);
-            if (bitCounts[bit] > numVectors / 2) {
-                result[byteIdx] |= (byte) (1 << bitIdx);
-            }
-        }
-        return result;
-    }
-
-    public static void packAsBinary(int[] vector, byte[] packed) {
+    public static void packAsBinaryLegacy(int[] vector, byte[] packed) {
         for (int i = 0; i < vector.length;) {
             byte result = 0;
             for (int j = 7; j >= 0 && i < vector.length; j--) {
@@ -78,6 +52,34 @@ public class BQVectorUtils {
             assert index < packed.length;
             packed[index] = result;
         }
+    }
+
+    public static void packAsBinary(int[] vector, byte[] packed) {
+        int limit = vector.length - 7;
+        int i = 0;
+        int index = 0;
+        for (; i < limit; i += 8, index++) {
+            assert vector[i] == 0 || vector[i] == 1;
+            assert vector[i + 1] == 0 || vector[i + 1] == 1;
+            assert vector[i + 2] == 0 || vector[i + 2] == 1;
+            assert vector[i + 3] == 0 || vector[i + 3] == 1;
+            assert vector[i + 4] == 0 || vector[i + 4] == 1;
+            assert vector[i + 5] == 0 || vector[i + 5] == 1;
+            assert vector[i + 6] == 0 || vector[i + 6] == 1;
+            assert vector[i + 7] == 0 || vector[i + 7] == 1;
+            int result = vector[i] << 7 | (vector[i + 1] << 6) | (vector[i + 2] << 5) | (vector[i + 3] << 4) | (vector[i + 4] << 3)
+                | (vector[i + 5] << 2) | (vector[i + 6] << 1) | (vector[i + 7]);
+            packed[index] = (byte) result;
+        }
+        if (i == vector.length) {
+            return;
+        }
+        byte result = 0;
+        for (int j = 7; j >= 0 && i < vector.length; i++, j--) {
+            assert vector[i] == 0 || vector[i] == 1;
+            result |= (byte) ((vector[i] & 1) << j);
+        }
+        packed[index] = result;
     }
 
     public static int discretize(int value, int bucket) {
