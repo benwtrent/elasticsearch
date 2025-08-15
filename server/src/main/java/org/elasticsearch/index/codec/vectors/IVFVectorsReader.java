@@ -256,6 +256,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         // Note, numCollected is doing the bare minimum here.
         // TODO do we need to handle nested doc counts similarly to how we handle
         // filtering? E.g. keep exploring until we hit an expected number of parent documents vs. child vectors?
+        // for inner-product search, this makes sense. IDK for euclidean, maybe we just use the radius and the centroid score...
         float queryMagnitude = (float)Math.sqrt(VectorUtil.dotProduct(target, target));
         int correctlySkipped = 0;
         int correctlyVisited = 0;

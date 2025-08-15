@@ -39,6 +39,9 @@ abstract class DiskBBQBulkWriter {
 
         @Override
         float writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException {
+            // for euclidean, this likely should be `max`
+            // we want to negatively impact tight clusters that score poorly
+            // so we grab the "worst" vector score for this centroid and use it to determine cluster tightness
             float radius = Float.POSITIVE_INFINITY;
             int limit = qvv.count() - bulkSize + 1;
             int i = 0;
