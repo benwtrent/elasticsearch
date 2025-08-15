@@ -15,11 +15,12 @@ import org.apache.lucene.search.TotalHits;
 import org.apache.lucene.search.knn.KnnSearchStrategy;
 import org.elasticsearch.index.codec.vectors.cluster.NeighborQueue;
 
-class MaxScoreTopKnnCollector extends AbstractMaxScoreKnnCollector {
+public class MaxScoreTopKnnCollector extends AbstractMaxScoreKnnCollector {
 
     private long minCompetitiveDocScore;
     private float minCompetitiveSimilarity;
     protected final NeighborQueue queue;
+    private int collectedCount = 0;
 
     MaxScoreTopKnnCollector(int k, long visitLimit, KnnSearchStrategy searchStrategy) {
         super(k, visitLimit, searchStrategy);
@@ -42,7 +43,12 @@ class MaxScoreTopKnnCollector extends AbstractMaxScoreKnnCollector {
 
     @Override
     public boolean collect(int docId, float similarity) {
+        collectedCount++;
         return queue.insertWithOverflow(docId, similarity);
+    }
+
+    public int collectedCount() {
+        return collectedCount;
     }
 
     @Override

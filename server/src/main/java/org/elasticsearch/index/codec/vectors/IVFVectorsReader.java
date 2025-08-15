@@ -29,8 +29,12 @@ import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.util.BitSet;
 import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.VectorUtil;
 import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.search.vectors.IVFKnnSearchStrategy;
+import org.elasticsearch.search.vectors.MaxScoreTopKnnCollector;
 
 import java.io.IOException;
 
@@ -41,6 +45,8 @@ import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.DYNAMIC_VIS
  * Reader for IVF vectors. This reader is used to read the IVF vectors from the index.
  */
 public abstract class IVFVectorsReader extends KnnVectorsReader {
+
+    private static final Logger logger = LogManager.getLogger(IVFVectorsReader.class);
 
     private final IndexInput ivfCentroids, ivfClusters;
     private final SegmentReadState state;
@@ -250,15 +256,59 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         // Note, numCollected is doing the bare minimum here.
         // TODO do we need to handle nested doc counts similarly to how we handle
         // filtering? E.g. keep exploring until we hit an expected number of parent documents vs. child vectors?
+        float queryMagnitude = (float)Math.sqrt(VectorUtil.dotProduct(target, target));
+        int correctlySkipped = 0;
+        int correctlyVisited = 0;
         while (centroidIterator.hasNext()
             && (maxVectorVisited > actualDocs || knnCollector.minCompetitiveSimilarity() == Float.NEGATIVE_INFINITY)) {
             long offset = centroidIterator.nextPostingListOffset();
             float score = centroidIterator.score();
             float radius = centroidIterator.radius();
+            float est = (float)((score - Math.sqrt(radius) + (queryMagnitude*queryMagnitude))/2);
+            boolean skip = knnCollector.minCompetitiveSimilarity() > est;
+            if (skip) {
+                continue;
+            }
             // todo do we need direct access to the raw centroid???, this is used for quantizing, maybe hydrating and quantizing
             // is enough?
             expectedDocs += scorer.resetPostingsScorer(offset);
+            int collBefore = 0;
+            if (knnCollector instanceof MaxScoreTopKnnCollector maxScoreCollector) {
+                collBefore = maxScoreCollector.collectedCount();
+            }
             actualDocs += scorer.visit(knnCollector);
+            if (knnCollector instanceof MaxScoreTopKnnCollector maxScoreCollector) {
+                // we can update the min competitive doc score here
+                int collAfter = maxScoreCollector.collectedCount();
+                boolean collected = collAfter - collBefore > 0;
+                // record false positives negatives and positives
+                // to determine if we should have skipped or should NOT have skipped
+                boolean logg = false;
+                String skippedStatus = "";
+                if (skip && collected) {
+                    logg = true;
+                    skippedStatus = "false_positive";
+                } else if (skip && !collected) {
+                    skippedStatus = "true_negative";
+                } else if (!skip && collected) {
+                    skippedStatus = "true_positive";
+                } else if (!skip && !collected) {
+                    logg = true;
+                    skippedStatus = "false_negative";
+                }
+                if (false) {
+                    logger.info(
+                        "centroid_score={} query_mag={} radius={} skipped_status={} est={} min_competitive_similarity={} collected={}",
+                        score,
+                        queryMagnitude,
+                        radius,
+                        skippedStatus,
+                        est,
+                        knnCollector.minCompetitiveSimilarity(),
+                        collAfter - collBefore
+                    );
+                }
+            }
             knnCollector.getSearchStrategy().nextVectorsBlock();
         }
         if (acceptDocs != null) {

@@ -39,14 +39,14 @@ abstract class DiskBBQBulkWriter {
 
         @Override
         float writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException {
-            float radius = Float.NEGATIVE_INFINITY;
+            float radius = Float.POSITIVE_INFINITY;
             int limit = qvv.count() - bulkSize + 1;
             int i = 0;
             for (; i < limit; i += bulkSize) {
                 for (int j = 0; j < bulkSize; j++) {
                     byte[] qv = qvv.next();
                     corrections[j] = qvv.getCorrections();
-                    radius = Math.max(radius, corrections[j].additionalCorrection());
+                    radius = Math.min(radius, corrections[j].additionalCorrection());
                     out.writeBytes(qv, qv.length);
                 }
                 writeCorrections(corrections);
@@ -55,7 +55,7 @@ abstract class DiskBBQBulkWriter {
             for (; i < qvv.count(); ++i) {
                 byte[] qv = qvv.next();
                 OptimizedScalarQuantizer.QuantizationResult correction = qvv.getCorrections();
-                radius = Math.max(radius, correction.additionalCorrection());
+                radius = Math.min(radius, correction.additionalCorrection());
                 out.writeBytes(qv, qv.length);
                 writeCorrection(correction);
             }

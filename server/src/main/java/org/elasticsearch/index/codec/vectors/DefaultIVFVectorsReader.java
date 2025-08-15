@@ -472,7 +472,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         private static void collectBulk(int[] docIds, int offset, KnnCollector knnCollector, float[] scores) {
             for (int i = 0; i < ES91OSQVectorsScorer.BULK_SIZE; i++) {
                 final int doc = docIds[offset + i];
-                if (doc != -1) {
+                if (doc != -1 && knnCollector.minCompetitiveSimilarity() < scores[i]) {
                     knnCollector.collect(doc, scores[i]);
                 }
             }
@@ -534,6 +534,9 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                         qcDist
                     );
                     scoredDocs++;
+                    if (score < knnCollector.minCompetitiveSimilarity()) {
+                        continue; // skip this doc, it is not competitive
+                    }
                     knnCollector.collect(doc, score);
                 }
             }
