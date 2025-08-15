@@ -23,6 +23,7 @@ import org.apache.lucene.util.VectorUtil;
 import org.apache.lucene.util.hnsw.IntToIntFunction;
 import org.apache.lucene.util.packed.PackedInts;
 import org.apache.lucene.util.packed.PackedLongValues;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.codec.vectors.cluster.HierarchicalKMeans;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansResult;
 import org.elasticsearch.logging.LogManager;
@@ -60,7 +61,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
     }
 
     @Override
-    LongValues buildAndWritePostingsLists(
+    Tuple<LongValues, float[]> buildAndWritePostingsLists(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
         FloatVectorValues floatVectorValues,
@@ -113,6 +114,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         final int[] docDeltas = new int[maxPostingListSize];
         final int[] clusterOrds = new int[maxPostingListSize];
         DocIdsWriter idsWriter = new DocIdsWriter();
+        float[] centroidRadii = new float[centroidSupplier.size()];
         for (int c = 0; c < centroidSupplier.size(); c++) {
             float[] centroid = centroidSupplier.centroid(c);
             int[] cluster = assignmentsByCluster[c];
@@ -141,18 +143,18 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
             // keeping them in the same file indicates we pull the entire file into cache
             idsWriter.writeDocIds(i -> docDeltas[i], size, postingsOutput);
             // write vectors
-            bulkWriter.writeVectors(onHeapQuantizedVectors);
+            centroidRadii[c] = bulkWriter.writeVectors(onHeapQuantizedVectors);
         }
 
         if (logger.isDebugEnabled()) {
             printClusterQualityStatistics(assignmentsByCluster);
         }
 
-        return offsets.build();
+        return Tuple.tuple(offsets.build(), centroidRadii);
     }
 
     @Override
-    LongValues buildAndWritePostingsLists(
+    Tuple<LongValues, float[]> buildAndWritePostingsLists(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
         FloatVectorValues floatVectorValues,
@@ -256,6 +258,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
             final int[] docDeltas = new int[maxPostingListSize];
             final int[] clusterOrds = new int[maxPostingListSize];
             DocIdsWriter idsWriter = new DocIdsWriter();
+            float[] centroidRadii = new float[centroidSupplier.size()];
             for (int c = 0; c < centroidSupplier.size(); c++) {
                 float[] centroid = centroidSupplier.centroid(c);
                 int[] cluster = assignmentsByCluster[c];
@@ -285,13 +288,13 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
                 // keeping them in the same file indicates we pull the entire file into cache
                 idsWriter.writeDocIds(i -> docDeltas[i], size, postingsOutput);
                 // write vectors
-                bulkWriter.writeVectors(offHeapQuantizedVectors);
+                centroidRadii[c] = bulkWriter.writeVectors(offHeapQuantizedVectors);
             }
 
             if (logger.isDebugEnabled()) {
                 printClusterQualityStatistics(assignmentsByCluster);
             }
-            return offsets.build();
+            return Tuple.tuple(offsets.build(), centroidRadii);
         }
     }
 
@@ -336,15 +339,16 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         CentroidSupplier centroidSupplier,
         float[] globalCentroid,
         LongValues offsets,
+        float[] centroidRadii,
         IndexOutput centroidOutput
     ) throws IOException {
         // TODO do we want to store these distances as well for future use?
         // TODO: sort centroids by global centroid (was doing so previously here)
         // TODO: sorting tanks recall possibly because centroids ordinals no longer are aligned
         if (centroidSupplier.size() > centroidsPerParentCluster * centroidsPerParentCluster) {
-            writeCentroidsWithParents(fieldInfo, centroidSupplier, globalCentroid, offsets, centroidOutput);
+            writeCentroidsWithParents(fieldInfo, centroidSupplier, globalCentroid, offsets, centroidRadii, centroidOutput);
         } else {
-            writeCentroidsWithoutParents(fieldInfo, centroidSupplier, globalCentroid, offsets, centroidOutput);
+            writeCentroidsWithoutParents(fieldInfo, centroidSupplier, globalCentroid, offsets, centroidRadii, centroidOutput);
         }
     }
 
@@ -353,6 +357,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         CentroidSupplier centroidSupplier,
         float[] globalCentroid,
         LongValues offsets,
+        float[] centroidRadii,
         IndexOutput centroidOutput
     ) throws IOException {
         DiskBBQBulkWriter.SevenBitDiskBBQBulkWriter bulkWriter = new DiskBBQBulkWriter.SevenBitDiskBBQBulkWriter(
@@ -393,6 +398,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
             final int[] centroidAssignments = centroidGroups.vectors()[i];
             for (int assignment : centroidAssignments) {
                 centroidOutput.writeLong(offsets.get(assignment));
+                centroidOutput.writeInt(Float.floatToIntBits(centroidRadii[assignment]));
             }
         }
     }
@@ -402,6 +408,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         CentroidSupplier centroidSupplier,
         float[] globalCentroid,
         LongValues offsets,
+        float[] centroidRadii,
         IndexOutput centroidOutput
     ) throws IOException {
         centroidOutput.writeVInt(0);
@@ -420,6 +427,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         // write the centroid offsets at the end of the file
         for (int i = 0; i < centroidSupplier.size(); i++) {
             centroidOutput.writeLong(offsets.get(i));
+            centroidOutput.writeInt(Float.floatToIntBits(centroidRadii[i]));
         }
     }
 

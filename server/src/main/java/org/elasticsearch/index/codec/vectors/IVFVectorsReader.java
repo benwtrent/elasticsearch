@@ -252,8 +252,9 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         // filtering? E.g. keep exploring until we hit an expected number of parent documents vs. child vectors?
         while (centroidIterator.hasNext()
             && (maxVectorVisited > actualDocs || knnCollector.minCompetitiveSimilarity() == Float.NEGATIVE_INFINITY)) {
-            // todo do we actually need to know the score???
             long offset = centroidIterator.nextPostingListOffset();
+            float score = centroidIterator.score();
+            float radius = centroidIterator.radius();
             // todo do we need direct access to the raw centroid???, this is used for quantizing, maybe hydrating and quantizing
             // is enough?
             expectedDocs += scorer.resetPostingsScorer(offset);
@@ -318,6 +319,10 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         boolean hasNext();
 
         long nextPostingListOffset() throws IOException;
+
+        float score() throws IOException;
+
+        float radius() throws IOException;
     }
 
     interface PostingVisitor {

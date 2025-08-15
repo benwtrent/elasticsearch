@@ -109,6 +109,9 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         );
         long offset = centroids.getFilePointer();
         return new CentroidIterator() {
+            float score = Float.NEGATIVE_INFINITY;
+            float radius = Float.NEGATIVE_INFINITY;
+
             @Override
             public boolean hasNext() {
                 return neighborQueue.size() > 0;
@@ -116,9 +119,22 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
 
             @Override
             public long nextPostingListOffset() throws IOException {
+                score = neighborQueue.topScore();
                 int centroidOrdinal = neighborQueue.pop();
-                centroids.seek(offset + (long) Long.BYTES * centroidOrdinal);
-                return centroids.readLong();
+                centroids.seek(offset + (long) (Long.BYTES + Integer.BYTES) * centroidOrdinal);
+                long postingListOffset = centroids.readLong();
+                radius = Float.intBitsToFloat(centroids.readInt());
+                return postingListOffset;
+            }
+
+            @Override
+            public float score() {
+                return score;
+            }
+
+            @Override
+            public float radius() {
+                return radius;
             }
         };
     }
@@ -179,6 +195,9 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         }
         final long childrenFileOffsets = childrenOffset + centroidQuantizeSize * numCentroids;
         return new CentroidIterator() {
+            float score = Float.NEGATIVE_INFINITY;
+            float radius = Float.NEGATIVE_INFINITY;
+
             @Override
             public boolean hasNext() {
                 return neighborQueue.size() > 0;
@@ -186,10 +205,23 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
 
             @Override
             public long nextPostingListOffset() throws IOException {
+                score = neighborQueue.topScore();
                 int centroidOrdinal = neighborQueue.pop();
                 updateQueue(); // add one children if available so the queue remains fully populated
-                centroids.seek(childrenFileOffsets + (long) Long.BYTES * centroidOrdinal);
-                return centroids.readLong();
+                centroids.seek(childrenFileOffsets + (long) (Long.BYTES + Integer.BYTES) * centroidOrdinal);
+                long postingListOffset = centroids.readLong();
+                radius = Float.intBitsToFloat(centroids.readInt());
+                return postingListOffset;
+            }
+
+            @Override
+            public float score() {
+                return score;
+            }
+
+            @Override
+            public float radius() {
+                return radius;
             }
 
             private void updateQueue() throws IOException {

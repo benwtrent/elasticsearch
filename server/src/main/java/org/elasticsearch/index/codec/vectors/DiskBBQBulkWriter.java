@@ -27,7 +27,7 @@ abstract class DiskBBQBulkWriter {
         this.out = out;
     }
 
-    abstract void writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException;
+    abstract float writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException;
 
     static class OneBitDiskBBQBulkWriter extends DiskBBQBulkWriter {
         private final OptimizedScalarQuantizer.QuantizationResult[] corrections;
@@ -38,13 +38,15 @@ abstract class DiskBBQBulkWriter {
         }
 
         @Override
-        void writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException {
+        float writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException {
+            float radius = Float.NEGATIVE_INFINITY;
             int limit = qvv.count() - bulkSize + 1;
             int i = 0;
             for (; i < limit; i += bulkSize) {
                 for (int j = 0; j < bulkSize; j++) {
                     byte[] qv = qvv.next();
                     corrections[j] = qvv.getCorrections();
+                    radius = Math.max(radius, corrections[j].additionalCorrection());
                     out.writeBytes(qv, qv.length);
                 }
                 writeCorrections(corrections);
@@ -53,9 +55,11 @@ abstract class DiskBBQBulkWriter {
             for (; i < qvv.count(); ++i) {
                 byte[] qv = qvv.next();
                 OptimizedScalarQuantizer.QuantizationResult correction = qvv.getCorrections();
+                radius = Math.max(radius, correction.additionalCorrection());
                 out.writeBytes(qv, qv.length);
                 writeCorrection(correction);
             }
+            return radius;
         }
 
         private void writeCorrections(OptimizedScalarQuantizer.QuantizationResult[] corrections) throws IOException {
@@ -94,13 +98,15 @@ abstract class DiskBBQBulkWriter {
         }
 
         @Override
-        void writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException {
+        float writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException {
+            float radius = Float.NEGATIVE_INFINITY;
             int limit = qvv.count() - bulkSize + 1;
             int i = 0;
             for (; i < limit; i += bulkSize) {
                 for (int j = 0; j < bulkSize; j++) {
                     byte[] qv = qvv.next();
                     corrections[j] = qvv.getCorrections();
+                    radius = Math.max(radius, corrections[j].additionalCorrection());
                     out.writeBytes(qv, qv.length);
                 }
                 writeCorrections(corrections);
@@ -109,9 +115,11 @@ abstract class DiskBBQBulkWriter {
             for (; i < qvv.count(); ++i) {
                 byte[] qv = qvv.next();
                 OptimizedScalarQuantizer.QuantizationResult correction = qvv.getCorrections();
+                radius = Math.max(radius, correction.additionalCorrection());
                 out.writeBytes(qv, qv.length);
                 writeCorrection(correction);
             }
+            return radius;
         }
 
         private void writeCorrections(OptimizedScalarQuantizer.QuantizationResult[] corrections) throws IOException {
