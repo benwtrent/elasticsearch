@@ -266,7 +266,10 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             float maxMagnitude = centroidIterator.maxMagnitude();
             float est = Math.min((float)(score + Math.sqrt(radius) * queryMagnitude), maxMagnitude * queryMagnitude);
             boolean skip = knnCollector.minCompetitiveSimilarity() > est;
+            expectedDocs += scorer.resetPostingsScorer(offset);
             if (skip) {
+                // hack, idk how to cheat our percentage collector....
+                actualDocs += expectedDocs;
                 continue;
             }
             // todo do we need direct access to the raw centroid???, this is used for quantizing, maybe hydrating and quantizing
