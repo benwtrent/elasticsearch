@@ -258,14 +258,13 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         // filtering? E.g. keep exploring until we hit an expected number of parent documents vs. child vectors?
         // for inner-product search, this makes sense. IDK for euclidean, maybe we just use the radius and the centroid score...
         float queryMagnitude = (float)Math.sqrt(VectorUtil.dotProduct(target, target));
-        int correctlySkipped = 0;
-        int correctlyVisited = 0;
         while (centroidIterator.hasNext()
             && (maxVectorVisited > actualDocs || knnCollector.minCompetitiveSimilarity() == Float.NEGATIVE_INFINITY)) {
             long offset = centroidIterator.nextPostingListOffset();
             float score = centroidIterator.score();
             float radius = centroidIterator.radius();
-            float est = (float)((score - Math.sqrt(radius) + (queryMagnitude*queryMagnitude))/2);
+            float maxMagnitude = centroidIterator.maxMagnitude();
+            float est = Math.min((float)(score + Math.sqrt(radius) * queryMagnitude), maxMagnitude * queryMagnitude);
             boolean skip = knnCollector.minCompetitiveSimilarity() > est;
             if (skip) {
                 continue;
@@ -273,43 +272,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             // todo do we need direct access to the raw centroid???, this is used for quantizing, maybe hydrating and quantizing
             // is enough?
             expectedDocs += scorer.resetPostingsScorer(offset);
-            int collBefore = 0;
-            if (knnCollector instanceof MaxScoreTopKnnCollector maxScoreCollector) {
-                collBefore = maxScoreCollector.collectedCount();
-            }
             actualDocs += scorer.visit(knnCollector);
-            if (knnCollector instanceof MaxScoreTopKnnCollector maxScoreCollector) {
-                // we can update the min competitive doc score here
-                int collAfter = maxScoreCollector.collectedCount();
-                boolean collected = collAfter - collBefore > 0;
-                // record false positives negatives and positives
-                // to determine if we should have skipped or should NOT have skipped
-                boolean logg = false;
-                String skippedStatus = "";
-                if (skip && collected) {
-                    logg = true;
-                    skippedStatus = "false_positive";
-                } else if (skip && !collected) {
-                    skippedStatus = "true_negative";
-                } else if (!skip && collected) {
-                    skippedStatus = "true_positive";
-                } else if (!skip && !collected) {
-                    logg = true;
-                    skippedStatus = "false_negative";
-                }
-                if (false) {
-                    logger.info(
-                        "centroid_score={} query_mag={} radius={} skipped_status={} est={} min_competitive_similarity={} collected={}",
-                        score,
-                        queryMagnitude,
-                        radius,
-                        skippedStatus,
-                        est,
-                        knnCollector.minCompetitiveSimilarity(),
-                        collAfter - collBefore
-                    );
-                }
-            }
             knnCollector.getSearchStrategy().nextVectorsBlock();
         }
         if (acceptDocs != null) {
@@ -317,6 +280,14 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             int filteredVectors = (int) Math.ceil(numVectors * percentFiltered);
             float expectedScored = Math.min(2 * filteredVectors * unfilteredRatioVisited, expectedDocs / 2f);
             while (centroidIterator.hasNext() && (actualDocs < expectedScored || actualDocs < knnCollector.k())) {
+                float score = centroidIterator.score();
+                float radius = centroidIterator.radius();
+                float maxMagnitude = centroidIterator.maxMagnitude();
+                float est = Math.min((float)(score + Math.sqrt(radius) * queryMagnitude), maxMagnitude * queryMagnitude);
+                boolean skip = knnCollector.minCompetitiveSimilarity() > est;
+                if (skip) {
+                    continue;
+                }
                 long offset = centroidIterator.nextPostingListOffset();
                 scorer.resetPostingsScorer(offset);
                 actualDocs += scorer.visit(knnCollector);
@@ -374,6 +345,8 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         float score() throws IOException;
 
         float radius() throws IOException;
+
+        float maxMagnitude() throws IOException;
     }
 
     interface PostingVisitor {

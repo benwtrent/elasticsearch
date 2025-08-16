@@ -130,10 +130,11 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         float[] globalCentroid,
         LongValues centroidOffset,
         float[] centroidRadii,
+        float[] centroidMaxNorm,
         IndexOutput centroidOutput
     ) throws IOException;
 
-    abstract Tuple<LongValues, float[]> buildAndWritePostingsLists(
+    abstract Tuple<LongValues, Tuple<float[], float[]>> buildAndWritePostingsLists(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
         FloatVectorValues floatVectorValues,
@@ -143,7 +144,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         int[] overspillAssignments
     ) throws IOException;
 
-    abstract Tuple<LongValues, float[]> buildAndWritePostingsLists(
+    abstract Tuple<LongValues, Tuple<float[], float[]>> buildAndWritePostingsLists(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
         FloatVectorValues floatVectorValues,
@@ -191,7 +192,8 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
                 centroidSupplier,
                 globalCentroid,
                 offsetsAndRadii.v1(),
-                offsetsAndRadii.v2(),
+                offsetsAndRadii.v2().v1(),
+                offsetsAndRadii.v2().v2(),
                 ivfCentroids
             );
             final long centroidLength = ivfCentroids.getFilePointer() - centroidOffset;
@@ -376,7 +378,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
                     postingListLength = ivfClusters.getFilePointer() - postingListOffset;
                     // write centroids
                     centroidOffset = ivfCentroids.alignFilePointer(Float.BYTES);
-                    writeCentroids(fieldInfo, centroidSupplier, calculatedGlobalCentroid, offsets.v1(), offsets.v2(), ivfCentroids);
+                    writeCentroids(fieldInfo, centroidSupplier, calculatedGlobalCentroid, offsets.v1(), offsets.v2().v1(), offsets.v2().v2(), ivfCentroids);
                     centroidLength = ivfCentroids.getFilePointer() - centroidOffset;
                     // write meta
                     writeMeta(

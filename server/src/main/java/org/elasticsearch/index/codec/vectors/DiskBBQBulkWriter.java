@@ -27,7 +27,7 @@ abstract class DiskBBQBulkWriter {
         this.out = out;
     }
 
-    abstract float writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException;
+    abstract float[] writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException;
 
     static class OneBitDiskBBQBulkWriter extends DiskBBQBulkWriter {
         private final OptimizedScalarQuantizer.QuantizationResult[] corrections;
@@ -38,18 +38,21 @@ abstract class DiskBBQBulkWriter {
         }
 
         @Override
-        float writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException {
+        float[] writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException {
             // for euclidean, this likely should be `max`
             // we want to negatively impact tight clusters that score poorly
             // so we grab the "worst" vector score for this centroid and use it to determine cluster tightness
-            float radius = Float.POSITIVE_INFINITY;
+            float radius = Float.NEGATIVE_INFINITY;
+            float maxNorm = Float.NEGATIVE_INFINITY;
             int limit = qvv.count() - bulkSize + 1;
             int i = 0;
             for (; i < limit; i += bulkSize) {
                 for (int j = 0; j < bulkSize; j++) {
                     byte[] qv = qvv.next();
                     corrections[j] = qvv.getCorrections();
-                    radius = Math.min(radius, corrections[j].additionalCorrection());
+                    radius = Math.max(radius, corrections[j].norm2());
+                    maxNorm = Math.max(maxNorm, corrections[j].additionalCorrectionForBlockSkipping());
+                    assert radius != Float.NaN && maxNorm != Float.NaN;
                     out.writeBytes(qv, qv.length);
                 }
                 writeCorrections(corrections);
@@ -58,11 +61,13 @@ abstract class DiskBBQBulkWriter {
             for (; i < qvv.count(); ++i) {
                 byte[] qv = qvv.next();
                 OptimizedScalarQuantizer.QuantizationResult correction = qvv.getCorrections();
-                radius = Math.min(radius, correction.additionalCorrection());
+                radius = Math.max(radius, correction.norm2());
+                maxNorm = Math.max(maxNorm, correction.additionalCorrectionForBlockSkipping());
+                assert radius != Float.NaN && maxNorm != Float.NaN;
                 out.writeBytes(qv, qv.length);
                 writeCorrection(correction);
             }
-            return radius;
+            return new float[] { radius, maxNorm };
         }
 
         private void writeCorrections(OptimizedScalarQuantizer.QuantizationResult[] corrections) throws IOException {
@@ -101,15 +106,18 @@ abstract class DiskBBQBulkWriter {
         }
 
         @Override
-        float writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException {
+        float[] writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException {
             float radius = Float.NEGATIVE_INFINITY;
+            float maxNorm = Float.NEGATIVE_INFINITY;
             int limit = qvv.count() - bulkSize + 1;
             int i = 0;
             for (; i < limit; i += bulkSize) {
                 for (int j = 0; j < bulkSize; j++) {
                     byte[] qv = qvv.next();
                     corrections[j] = qvv.getCorrections();
-                    radius = Math.max(radius, corrections[j].additionalCorrection());
+                    radius = Math.max(radius, corrections[j].norm2());
+                    maxNorm = Math.max(maxNorm, corrections[j].additionalCorrectionForBlockSkipping());
+                    assert radius != Float.NaN && maxNorm != Float.NaN;
                     out.writeBytes(qv, qv.length);
                 }
                 writeCorrections(corrections);
@@ -118,11 +126,13 @@ abstract class DiskBBQBulkWriter {
             for (; i < qvv.count(); ++i) {
                 byte[] qv = qvv.next();
                 OptimizedScalarQuantizer.QuantizationResult correction = qvv.getCorrections();
-                radius = Math.max(radius, correction.additionalCorrection());
+                radius = Math.max(radius, correction.norm2());
+                maxNorm = Math.max(maxNorm, correction.additionalCorrectionForBlockSkipping());
+                assert radius != Float.NaN && maxNorm != Float.NaN;
                 out.writeBytes(qv, qv.length);
                 writeCorrection(correction);
             }
-            return radius;
+            return new float[] { radius, maxNorm };
         }
 
         private void writeCorrections(OptimizedScalarQuantizer.QuantizationResult[] corrections) throws IOException {

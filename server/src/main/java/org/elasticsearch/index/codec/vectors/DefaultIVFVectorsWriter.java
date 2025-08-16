@@ -61,7 +61,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
     }
 
     @Override
-    Tuple<LongValues, float[]> buildAndWritePostingsLists(
+    Tuple<LongValues, Tuple<float[], float[]>> buildAndWritePostingsLists(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
         FloatVectorValues floatVectorValues,
@@ -115,6 +115,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         final int[] clusterOrds = new int[maxPostingListSize];
         DocIdsWriter idsWriter = new DocIdsWriter();
         float[] centroidRadii = new float[centroidSupplier.size()];
+        float[] centroidmaxnorm = new float[centroidSupplier.size()];
         for (int c = 0; c < centroidSupplier.size(); c++) {
             float[] centroid = centroidSupplier.centroid(c);
             int[] cluster = assignmentsByCluster[c];
@@ -143,18 +144,22 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
             // keeping them in the same file indicates we pull the entire file into cache
             idsWriter.writeDocIds(i -> docDeltas[i], size, postingsOutput);
             // write vectors
-            centroidRadii[c] = bulkWriter.writeVectors(onHeapQuantizedVectors);
+            float[] result = bulkWriter.writeVectors(onHeapQuantizedVectors);
+            // the first value is the radius, the second is the max norm
+            assert result.length == 2 : "Expected two values for radius and max norm, got: " + Arrays.toString(result);
+            centroidRadii[c] = result[0];
+            centroidmaxnorm[c] = result[1];
         }
 
         if (logger.isDebugEnabled()) {
             printClusterQualityStatistics(assignmentsByCluster);
         }
 
-        return Tuple.tuple(offsets.build(), centroidRadii);
+        return Tuple.tuple(offsets.build(), Tuple.tuple(centroidRadii, centroidmaxnorm));
     }
 
     @Override
-    Tuple<LongValues, float[]> buildAndWritePostingsLists(
+    Tuple<LongValues, Tuple<float[], float[]>> buildAndWritePostingsLists(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
         FloatVectorValues floatVectorValues,
@@ -186,20 +191,20 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
                     System.arraycopy(vector, 0, overspillScratch, 0, fieldInfo.getVectorDimension());
                 }
 
-                OptimizedScalarQuantizer.QuantizationResult result = quantizer.scalarQuantize(vector, quantized, (byte) 1, centroid);
+                OptimizedScalarQuantizer.QuantizationResult result = quantizer.scalarQuantizeIVF(vector, quantized, (byte) 1, centroid);
                 BQVectorUtils.packAsBinary(quantized, binary);
-                writeQuantizedValue(quantizedVectorsTemp, binary, result);
+                writeQuantizedValueWithNorm(quantizedVectorsTemp, binary, result);
                 if (overspill) {
                     int s = overspillAssignments[i];
                     // write the overspill vector as well
-                    result = quantizer.scalarQuantize(overspillScratch, quantized, (byte) 1, centroidSupplier.centroid(s));
+                    result = quantizer.scalarQuantizeIVF(overspillScratch, quantized, (byte) 1, centroidSupplier.centroid(s));
                     BQVectorUtils.packAsBinary(quantized, binary);
-                    writeQuantizedValue(quantizedVectorsTemp, binary, result);
+                    writeQuantizedValueWithNorm(quantizedVectorsTemp, binary, result);
                 } else {
                     // write a zero vector for the overspill
                     Arrays.fill(binary, (byte) 0);
-                    OptimizedScalarQuantizer.QuantizationResult zeroResult = new OptimizedScalarQuantizer.QuantizationResult(0f, 0f, 0f, 0);
-                    writeQuantizedValue(quantizedVectorsTemp, binary, zeroResult);
+                    OptimizedScalarQuantizer.QuantizationResult zeroResult = new OptimizedScalarQuantizer.QuantizationResult(0f, 0f, 0f, 0, 0f, 0f);
+                    writeQuantizedValueWithNorm(quantizedVectorsTemp, binary, zeroResult);
                 }
             }
             // close the temporary file so we can read it later
@@ -259,6 +264,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
             final int[] clusterOrds = new int[maxPostingListSize];
             DocIdsWriter idsWriter = new DocIdsWriter();
             float[] centroidRadii = new float[centroidSupplier.size()];
+            float[] centroidmaxnorm = new float[centroidSupplier.size()];
             for (int c = 0; c < centroidSupplier.size(); c++) {
                 float[] centroid = centroidSupplier.centroid(c);
                 int[] cluster = assignmentsByCluster[c];
@@ -288,13 +294,17 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
                 // keeping them in the same file indicates we pull the entire file into cache
                 idsWriter.writeDocIds(i -> docDeltas[i], size, postingsOutput);
                 // write vectors
-                centroidRadii[c] = bulkWriter.writeVectors(offHeapQuantizedVectors);
+                float[] result = bulkWriter.writeVectors(offHeapQuantizedVectors);
+                // the first value is the radius, the second is the max norm
+                assert result.length == 2 : "Expected two values for radius and max norm, got: " + Arrays.toString(result);
+                centroidRadii[c] = result[0];
+                centroidmaxnorm[c] = result[1];
             }
 
             if (logger.isDebugEnabled()) {
                 printClusterQualityStatistics(assignmentsByCluster);
             }
-            return Tuple.tuple(offsets.build(), centroidRadii);
+            return Tuple.tuple(offsets.build(), Tuple.tuple(centroidRadii, centroidmaxnorm));
         }
     }
 
@@ -340,15 +350,16 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         float[] globalCentroid,
         LongValues offsets,
         float[] centroidRadii,
+        float[] centroidMaxNorm,
         IndexOutput centroidOutput
     ) throws IOException {
         // TODO do we want to store these distances as well for future use?
         // TODO: sort centroids by global centroid (was doing so previously here)
         // TODO: sorting tanks recall possibly because centroids ordinals no longer are aligned
         if (centroidSupplier.size() > centroidsPerParentCluster * centroidsPerParentCluster) {
-            writeCentroidsWithParents(fieldInfo, centroidSupplier, globalCentroid, offsets, centroidRadii, centroidOutput);
+            writeCentroidsWithParents(fieldInfo, centroidSupplier, globalCentroid, offsets, centroidRadii, centroidMaxNorm, centroidOutput);
         } else {
-            writeCentroidsWithoutParents(fieldInfo, centroidSupplier, globalCentroid, offsets, centroidRadii, centroidOutput);
+            writeCentroidsWithoutParents(fieldInfo, centroidSupplier, globalCentroid, offsets, centroidRadii, centroidMaxNorm, centroidOutput);
         }
     }
 
@@ -358,6 +369,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         float[] globalCentroid,
         LongValues offsets,
         float[] centroidRadii,
+        float[] centroidMaxNorm,
         IndexOutput centroidOutput
     ) throws IOException {
         DiskBBQBulkWriter.SevenBitDiskBBQBulkWriter bulkWriter = new DiskBBQBulkWriter.SevenBitDiskBBQBulkWriter(
@@ -399,6 +411,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
             for (int assignment : centroidAssignments) {
                 centroidOutput.writeLong(offsets.get(assignment));
                 centroidOutput.writeInt(Float.floatToIntBits(centroidRadii[assignment]));
+                centroidOutput.writeInt(Float.floatToIntBits(centroidMaxNorm[assignment]));
             }
         }
     }
@@ -409,6 +422,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         float[] globalCentroid,
         LongValues offsets,
         float[] centroidRadii,
+        float[] centroidMaxNorm,
         IndexOutput centroidOutput
     ) throws IOException {
         centroidOutput.writeVInt(0);
@@ -428,6 +442,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         for (int i = 0; i < centroidSupplier.size(); i++) {
             centroidOutput.writeLong(offsets.get(i));
             centroidOutput.writeInt(Float.floatToIntBits(centroidRadii[i]));
+            centroidOutput.writeInt(Float.floatToIntBits(centroidMaxNorm[i]));
         }
     }
 
@@ -522,12 +537,14 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         return new CentroidAssignments(centroids, assignments, soarAssignments);
     }
 
-    static void writeQuantizedValue(IndexOutput indexOutput, byte[] binaryValue, OptimizedScalarQuantizer.QuantizationResult corrections)
+    static void writeQuantizedValueWithNorm(IndexOutput indexOutput, byte[] binaryValue, OptimizedScalarQuantizer.QuantizationResult corrections)
         throws IOException {
         indexOutput.writeBytes(binaryValue, binaryValue.length);
         indexOutput.writeInt(Float.floatToIntBits(corrections.lowerInterval()));
         indexOutput.writeInt(Float.floatToIntBits(corrections.upperInterval()));
         indexOutput.writeInt(Float.floatToIntBits(corrections.additionalCorrection()));
+        indexOutput.writeInt(Float.floatToIntBits(corrections.norm2()));
+        indexOutput.writeInt(Float.floatToIntBits(corrections.additionalCorrectionForBlockSkipping()));
         assert corrections.quantizedComponentSum() >= 0 && corrections.quantizedComponentSum() <= 0xffff;
         indexOutput.writeShort((short) corrections.quantizedComponentSum());
     }
@@ -676,7 +693,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
             // Its possible that the vectors are on-heap and we cannot mutate them as we may quantize twice
             // due to overspill, so we copy the vector to a scratch array
             System.arraycopy(vector, 0, floatVectorScratch, 0, vector.length);
-            corrections = quantizer.scalarQuantize(floatVectorScratch, quantizedVectorScratch, (byte) 1, currentCentroid);
+            corrections = quantizer.scalarQuantizeIVF(floatVectorScratch, quantizedVectorScratch, (byte) 1, currentCentroid);
             BQVectorUtils.packAsBinary(quantizedVectorScratch, quantizedVector);
             return quantizedVector;
         }
@@ -693,7 +710,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
     static class OffHeapQuantizedVectors implements QuantizedVectorValues {
         private final IndexInput quantizedVectorsInput;
         private final byte[] binaryScratch;
-        private final float[] corrections = new float[3];
+        private final float[] corrections = new float[5];
 
         private final int vectorByteSize;
         private short bitSum;
@@ -705,7 +722,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         OffHeapQuantizedVectors(IndexInput quantizedVectorsInput, int dimension) {
             this.quantizedVectorsInput = quantizedVectorsInput;
             this.binaryScratch = new byte[BQVectorUtils.discretize(dimension, 64) / 8];
-            this.vectorByteSize = (binaryScratch.length + 3 * Float.BYTES + Short.BYTES);
+            this.vectorByteSize = (binaryScratch.length + 5 * Float.BYTES + Short.BYTES);
         }
 
         private void reset(int count, IntToBooleanFunction isOverspill, IntToIntFunction ordTransformer) {
@@ -736,7 +753,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
             if (currOrd == -1) {
                 throw new IllegalStateException("No vector read yet, call readQuantizedVector first");
             }
-            return new OptimizedScalarQuantizer.QuantizationResult(corrections[0], corrections[1], corrections[2], bitSum);
+            return new OptimizedScalarQuantizer.QuantizationResult(corrections[0], corrections[1], corrections[2], bitSum, corrections[3], corrections[4]);
         }
 
         byte[] getVector(int ord, boolean isOverspill) throws IOException {
@@ -748,7 +765,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
             long offset = (long) ord * (vectorByteSize * 2L) + (isOverspill ? vectorByteSize : 0);
             quantizedVectorsInput.seek(offset);
             quantizedVectorsInput.readBytes(binaryScratch, 0, binaryScratch.length);
-            quantizedVectorsInput.readFloats(corrections, 0, 3);
+            quantizedVectorsInput.readFloats(corrections, 0, 5);
             bitSum = quantizedVectorsInput.readShort();
         }
     }

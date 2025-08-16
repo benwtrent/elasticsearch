@@ -55,7 +55,19 @@ public class OptimizedScalarQuantizer {
         this(similarityFunction, DEFAULT_LAMBDA, DEFAULT_ITERS);
     }
 
-    public record QuantizationResult(float lowerInterval, float upperInterval, float additionalCorrection, int quantizedComponentSum) {}
+    public record QuantizationResult(
+        float lowerInterval,
+        float upperInterval,
+        float additionalCorrection,
+        int quantizedComponentSum,
+        float norm2,
+        float additionalCorrectionForBlockSkipping
+    ) {
+        // also allow a ctor without norm2, its only used for additional statistics for block skipping
+        public QuantizationResult(float lowerInterval, float upperInterval, float additionalCorrection, int quantizedComponentSum) {
+            this(lowerInterval, upperInterval, additionalCorrection, quantizedComponentSum, Float.NaN, Float.NaN);
+        }
+    }
 
     public QuantizationResult[] multiScalarQuantize(float[] vector, int[][] destinations, byte[] bits, float[] centroid) {
         assert similarityFunction != COSINE || VectorUtil.isUnitVector(vector);
@@ -101,6 +113,45 @@ public class OptimizedScalarQuantizer {
         }
         return results;
     }
+
+    public QuantizationResult scalarQuantizeIVF(float[] vector, int[] destination, byte bits, float[] centroid) {
+        assert similarityFunction != COSINE || VectorUtil.isUnitVector(vector);
+        assert similarityFunction != COSINE || VectorUtil.isUnitVector(centroid);
+        assert vector.length <= destination.length;
+        assert bits > 0 && bits <= 8;
+        int points = 1 << bits;
+        float mag = (float)Math.sqrt(VectorUtil.dotProduct(vector, vector));
+        if (similarityFunction == EUCLIDEAN) {
+            ESVectorUtil.centerAndCalculateOSQStatsEuclidean(vector, centroid, vector, statsScratch);
+        } else {
+            ESVectorUtil.centerAndCalculateOSQStatsDp(vector, centroid, vector, statsScratch);
+        }
+        float vecMean = statsScratch[0];
+        float vecVar = statsScratch[1];
+        float norm2 = statsScratch[2];
+        float min = statsScratch[3];
+        float max = statsScratch[4];
+        float vecStd = (float) Math.sqrt(vecVar);
+        // Linearly scale the interval to the standard deviation of the vector, ensuring we are within the min/max bounds
+        initInterval(bits, vecStd, vecMean, min, max, intervalScratch);
+        boolean hasQuantization = optimizeIntervals(intervalScratch, destination, vector, norm2, points);
+        // Now we have the optimized intervals, quantize the vector
+        int sumQuery;
+        if (hasQuantization) {
+            sumQuery = getSumQuery(destination);
+        } else {
+            sumQuery = ESVectorUtil.quantizeVectorWithIntervals(vector, destination, intervalScratch[0], intervalScratch[1], bits);
+        }
+        return new QuantizationResult(
+            intervalScratch[0],
+            intervalScratch[1],
+            similarityFunction == EUCLIDEAN ? norm2 : statsScratch[5],
+            sumQuery,
+            norm2,
+            mag
+        );
+    }
+
 
     public QuantizationResult scalarQuantize(float[] vector, int[] destination, byte bits, float[] centroid) {
         assert similarityFunction != COSINE || VectorUtil.isUnitVector(vector);
