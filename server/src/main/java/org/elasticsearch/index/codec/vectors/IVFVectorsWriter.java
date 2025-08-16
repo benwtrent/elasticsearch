@@ -378,7 +378,15 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
                     postingListLength = ivfClusters.getFilePointer() - postingListOffset;
                     // write centroids
                     centroidOffset = ivfCentroids.alignFilePointer(Float.BYTES);
-                    writeCentroids(fieldInfo, centroidSupplier, calculatedGlobalCentroid, offsets.v1(), offsets.v2().v1(), offsets.v2().v2(), ivfCentroids);
+                    writeCentroids(
+                        fieldInfo,
+                        centroidSupplier,
+                        calculatedGlobalCentroid,
+                        offsets.v1(),
+                        offsets.v2().v1(),
+                        offsets.v2().v2(),
+                        ivfCentroids
+                    );
                     centroidLength = ivfCentroids.getFilePointer() - centroidOffset;
                     // write meta
                     writeMeta(

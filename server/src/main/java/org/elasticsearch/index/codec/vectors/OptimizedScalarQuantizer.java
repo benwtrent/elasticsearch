@@ -120,7 +120,7 @@ public class OptimizedScalarQuantizer {
         assert vector.length <= destination.length;
         assert bits > 0 && bits <= 8;
         int points = 1 << bits;
-        float mag = (float)Math.sqrt(VectorUtil.dotProduct(vector, vector));
+        float mag = (float) Math.sqrt(VectorUtil.dotProduct(vector, vector));
         if (similarityFunction == EUCLIDEAN) {
             ESVectorUtil.centerAndCalculateOSQStatsEuclidean(vector, centroid, vector, statsScratch);
         } else {
@@ -151,7 +151,6 @@ public class OptimizedScalarQuantizer {
             mag
         );
     }
-
 
     public QuantizationResult scalarQuantize(float[] vector, int[] destination, byte bits, float[] centroid) {
         assert similarityFunction != COSINE || VectorUtil.isUnitVector(vector);

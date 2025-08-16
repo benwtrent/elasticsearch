@@ -34,7 +34,6 @@ import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
 import org.elasticsearch.search.vectors.IVFKnnSearchStrategy;
-import org.elasticsearch.search.vectors.MaxScoreTopKnnCollector;
 
 import java.io.IOException;
 
@@ -257,14 +256,14 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         // TODO do we need to handle nested doc counts similarly to how we handle
         // filtering? E.g. keep exploring until we hit an expected number of parent documents vs. child vectors?
         // for inner-product search, this makes sense. IDK for euclidean, maybe we just use the radius and the centroid score...
-        float queryMagnitude = (float)Math.sqrt(VectorUtil.dotProduct(target, target));
+        float queryMagnitude = (float) Math.sqrt(VectorUtil.dotProduct(target, target));
         while (centroidIterator.hasNext()
             && (maxVectorVisited > actualDocs || knnCollector.minCompetitiveSimilarity() == Float.NEGATIVE_INFINITY)) {
             long offset = centroidIterator.nextPostingListOffset();
             float score = centroidIterator.score();
             float radius = centroidIterator.radius();
             float maxMagnitude = centroidIterator.maxMagnitude();
-            float est = Math.min((float)(score + Math.sqrt(radius) * queryMagnitude), maxMagnitude * queryMagnitude);
+            float est = Math.min((float) (score + Math.sqrt(radius) * queryMagnitude), maxMagnitude * queryMagnitude);
             boolean skip = knnCollector.minCompetitiveSimilarity() > est;
             expectedDocs += scorer.resetPostingsScorer(offset);
             if (skip) {
@@ -286,7 +285,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
                 float score = centroidIterator.score();
                 float radius = centroidIterator.radius();
                 float maxMagnitude = centroidIterator.maxMagnitude();
-                float est = Math.min((float)(score + Math.sqrt(radius) * queryMagnitude), maxMagnitude * queryMagnitude);
+                float est = Math.min((float) (score + Math.sqrt(radius) * queryMagnitude), maxMagnitude * queryMagnitude);
                 boolean skip = knnCollector.minCompetitiveSimilarity() > est;
                 if (skip) {
                     continue;

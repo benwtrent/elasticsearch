@@ -122,7 +122,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             public long nextPostingListOffset() throws IOException {
                 score = neighborQueue.topScore();
                 int centroidOrdinal = neighborQueue.pop();
-                centroids.seek(offset + (long) (Long.BYTES + 2*Integer.BYTES) * centroidOrdinal);
+                centroids.seek(offset + (long) (Long.BYTES + 2 * Integer.BYTES) * centroidOrdinal);
                 long postingListOffset = centroids.readLong();
                 radius = Float.intBitsToFloat(centroids.readInt());
                 maxMagnitude = Float.intBitsToFloat(centroids.readInt());
@@ -216,7 +216,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 score = neighborQueue.topScore();
                 int centroidOrdinal = neighborQueue.pop();
                 updateQueue(); // add one children if available so the queue remains fully populated
-                centroids.seek(childrenFileOffsets + (long) (Long.BYTES + 2*Integer.BYTES) * centroidOrdinal);
+                centroids.seek(childrenFileOffsets + (long) (Long.BYTES + 2 * Integer.BYTES) * centroidOrdinal);
                 long postingListOffset = centroids.readLong();
                 radius = Float.intBitsToFloat(centroids.readInt());
                 maxMagnitude = Float.intBitsToFloat(centroids.readInt());

@@ -203,7 +203,14 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
                 } else {
                     // write a zero vector for the overspill
                     Arrays.fill(binary, (byte) 0);
-                    OptimizedScalarQuantizer.QuantizationResult zeroResult = new OptimizedScalarQuantizer.QuantizationResult(0f, 0f, 0f, 0, 0f, 0f);
+                    OptimizedScalarQuantizer.QuantizationResult zeroResult = new OptimizedScalarQuantizer.QuantizationResult(
+                        0f,
+                        0f,
+                        0f,
+                        0,
+                        0f,
+                        0f
+                    );
                     writeQuantizedValueWithNorm(quantizedVectorsTemp, binary, zeroResult);
                 }
             }
@@ -359,7 +366,15 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         if (centroidSupplier.size() > centroidsPerParentCluster * centroidsPerParentCluster) {
             writeCentroidsWithParents(fieldInfo, centroidSupplier, globalCentroid, offsets, centroidRadii, centroidMaxNorm, centroidOutput);
         } else {
-            writeCentroidsWithoutParents(fieldInfo, centroidSupplier, globalCentroid, offsets, centroidRadii, centroidMaxNorm, centroidOutput);
+            writeCentroidsWithoutParents(
+                fieldInfo,
+                centroidSupplier,
+                globalCentroid,
+                offsets,
+                centroidRadii,
+                centroidMaxNorm,
+                centroidOutput
+            );
         }
     }
 
@@ -537,8 +552,11 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         return new CentroidAssignments(centroids, assignments, soarAssignments);
     }
 
-    static void writeQuantizedValueWithNorm(IndexOutput indexOutput, byte[] binaryValue, OptimizedScalarQuantizer.QuantizationResult corrections)
-        throws IOException {
+    static void writeQuantizedValueWithNorm(
+        IndexOutput indexOutput,
+        byte[] binaryValue,
+        OptimizedScalarQuantizer.QuantizationResult corrections
+    ) throws IOException {
         indexOutput.writeBytes(binaryValue, binaryValue.length);
         indexOutput.writeInt(Float.floatToIntBits(corrections.lowerInterval()));
         indexOutput.writeInt(Float.floatToIntBits(corrections.upperInterval()));
@@ -753,7 +771,14 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
             if (currOrd == -1) {
                 throw new IllegalStateException("No vector read yet, call readQuantizedVector first");
             }
-            return new OptimizedScalarQuantizer.QuantizationResult(corrections[0], corrections[1], corrections[2], bitSum, corrections[3], corrections[4]);
+            return new OptimizedScalarQuantizer.QuantizationResult(
+                corrections[0],
+                corrections[1],
+                corrections[2],
+                bitSum,
+                corrections[3],
+                corrections[4]
+            );
         }
 
         byte[] getVector(int ord, boolean isOverspill) throws IOException {
