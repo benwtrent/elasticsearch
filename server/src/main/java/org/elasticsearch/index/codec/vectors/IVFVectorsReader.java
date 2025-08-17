@@ -274,18 +274,6 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             }
             // todo do we need direct access to the raw centroid???, this is used for quantizing, maybe hydrating and quantizing
             // is enough?
-            if (knnCollector.minCompetitiveSimilarity() != Float.NEGATIVE_INFINITY) {
-                logger.info(
-                    "Visiting centroid: {}, score: {}, radius: {}, skippingMetric: {}, est: {}, queryMagnitude: {}",
-                    offset,
-                    score,
-                    radius,
-                    skippingMetric,
-                    est,
-                    queryMagnitude
-                );
-            }
-
             actualDocs += scorer.visit(knnCollector);
             knnCollector.getSearchStrategy().nextVectorsBlock();
         }

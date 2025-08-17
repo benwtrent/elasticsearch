@@ -531,61 +531,44 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             int limit = vectors - BULK_SIZE + 1;
             int i = 0;
             quantizeQueryIfNecessary();
-            if (knnCollector.minCompetitiveSimilarity() != Float.NEGATIVE_INFINITY) {
+            // TODO, this seems like it SORT of works for max inner product, but skips too much
+            // it also doesn't work for normalized inner product (cosine), or euclidean (math is wrong)
+            // It seems like we SHOULD be able to skip posting lists based on their quantiles and
+            // the centroid score....
+            if (false && knnCollector.minCompetitiveSimilarity() != Float.NEGATIVE_INFINITY) {
                 float intervalCheck = 0;
                 // in blocks of 4 multiply all scratch where > 0 by maxUpperInterval and all scratch where < 0 by minLowerInterval
                 float[] minMax = getMinMaxIntervalsForPostingList();
                 float minLowerInterval = minMax[0];
                 float maxUpperInterval = minMax[1];
                 if (fieldInfo.getVectorSimilarityFunction() == EUCLIDEAN) {
-                    for (int j = 0; j < quantizationScratch.length; j++) {
-                        float diff = quantizationScratch[j] < 0
-                            ? minLowerInterval - quantizationScratch[j]
-                            : maxUpperInterval - quantizationScratch[j];
+                    for (int j = 0; j < scratch.length; j++) {
+                        float diff = scratch[j] < 0
+                            ? minLowerInterval - scratch[j]
+                            : maxUpperInterval - scratch[j];
                         intervalCheck += diff * diff;
                     }
                 } else {
-                    for (int j = 0; j < quantizationScratch.length; j++) {
-                        intervalCheck += quantizationScratch[j] < 0
-                            ? minLowerInterval * quantizationScratch[j]
-                            : maxUpperInterval * quantizationScratch[j];
+                    for (int j = 0; j < scratch.length; j++) {
+                        intervalCheck += scratch[j] < 0
+                            ? minLowerInterval * scratch[j]
+                            : maxUpperInterval * scratch[j];
                     }
                 }
                 float est = intervalCheck;
                 if (fieldInfo.getVectorSimilarityFunction() == MAXIMUM_INNER_PRODUCT) {
                     est = VectorUtil.scaleMaxInnerProductScore(est);
-                    logger.info(
-                        "IVF vectors: minLowerInterval: {}, maxUpperInterval: {}, est: {}, competitive: {}",
-                        minLowerInterval,
-                        maxUpperInterval,
-                        est,
-                        knnCollector.minCompetitiveSimilarity()
-                    );
                     if (knnCollector.minCompetitiveSimilarity() > est) {
                         return vectors; // skip this posting list, it is not competitive
                     }
                 } else if (fieldInfo.getVectorSimilarityFunction() == DOT_PRODUCT || fieldInfo.getVectorSimilarityFunction() == COSINE) {
                     est = (est + 1f) / 2f;
-                    logger.info(
-                        "IVF vectors: minLowerInterval: {}, maxUpperInterval: {}, est: {}, competitive: {}",
-                        minLowerInterval,
-                        maxUpperInterval,
-                        est,
-                        knnCollector.minCompetitiveSimilarity()
-                    );
                     if (knnCollector.minCompetitiveSimilarity() > est) {
                         return vectors; // skip this posting list, it is not competitive
                     }
                 } else if (fieldInfo.getVectorSimilarityFunction() == EUCLIDEAN) {
                     // not handling this yet...
                     est = 1 / (1 + est);
-                    logger.info(
-                        "IVF vectors: minLowerInterval: {}, maxUpperInterval: {}, est: {}, competitive: {}",
-                        minLowerInterval,
-                        maxUpperInterval,
-                        est,
-                        knnCollector.minCompetitiveSimilarity()
-                    );
                     if (knnCollector.minCompetitiveSimilarity() > est) {
                         return vectors; // skip this posting list, it is not competitive
                     }
