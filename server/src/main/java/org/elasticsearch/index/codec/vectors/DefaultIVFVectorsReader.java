@@ -204,7 +204,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         return new CentroidIterator() {
             float score = Float.NEGATIVE_INFINITY;
             float radius = Float.NEGATIVE_INFINITY;
-            float maxMagnitude = Float.NEGATIVE_INFINITY;
+            float skippingMetric = Float.NEGATIVE_INFINITY;
 
             @Override
             public boolean hasNext() {
@@ -219,7 +219,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 centroids.seek(childrenFileOffsets + (long) (Long.BYTES + 2 * Integer.BYTES) * centroidOrdinal);
                 long postingListOffset = centroids.readLong();
                 radius = Float.intBitsToFloat(centroids.readInt());
-                maxMagnitude = Float.intBitsToFloat(centroids.readInt());
+                skippingMetric = Float.intBitsToFloat(centroids.readInt());
                 return postingListOffset;
             }
 
@@ -235,7 +235,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
 
             @Override
             public float additionalBlockSkippingMetric() {
-                return maxMagnitude;
+                return skippingMetric;
             }
 
             private void updateQueue() throws IOException {

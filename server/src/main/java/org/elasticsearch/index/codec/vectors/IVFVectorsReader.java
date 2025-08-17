@@ -262,18 +262,18 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             long offset = centroidIterator.nextPostingListOffset();
             float score = centroidIterator.score();
             float radius = centroidIterator.radius();
-            float maxMagnitude = centroidIterator.additionalBlockSkippingMetric();
-            float est = blockScoreEstimation(fieldInfo.getVectorSimilarityFunction(), radius, score, queryMagnitude, maxMagnitude);
+            float skippingMetric = centroidIterator.additionalBlockSkippingMetric();
+            float est = blockScoreEstimation(fieldInfo.getVectorSimilarityFunction(), radius, score, queryMagnitude, skippingMetric);
             boolean skip = knnCollector.minCompetitiveSimilarity() > est;
-            expectedDocs += scorer.resetPostingsScorer(offset);
-            if (false) {
+            int docsInList = scorer.resetPostingsScorer(offset);
+            expectedDocs += docsInList;
+            if (skip) {
                 // hack, idk how to cheat our percentage collector....
-                actualDocs += expectedDocs;
+                actualDocs += docsInList;
                 continue;
             }
             // todo do we need direct access to the raw centroid???, this is used for quantizing, maybe hydrating and quantizing
             // is enough?
-            expectedDocs += scorer.resetPostingsScorer(offset);
             actualDocs += scorer.visit(knnCollector);
             knnCollector.getSearchStrategy().nextVectorsBlock();
         }
@@ -284,14 +284,16 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             while (centroidIterator.hasNext() && (actualDocs < expectedScored || actualDocs < knnCollector.k())) {
                 float score = centroidIterator.score();
                 float radius = centroidIterator.radius();
-                float maxMagnitude = centroidIterator.additionalBlockSkippingMetric();
-                float est = blockScoreEstimation(fieldInfo.getVectorSimilarityFunction(), radius, score, queryMagnitude, maxMagnitude);
+                float skippingMetric = centroidIterator.additionalBlockSkippingMetric();
+                float est = blockScoreEstimation(fieldInfo.getVectorSimilarityFunction(), radius, score, queryMagnitude, skippingMetric);
                 boolean skip = knnCollector.minCompetitiveSimilarity() > est;
-                if (false) {
+                long offset = centroidIterator.nextPostingListOffset();
+                int numDocs = scorer.resetPostingsScorer(offset);
+                if (skip) {
+                    // hack, idk how to cheat our percentage collector....
+                    actualDocs += numDocs;
                     continue;
                 }
-                long offset = centroidIterator.nextPostingListOffset();
-                scorer.resetPostingsScorer(offset);
                 actualDocs += scorer.visit(knnCollector);
                 knnCollector.getSearchStrategy().nextVectorsBlock();
             }
