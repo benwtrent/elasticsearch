@@ -111,7 +111,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         return new CentroidIterator() {
             float score = Float.NEGATIVE_INFINITY;
             float radius = Float.NEGATIVE_INFINITY;
-            float maxMagnitude = Float.NEGATIVE_INFINITY;
+            float additionalBlockSkippingMetric = Float.NEGATIVE_INFINITY;
 
             @Override
             public boolean hasNext() {
@@ -125,7 +125,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 centroids.seek(offset + (long) (Long.BYTES + 2 * Integer.BYTES) * centroidOrdinal);
                 long postingListOffset = centroids.readLong();
                 radius = Float.intBitsToFloat(centroids.readInt());
-                maxMagnitude = Float.intBitsToFloat(centroids.readInt());
+                additionalBlockSkippingMetric = Float.intBitsToFloat(centroids.readInt());
                 return postingListOffset;
             }
 
@@ -140,8 +140,8 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             }
 
             @Override
-            public float maxMagnitude() {
-                return maxMagnitude;
+            public float additionalBlockSkippingMetric() {
+                return additionalBlockSkippingMetric;
             }
         };
     }
@@ -234,7 +234,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             }
 
             @Override
-            public float maxMagnitude() {
+            public float additionalBlockSkippingMetric() {
                 return maxMagnitude;
             }
 

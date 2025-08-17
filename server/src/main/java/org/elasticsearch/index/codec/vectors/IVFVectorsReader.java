@@ -262,11 +262,11 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             long offset = centroidIterator.nextPostingListOffset();
             float score = centroidIterator.score();
             float radius = centroidIterator.radius();
-            float maxMagnitude = centroidIterator.maxMagnitude();
-            float est = Math.min((float) (score + Math.sqrt(radius) * queryMagnitude), maxMagnitude * queryMagnitude);
+            float maxMagnitude = centroidIterator.additionalBlockSkippingMetric();
+            float est = blockScoreEstimation(fieldInfo.getVectorSimilarityFunction(), radius, score, queryMagnitude, maxMagnitude);
             boolean skip = knnCollector.minCompetitiveSimilarity() > est;
             expectedDocs += scorer.resetPostingsScorer(offset);
-            if (skip) {
+            if (false) {
                 // hack, idk how to cheat our percentage collector....
                 actualDocs += expectedDocs;
                 continue;
@@ -284,10 +284,10 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             while (centroidIterator.hasNext() && (actualDocs < expectedScored || actualDocs < knnCollector.k())) {
                 float score = centroidIterator.score();
                 float radius = centroidIterator.radius();
-                float maxMagnitude = centroidIterator.maxMagnitude();
-                float est = Math.min((float) (score + Math.sqrt(radius) * queryMagnitude), maxMagnitude * queryMagnitude);
+                float maxMagnitude = centroidIterator.additionalBlockSkippingMetric();
+                float est = blockScoreEstimation(fieldInfo.getVectorSimilarityFunction(), radius, score, queryMagnitude, maxMagnitude);
                 boolean skip = knnCollector.minCompetitiveSimilarity() > est;
-                if (skip) {
+                if (false) {
                     continue;
                 }
                 long offset = centroidIterator.nextPostingListOffset();
@@ -308,6 +308,32 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             if (knnCollector.earlyTerminated()) {
                 return;
             }
+        }
+    }
+
+    static float blockScoreEstimation(
+        VectorSimilarityFunction similarity,
+        float radius,
+        float centroidScore,
+        float queryMagnitude,
+        float additionalSkippingMetric
+    ) {
+        switch (similarity) {
+            case EUCLIDEAN -> {
+                float normCap = queryMagnitude - additionalSkippingMetric;
+                float radiusCap = centroidScore - radius;
+                float denominator = Math.max(0, Math.max(normCap, radiusCap));
+                // we utilize square distance, and flip it for maximum similarity score
+                return 1f / (1 + denominator * denominator);
+            }
+            case DOT_PRODUCT, COSINE -> {
+                // we transform the cosine similarity to a range of [0, 1] for skipping
+                return (float) (1 + (Math.cos(Math.max(0, Math.acos(centroidScore) - additionalSkippingMetric)))) / 2f;
+            }
+            case MAXIMUM_INNER_PRODUCT -> {
+                return Math.min((float) (centroidScore + Math.sqrt(radius) * queryMagnitude), additionalSkippingMetric * queryMagnitude);
+            }
+            default -> throw new IllegalArgumentException("Unsupported similarity function: " + similarity);
         }
     }
 
@@ -348,7 +374,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
 
         float radius() throws IOException;
 
-        float maxMagnitude() throws IOException;
+        float additionalBlockSkippingMetric() throws IOException;
     }
 
     interface PostingVisitor {

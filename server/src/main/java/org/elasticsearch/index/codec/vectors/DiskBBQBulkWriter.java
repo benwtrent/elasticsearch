@@ -9,6 +9,7 @@
 
 package org.elasticsearch.index.codec.vectors;
 
+import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.store.IndexOutput;
 
 import java.io.IOException;
@@ -31,10 +32,12 @@ abstract class DiskBBQBulkWriter {
 
     static class OneBitDiskBBQBulkWriter extends DiskBBQBulkWriter {
         private final OptimizedScalarQuantizer.QuantizationResult[] corrections;
+        private final VectorSimilarityFunction similarityFunction;
 
-        OneBitDiskBBQBulkWriter(int bulkSize, IndexOutput out) {
+        OneBitDiskBBQBulkWriter(int bulkSize, VectorSimilarityFunction similarityFunction, IndexOutput out) {
             super(bulkSize, out);
             this.corrections = new OptimizedScalarQuantizer.QuantizationResult[bulkSize];
+            this.similarityFunction = similarityFunction;
         }
 
         @Override
@@ -43,16 +46,18 @@ abstract class DiskBBQBulkWriter {
             // we want to negatively impact tight clusters that score poorly
             // so we grab the "worst" vector score for this centroid and use it to determine cluster tightness
             float radius = Float.NEGATIVE_INFINITY;
-            float maxNorm = Float.NEGATIVE_INFINITY;
+            float skippingMetric = Float.NEGATIVE_INFINITY;
             int limit = qvv.count() - bulkSize + 1;
             int i = 0;
             for (; i < limit; i += bulkSize) {
                 for (int j = 0; j < bulkSize; j++) {
                     byte[] qv = qvv.next();
                     corrections[j] = qvv.getCorrections();
-                    radius = Math.max(radius, corrections[j].norm2());
-                    maxNorm = Math.max(maxNorm, corrections[j].additionalCorrectionForBlockSkipping());
-                    assert radius != Float.NaN && maxNorm != Float.NaN;
+                    radius = Math.max(radius, (float) Math.sqrt(corrections[j].norm2()));
+                    skippingMetric = similarityFunction == VectorSimilarityFunction.MAXIMUM_INNER_PRODUCT
+                        ? Math.max(skippingMetric, corrections[j].additionalCorrectionForBlockSkipping())
+                        : Math.max(skippingMetric, (float) Math.acos(corrections[j].additionalCorrectionForBlockSkipping()));
+                    assert radius != Float.NaN && skippingMetric != Float.NaN;
                     out.writeBytes(qv, qv.length);
                 }
                 writeCorrections(corrections);
@@ -61,13 +66,15 @@ abstract class DiskBBQBulkWriter {
             for (; i < qvv.count(); ++i) {
                 byte[] qv = qvv.next();
                 OptimizedScalarQuantizer.QuantizationResult correction = qvv.getCorrections();
-                radius = Math.max(radius, correction.norm2());
-                maxNorm = Math.max(maxNorm, correction.additionalCorrectionForBlockSkipping());
-                assert radius != Float.NaN && maxNorm != Float.NaN;
+                radius = Math.max(radius, (float) Math.sqrt(correction.norm2()));
+                skippingMetric = similarityFunction == VectorSimilarityFunction.MAXIMUM_INNER_PRODUCT
+                    ? Math.max(skippingMetric, correction.additionalCorrectionForBlockSkipping())
+                    : Math.max(skippingMetric, (float) Math.acos(correction.additionalCorrectionForBlockSkipping()));
+                assert radius != Float.NaN && skippingMetric != Float.NaN;
                 out.writeBytes(qv, qv.length);
                 writeCorrection(correction);
             }
-            return new float[] { radius, maxNorm };
+            return new float[] { radius, skippingMetric };
         }
 
         private void writeCorrections(OptimizedScalarQuantizer.QuantizationResult[] corrections) throws IOException {
@@ -99,16 +106,20 @@ abstract class DiskBBQBulkWriter {
 
     static class SevenBitDiskBBQBulkWriter extends DiskBBQBulkWriter {
         private final OptimizedScalarQuantizer.QuantizationResult[] corrections;
+        private final VectorSimilarityFunction similarityFunction;
 
-        SevenBitDiskBBQBulkWriter(int bulkSize, IndexOutput out) {
+        SevenBitDiskBBQBulkWriter(int bulkSize, VectorSimilarityFunction similarityFunction, IndexOutput out) {
             super(bulkSize, out);
             this.corrections = new OptimizedScalarQuantizer.QuantizationResult[bulkSize];
+            this.similarityFunction = similarityFunction;
         }
 
         @Override
         float[] writeVectors(DefaultIVFVectorsWriter.QuantizedVectorValues qvv) throws IOException {
             float radius = Float.NEGATIVE_INFINITY;
-            float maxNorm = Float.NEGATIVE_INFINITY;
+            float skippingMetric = similarityFunction == VectorSimilarityFunction.MAXIMUM_INNER_PRODUCT
+                ? Float.NEGATIVE_INFINITY
+                : Float.POSITIVE_INFINITY;
             int limit = qvv.count() - bulkSize + 1;
             int i = 0;
             for (; i < limit; i += bulkSize) {
@@ -116,8 +127,10 @@ abstract class DiskBBQBulkWriter {
                     byte[] qv = qvv.next();
                     corrections[j] = qvv.getCorrections();
                     radius = Math.max(radius, corrections[j].norm2());
-                    maxNorm = Math.max(maxNorm, corrections[j].additionalCorrectionForBlockSkipping());
-                    assert radius != Float.NaN && maxNorm != Float.NaN;
+                    skippingMetric = similarityFunction == VectorSimilarityFunction.MAXIMUM_INNER_PRODUCT
+                        ? Math.max(skippingMetric, corrections[j].additionalCorrectionForBlockSkipping())
+                        : Math.min(skippingMetric, corrections[j].additionalCorrectionForBlockSkipping());
+                    assert radius != Float.NaN && skippingMetric != Float.NaN;
                     out.writeBytes(qv, qv.length);
                 }
                 writeCorrections(corrections);
@@ -127,12 +140,14 @@ abstract class DiskBBQBulkWriter {
                 byte[] qv = qvv.next();
                 OptimizedScalarQuantizer.QuantizationResult correction = qvv.getCorrections();
                 radius = Math.max(radius, correction.norm2());
-                maxNorm = Math.max(maxNorm, correction.additionalCorrectionForBlockSkipping());
-                assert radius != Float.NaN && maxNorm != Float.NaN;
+                skippingMetric = similarityFunction == VectorSimilarityFunction.MAXIMUM_INNER_PRODUCT
+                    ? Math.max(skippingMetric, correction.additionalCorrectionForBlockSkipping())
+                    : Math.min(skippingMetric, correction.additionalCorrectionForBlockSkipping());
+                assert radius != Float.NaN && skippingMetric != Float.NaN;
                 out.writeBytes(qv, qv.length);
                 writeCorrection(correction);
             }
-            return new float[] { radius, maxNorm };
+            return new float[] { radius, skippingMetric };
         }
 
         private void writeCorrections(OptimizedScalarQuantizer.QuantizationResult[] corrections) throws IOException {

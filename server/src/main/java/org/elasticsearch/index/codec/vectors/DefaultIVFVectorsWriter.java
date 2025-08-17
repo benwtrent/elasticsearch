@@ -103,7 +103,11 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         postingsOutput.writeVInt(maxPostingListSize);
         // write the posting lists
         final PackedLongValues.Builder offsets = PackedLongValues.monotonicBuilder(PackedInts.COMPACT);
-        DiskBBQBulkWriter bulkWriter = new DiskBBQBulkWriter.OneBitDiskBBQBulkWriter(ES91OSQVectorsScorer.BULK_SIZE, postingsOutput);
+        DiskBBQBulkWriter bulkWriter = new DiskBBQBulkWriter.OneBitDiskBBQBulkWriter(
+            ES91OSQVectorsScorer.BULK_SIZE,
+            fieldInfo.getVectorSimilarityFunction(),
+            postingsOutput
+        );
         OnHeapQuantizedVectors onHeapQuantizedVectors = new OnHeapQuantizedVectors(
             floatVectorValues,
             fieldInfo.getVectorDimension(),
@@ -261,7 +265,11 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
                 quantizedVectorsInput,
                 fieldInfo.getVectorDimension()
             );
-            DiskBBQBulkWriter bulkWriter = new DiskBBQBulkWriter.OneBitDiskBBQBulkWriter(ES91OSQVectorsScorer.BULK_SIZE, postingsOutput);
+            DiskBBQBulkWriter bulkWriter = new DiskBBQBulkWriter.OneBitDiskBBQBulkWriter(
+                ES91OSQVectorsScorer.BULK_SIZE,
+                fieldInfo.getVectorSimilarityFunction(),
+                postingsOutput
+            );
             final ByteBuffer buffer = ByteBuffer.allocate(fieldInfo.getVectorDimension() * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
             // write the max posting list size
             postingsOutput.writeVInt(maxPostingListSize);
@@ -389,6 +397,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
     ) throws IOException {
         DiskBBQBulkWriter.SevenBitDiskBBQBulkWriter bulkWriter = new DiskBBQBulkWriter.SevenBitDiskBBQBulkWriter(
             ES92Int7VectorsScorer.BULK_SIZE,
+            fieldInfo.getVectorSimilarityFunction(),
             centroidOutput
         );
         final OptimizedScalarQuantizer osq = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction());
@@ -443,6 +452,7 @@ public class DefaultIVFVectorsWriter extends IVFVectorsWriter {
         centroidOutput.writeVInt(0);
         DiskBBQBulkWriter.SevenBitDiskBBQBulkWriter bulkWriter = new DiskBBQBulkWriter.SevenBitDiskBBQBulkWriter(
             ES92Int7VectorsScorer.BULK_SIZE,
+            fieldInfo.getVectorSimilarityFunction(),
             centroidOutput
         );
         final OptimizedScalarQuantizer osq = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction());

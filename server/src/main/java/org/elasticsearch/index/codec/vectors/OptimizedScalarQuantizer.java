@@ -15,6 +15,7 @@ import org.elasticsearch.simdvec.ESVectorUtil;
 
 import static org.apache.lucene.index.VectorSimilarityFunction.COSINE;
 import static org.apache.lucene.index.VectorSimilarityFunction.EUCLIDEAN;
+import static org.apache.lucene.index.VectorSimilarityFunction.MAXIMUM_INNER_PRODUCT;
 
 public class OptimizedScalarQuantizer {
     public static void initInterval(byte bits, float vecStd, float vecMean, float min, float max, float[] initInterval) {
@@ -148,7 +149,7 @@ public class OptimizedScalarQuantizer {
             similarityFunction == EUCLIDEAN ? norm2 : statsScratch[5],
             sumQuery,
             norm2,
-            mag
+            similarityFunction == MAXIMUM_INNER_PRODUCT || similarityFunction == EUCLIDEAN ? mag : statsScratch[5]
         );
     }
 
