@@ -20,6 +20,8 @@ import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.VectorUtil;
 import org.apache.lucene.util.hnsw.NeighborQueue;
 import org.elasticsearch.index.codec.vectors.reflect.OffHeapStats;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.simdvec.ES91OSQVectorsScorer;
 import org.elasticsearch.simdvec.ES92Int7VectorsScorer;
 import org.elasticsearch.simdvec.ESVectorUtil;
@@ -29,6 +31,9 @@ import java.util.Map;
 
 import static org.apache.lucene.codecs.lucene102.Lucene102BinaryQuantizedVectorsFormat.QUERY_BITS;
 import static org.apache.lucene.index.VectorSimilarityFunction.COSINE;
+import static org.apache.lucene.index.VectorSimilarityFunction.DOT_PRODUCT;
+import static org.apache.lucene.index.VectorSimilarityFunction.EUCLIDEAN;
+import static org.apache.lucene.index.VectorSimilarityFunction.MAXIMUM_INNER_PRODUCT;
 import static org.elasticsearch.index.codec.vectors.BQSpaceUtils.transposeHalfByte;
 import static org.elasticsearch.index.codec.vectors.BQVectorUtils.discretize;
 import static org.elasticsearch.index.codec.vectors.OptimizedScalarQuantizer.DEFAULT_LAMBDA;
@@ -40,6 +45,7 @@ import static org.elasticsearch.simdvec.ES91OSQVectorsScorer.BULK_SIZE;
  */
 public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeapStats {
 
+    private static final Logger logger = LogManager.getLogger(DefaultIVFVectorsReader.class);
     // The percentage of centroids that are scored to keep recall
     public static final double CENTROID_SAMPLING_PERCENTAGE = 0.2;
 
@@ -492,18 +498,104 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             }
         }
 
+        private float[] getMinMaxIntervalsForPostingList() throws  IOException {
+            float[] minMax = new float[2];
+            minMax[0] = Float.POSITIVE_INFINITY;
+            minMax[1] = Float.NEGATIVE_INFINITY;
+            int limit = vectors - BULK_SIZE + 1;
+            int i = 0;
+            for (; i < limit; i += BULK_SIZE) {
+                // read in all corrections
+                indexInput.seek(slicePos + (i * quantizedByteLength) + (BULK_SIZE * quantizedVectorByteSize));
+                indexInput.readFloats(correctionsLower, 0, BULK_SIZE);
+                indexInput.readFloats(correctionsUpper, 0, BULK_SIZE);
+                for (int j = 0; j < BULK_SIZE; j++) {
+                    minMax[0] = Math.min(minMax[0], correctionsLower[j]);
+                    minMax[1] = Math.max(minMax[1], correctionsUpper[j]);
+                }
+            }
+            // process tail
+            for (; i < vectors; i++) {
+                indexInput.seek(slicePos + i * quantizedByteLength + quantizedVectorByteSize);
+                indexInput.readFloats(correctiveValues, 0, 3);
+                minMax[0] = Math.min(minMax[0], correctiveValues[0]);
+                minMax[1] = Math.max(minMax[1], correctiveValues[1]);
+            }
+            return minMax;
+        }
+
         @Override
         public int visit(KnnCollector knnCollector) throws IOException {
             // block processing
             int scoredDocs = 0;
             int limit = vectors - BULK_SIZE + 1;
             int i = 0;
+            quantizeQueryIfNecessary();
+            if (knnCollector.minCompetitiveSimilarity() != Float.NEGATIVE_INFINITY) {
+                float intervalCheck = 0;
+                // in blocks of 4 multiply all scratch where > 0 by maxUpperInterval and all scratch where < 0 by minLowerInterval
+                float[] minMax = getMinMaxIntervalsForPostingList();
+                float minLowerInterval = minMax[0];
+                float maxUpperInterval = minMax[1];
+                if (fieldInfo.getVectorSimilarityFunction() == EUCLIDEAN) {
+                    for (int j = 0; j < quantizationScratch.length; j++) {
+                        float diff = quantizationScratch[j] < 0
+                            ? minLowerInterval - quantizationScratch[j]
+                            : maxUpperInterval - quantizationScratch[j];
+                        intervalCheck += diff * diff;
+                    }
+                } else {
+                    for (int j = 0; j < quantizationScratch.length; j++) {
+                        intervalCheck += quantizationScratch[j] < 0
+                            ? minLowerInterval * quantizationScratch[j]
+                            : maxUpperInterval * quantizationScratch[j];
+                    }
+                }
+                float est = intervalCheck;
+                if (fieldInfo.getVectorSimilarityFunction() == MAXIMUM_INNER_PRODUCT) {
+                    est = VectorUtil.scaleMaxInnerProductScore(est);
+                    logger.info(
+                        "IVF vectors: minLowerInterval: {}, maxUpperInterval: {}, est: {}, competitive: {}",
+                        minLowerInterval,
+                        maxUpperInterval,
+                        est,
+                        knnCollector.minCompetitiveSimilarity()
+                    );
+                    if (knnCollector.minCompetitiveSimilarity() > est) {
+                        return vectors; // skip this posting list, it is not competitive
+                    }
+                } else if (fieldInfo.getVectorSimilarityFunction() == DOT_PRODUCT || fieldInfo.getVectorSimilarityFunction() == COSINE) {
+                    est = (est + 1f) / 2f;
+                    logger.info(
+                        "IVF vectors: minLowerInterval: {}, maxUpperInterval: {}, est: {}, competitive: {}",
+                        minLowerInterval,
+                        maxUpperInterval,
+                        est,
+                        knnCollector.minCompetitiveSimilarity()
+                    );
+                    if (knnCollector.minCompetitiveSimilarity() > est) {
+                        return vectors; // skip this posting list, it is not competitive
+                    }
+                } else if (fieldInfo.getVectorSimilarityFunction() == EUCLIDEAN) {
+                    // not handling this yet...
+                    est = 1 / (1 + est);
+                    logger.info(
+                        "IVF vectors: minLowerInterval: {}, maxUpperInterval: {}, est: {}, competitive: {}",
+                        minLowerInterval,
+                        maxUpperInterval,
+                        est,
+                        knnCollector.minCompetitiveSimilarity()
+                    );
+                    if (knnCollector.minCompetitiveSimilarity() > est) {
+                        return vectors; // skip this posting list, it is not competitive
+                    }
+                }
+            }
             for (; i < limit; i += BULK_SIZE) {
                 final int docsToBulkScore = acceptDocs == null ? BULK_SIZE : docToBulkScore(docIdsScratch, i, acceptDocs);
                 if (docsToBulkScore == 0) {
                     continue;
                 }
-                quantizeQueryIfNecessary();
                 indexInput.seek(slicePos + i * quantizedByteLength);
                 final float maxScore;
                 if (docsToBulkScore < BULK_SIZE / 2) {
