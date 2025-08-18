@@ -43,8 +43,11 @@ public class MaxScoreTopKnnCollector extends AbstractMaxScoreKnnCollector {
 
     @Override
     public boolean collect(int docId, float similarity) {
-        collectedCount++;
-        return queue.insertWithOverflow(docId, similarity);
+        boolean collected = queue.insertWithOverflow(docId, similarity);
+        if (collected) {
+            collectedCount++;
+        }
+        return collected;
     }
 
     public int collectedCount() {

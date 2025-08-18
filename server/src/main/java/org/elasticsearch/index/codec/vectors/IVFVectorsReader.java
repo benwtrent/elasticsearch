@@ -34,8 +34,11 @@ import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
 import org.elasticsearch.search.vectors.IVFKnnSearchStrategy;
+import org.elasticsearch.search.vectors.MaxScoreTopKnnCollector;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsReader.SIMILARITY_FUNCTIONS;
 import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.DYNAMIC_VISIT_RATIO;
@@ -257,6 +260,9 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         // filtering? E.g. keep exploring until we hit an expected number of parent documents vs. child vectors?
         // for inner-product search, this makes sense. IDK for euclidean, maybe we just use the radius and the centroid score...
         float queryMagnitude = (float) Math.sqrt(VectorUtil.dotProduct(target, target));
+        MaxScoreTopKnnCollector maxScore = (MaxScoreTopKnnCollector) knnCollector;
+        List<Integer> collectionPerCentroidOrd = new ArrayList<>();
+        List<Float> centroidScores = new ArrayList<>();
         while (centroidIterator.hasNext()
             && (maxVectorVisited > actualDocs || knnCollector.minCompetitiveSimilarity() == Float.NEGATIVE_INFINITY)) {
             long offset = centroidIterator.nextPostingListOffset();
@@ -272,11 +278,16 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
                 actualDocs += docsInList;
                 continue;
             }
+            centroidScores.add(score);
+            int prevColl = maxScore.collectedCount();
             // todo do we need direct access to the raw centroid???, this is used for quantizing, maybe hydrating and quantizing
             // is enough?
             actualDocs += scorer.visit(knnCollector);
+            int numCollected = maxScore.collectedCount() - prevColl;
+            collectionPerCentroidOrd.add(numCollected);
             knnCollector.getSearchStrategy().nextVectorsBlock();
         }
+        logger.info("Collected: \n {} Scores: \n {}", collectionPerCentroidOrd, centroidScores);
         if (acceptDocs != null) {
             float unfilteredRatioVisited = (float) expectedDocs / numVectors;
             int filteredVectors = (int) Math.ceil(numVectors * percentFiltered);
