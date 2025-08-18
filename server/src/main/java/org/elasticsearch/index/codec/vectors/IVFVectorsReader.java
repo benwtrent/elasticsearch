@@ -263,19 +263,27 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         MaxScoreTopKnnCollector maxScore = (MaxScoreTopKnnCollector) knnCollector;
         List<Integer> collectionPerCentroidOrd = new ArrayList<>();
         List<Float> centroidScores = new ArrayList<>();
+        List<Float> skipEstimators = new ArrayList<>();
+        float maxCentroidScore = Float.NEGATIVE_INFINITY;
+        int skipped = 0;
+        boolean hitZero = false;
+        EWMA ewma = null;
         while (centroidIterator.hasNext()
             && (maxVectorVisited > actualDocs || knnCollector.minCompetitiveSimilarity() == Float.NEGATIVE_INFINITY)) {
             long offset = centroidIterator.nextPostingListOffset();
             float score = centroidIterator.score();
+
             float radius = centroidIterator.radius();
             float skippingMetric = centroidIterator.additionalBlockSkippingMetric();
             float est = blockScoreEstimation(fieldInfo.getVectorSimilarityFunction(), radius, score, queryMagnitude, skippingMetric);
+            skipEstimators.add(est);
             boolean skip = knnCollector.minCompetitiveSimilarity() > est;
             int docsInList = scorer.resetPostingsScorer(offset);
             expectedDocs += docsInList;
-            if (skip) {
+            if (skip || hitZero) {
                 // hack, idk how to cheat our percentage collector....
                 actualDocs += docsInList;
+                skipped++;
                 continue;
             }
             centroidScores.add(score);
@@ -284,10 +292,17 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             // is enough?
             actualDocs += scorer.visit(knnCollector);
             int numCollected = maxScore.collectedCount() - prevColl;
+            if (ewma == null) {
+                ewma = new EWMA((1f/((float)Math.exp(100*visitRatio))), numCollected);
+            } else {
+                ewma.addValue(numCollected);
+            }
+            if (ewma.avg < 1) {
+                hitZero = true;
+            }
             collectionPerCentroidOrd.add(numCollected);
             knnCollector.getSearchStrategy().nextVectorsBlock();
         }
-        logger.info("Collected: \n {} Scores: \n {}", collectionPerCentroidOrd, centroidScores);
         if (acceptDocs != null) {
             float unfilteredRatioVisited = (float) expectedDocs / numVectors;
             int filteredVectors = (int) Math.ceil(numVectors * percentFiltered);
@@ -398,5 +413,26 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
 
         /** returns the number of scored documents */
         int visit(KnnCollector collector) throws IOException;
+    }
+
+    static class EWMA {
+        private final float alpha;
+        float avg;
+
+        EWMA(float alpha, float avg) {
+            this.alpha = alpha;
+            this.avg = avg;
+        }
+
+        float getAvg() {
+            return avg;
+        }
+
+        float addValue(float value) {
+            float current = avg;
+            float newAvg = (alpha * value) + ((1 - alpha) * current);
+            avg = newAvg;
+            return newAvg;
+        }
     }
 }
