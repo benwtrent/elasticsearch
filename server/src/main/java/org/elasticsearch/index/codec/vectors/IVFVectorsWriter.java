@@ -31,6 +31,7 @@ import org.apache.lucene.store.RandomAccessInput;
 import org.apache.lucene.store.ReadAdvice;
 import org.apache.lucene.util.LongValues;
 import org.apache.lucene.util.VectorUtil;
+import org.apache.lucene.util.packed.DirectWriter;
 import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.core.SuppressForbidden;
 
@@ -52,6 +53,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
     private final List<FieldWriter> fieldWriters = new ArrayList<>();
     private final IndexOutput ivfCentroids, ivfClusters;
     private final IndexOutput ivfMeta;
+    private final IndexOutput vectorAssignments;
     private final FlatVectorsWriter rawVectorDelegate;
 
     @SuppressWarnings("this-escape")
@@ -72,6 +74,11 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
             state.segmentInfo.name,
             state.segmentSuffix,
             IVFVectorsFormat.CLUSTER_EXTENSION
+        );
+        final String vectorAssignmentsFileName = IndexFileNames.segmentFileName(
+            state.segmentInfo.name,
+            state.segmentSuffix,
+            IVFVectorsFormat.CENTROID_META_EXTENSION
         );
         boolean success = false;
         try {
@@ -94,6 +101,14 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
             ivfClusters = state.directory.createOutput(ivfClustersFileName, state.context);
             CodecUtil.writeIndexHeader(
                 ivfClusters,
+                IVFVectorsFormat.NAME,
+                IVFVectorsFormat.VERSION_CURRENT,
+                state.segmentInfo.getId(),
+                state.segmentSuffix
+            );
+            vectorAssignments = state.directory.createOutput(vectorAssignmentsFileName, state.context);
+            CodecUtil.writeIndexHeader(
+                vectorAssignments,
                 IVFVectorsFormat.NAME,
                 IVFVectorsFormat.VERSION_CURRENT,
                 state.segmentInfo.getId(),
@@ -162,6 +177,25 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         float[] globalCentroid
     ) throws IOException;
 
+    private long[] writeVectorAssignments(int[] assignments, int[] overspillAssignments) throws IOException {
+        long assignmentsOffset = vectorAssignments.alignFilePointer(Integer.BYTES);
+        int maxValue = 0;
+        for (int i = 0; i < assignments.length; i++) {
+            maxValue = Math.max(maxValue, assignments[i]);
+        }
+        // Note, to prevent stupid `-1` from being used to indicate overspill not being used,
+        // we add `1` to all assignments and then decode when reading
+        maxValue += 1;
+        DirectWriter directWriter = DirectWriter.getInstance(vectorAssignments, assignments.length, maxValue + 1);
+        for (int i = 0; i < overspillAssignments.length; i++) {
+            directWriter.add(assignments[i] + 1);
+            directWriter.add(overspillAssignments[i] + 1);
+        }
+        directWriter.finish();
+        long assignmentsLength = vectorAssignments.getFilePointer() - assignmentsOffset;
+        return new long[] { assignmentsOffset, assignmentsLength };
+    }
+
     @Override
     public final void flush(int maxDoc, Sorter.DocMap sortMap) throws IOException {
         rawVectorDelegate.flush(maxDoc, sortMap);
@@ -175,6 +209,10 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
             final CentroidSupplier centroidSupplier = new OnHeapCentroidSupplier(centroidAssignments.centroids());
             // write posting lists
             final long postingListOffset = ivfClusters.alignFilePointer(Float.BYTES);
+            final long[] vectorAssignmentsOffsetAndLength = writeVectorAssignments(
+                centroidAssignments.assignments(),
+                centroidAssignments.overspillAssignments()
+            );
             final CentroidOffsetAndLength centroidOffsetAndLength = buildAndWritePostingsLists(
                 fieldWriter.fieldInfo,
                 centroidSupplier,
@@ -197,7 +235,9 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
                 centroidLength,
                 postingListOffset,
                 postingListLength,
-                globalCentroid
+                globalCentroid,
+                vectorAssignmentsOffsetAndLength[0],
+                vectorAssignmentsOffsetAndLength[1]
             );
         }
     }
@@ -348,7 +388,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
             try {
                 if (numCentroids == 0) {
                     centroidOffset = ivfCentroids.getFilePointer();
-                    writeMeta(fieldInfo, 0, centroidOffset, 0, 0, 0, null);
+                    writeMeta(fieldInfo, 0, centroidOffset, 0, 0, 0, null, 0, 0);
                     CodecUtil.writeFooter(centroidTemp);
                     IOUtils.close(centroidTemp);
                     return;
@@ -364,6 +404,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
                         calculatedGlobalCentroid
                     );
                     // write posting lists
+                    long[] vectorAssignmentsOffsetsAndLength = writeVectorAssignments(assignments, overspillAssignments);
                     postingListOffset = ivfClusters.alignFilePointer(Float.BYTES);
                     final CentroidOffsetAndLength centroidOffsetAndLength = buildAndWritePostingsLists(
                         fieldInfo,
@@ -388,7 +429,9 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
                         centroidLength,
                         postingListOffset,
                         postingListLength,
-                        calculatedGlobalCentroid
+                        calculatedGlobalCentroid,
+                        vectorAssignmentsOffsetsAndLength[0],
+                        vectorAssignmentsOffsetsAndLength[1]
                     );
                 }
             } finally {
@@ -479,7 +522,9 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         long centroidLength,
         long postingListOffset,
         long postingListLength,
-        float[] globalCentroid
+        float[] globalCentroid,
+        long vectorAssignmentsOffset,
+        long vectorAssignmentsLength
     ) throws IOException {
         ivfMeta.writeInt(field.number);
         ivfMeta.writeInt(field.getVectorEncoding().ordinal());
@@ -494,6 +539,8 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
             buffer.asFloatBuffer().put(globalCentroid);
             ivfMeta.writeBytes(buffer.array(), buffer.array().length);
             ivfMeta.writeInt(Float.floatToIntBits(VectorUtil.dotProduct(globalCentroid, globalCentroid)));
+            ivfMeta.writeLong(vectorAssignmentsOffset);
+            ivfMeta.writeLong(vectorAssignmentsLength);
         }
     }
 
@@ -520,11 +567,14 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         if (ivfClusters != null) {
             CodecUtil.writeFooter(ivfClusters);
         }
+        if (vectorAssignments != null) {
+            CodecUtil.writeFooter(vectorAssignments);
+        }
     }
 
     @Override
     public final void close() throws IOException {
-        IOUtils.close(rawVectorDelegate, ivfMeta, ivfCentroids, ivfClusters);
+        IOUtils.close(rawVectorDelegate, ivfMeta, ivfCentroids, ivfClusters, vectorAssignments);
     }
 
     @Override

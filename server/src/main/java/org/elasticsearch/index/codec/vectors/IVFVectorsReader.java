@@ -18,9 +18,11 @@ import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.index.FloatVectorValues;
 import org.apache.lucene.index.IndexFileNames;
+import org.apache.lucene.index.KnnVectorValues;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.VectorEncoding;
 import org.apache.lucene.index.VectorSimilarityFunction;
+import org.apache.lucene.internal.hppc.IntIntHashMap;
 import org.apache.lucene.internal.hppc.IntObjectHashMap;
 import org.apache.lucene.search.KnnCollector;
 import org.apache.lucene.store.ChecksumIndexInput;
@@ -29,12 +31,15 @@ import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.util.BitSet;
 import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.LongValues;
+import org.apache.lucene.util.packed.DirectReader;
 import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.search.vectors.IVFKnnSearchStrategy;
 
 import java.io.IOException;
 
 import static org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsReader.SIMILARITY_FUNCTIONS;
+import static org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS;
 import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.DYNAMIC_VISIT_RATIO;
 
 /**
@@ -42,7 +47,7 @@ import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.DYNAMIC_VIS
  */
 public abstract class IVFVectorsReader extends KnnVectorsReader {
 
-    private final IndexInput ivfCentroids, ivfClusters;
+    private final IndexInput ivfCentroids, ivfClusters, vectorAssignments;
     private final SegmentReadState state;
     private final FieldInfos fieldInfos;
     protected final IntObjectHashMap<FieldEntry> fields;
@@ -77,6 +82,13 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             }
             ivfCentroids = openDataInput(state, versionMeta, IVFVectorsFormat.CENTROID_EXTENSION, IVFVectorsFormat.NAME, state.context);
             ivfClusters = openDataInput(state, versionMeta, IVFVectorsFormat.CLUSTER_EXTENSION, IVFVectorsFormat.NAME, state.context);
+            vectorAssignments = openDataInput(
+                state,
+                versionMeta,
+                IVFVectorsFormat.CENTROID_META_EXTENSION,
+                IVFVectorsFormat.NAME,
+                state.context
+            );
             success = true;
         } finally {
             if (success == false) {
@@ -90,6 +102,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         int numCentroids,
         IndexInput centroids,
         float[] target,
+        IntIntHashMap centroidAssignmentCounts,
         IndexInput postingListSlice
     ) throws IOException;
 
@@ -158,11 +171,15 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         long postingListOffset = -1;
         long postingListLength = -1;
         float globalCentroidDp = 0;
+        long vectorAssignmentOffset = 0;
+        long vectorAssignmentLength = 0;
         if (centroidLength > 0) {
             postingListOffset = input.readLong();
             postingListLength = input.readLong();
             input.readFloats(globalCentroid, 0, globalCentroid.length);
             globalCentroidDp = Float.intBitsToFloat(input.readInt());
+            vectorAssignmentOffset = input.readLong();
+            vectorAssignmentLength = input.readLong();
         }
         return new FieldEntry(
             similarityFunction,
@@ -173,7 +190,9 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             postingListOffset,
             postingListLength,
             globalCentroid,
-            globalCentroidDp
+            globalCentroidDp,
+            vectorAssignmentOffset,
+            vectorAssignmentLength
         );
     }
 
@@ -198,6 +217,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         rawVectorsReader.checkIntegrity();
         CodecUtil.checksumEntireFile(ivfCentroids);
         CodecUtil.checksumEntireFile(ivfClusters);
+        CodecUtil.checksumEntireFile(vectorAssignments);
     }
 
     @Override
@@ -226,7 +246,8 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         if (acceptDocs instanceof BitSet bitSet) {
             percentFiltered = Math.max(0f, Math.min(1f, (float) bitSet.approximateCardinality() / bitSet.length()));
         }
-        int numVectors = rawVectorsReader.getFloatVectorValues(field).size();
+        FloatVectorValues rawVectors = rawVectorsReader.getFloatVectorValues(field);
+        int numVectors = rawVectors.size();
         float visitRatio = DYNAMIC_VISIT_RATIO;
         // Search strategy may be null if this is being called from checkIndex (e.g. from a test)
         if (knnCollector.getSearchStrategy() instanceof IVFKnnSearchStrategy ivfSearchStrategy) {
@@ -247,13 +268,46 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         // we account for soar vectors here. We can potentially visit a vector twice so we multiply by 2 here.
         long maxVectorVisited = (long) (2.0 * visitRatio * numVectors);
         IndexInput postListSlice = entry.postingListSlice(ivfClusters);
-        CentroidIterator centroidPrefetchingIterator = getCentroidIterator(
-            fieldInfo,
-            entry.numCentroids,
-            entry.centroidSlice(ivfCentroids),
-            target,
-            postListSlice
-        );
+        final CentroidIterator centroidPrefetchingIterator;
+        if (percentFiltered > 0.1 || entry.numCentroids < 10) {
+            centroidPrefetchingIterator = getCentroidIterator(
+                fieldInfo,
+                entry.numCentroids,
+                entry.centroidSlice(ivfCentroids),
+                target,
+                null,
+                postListSlice
+            );
+            // we have a restrictive filter, let's first determine the matching centroids
+        } else {
+            LongValues vectorAssignmentsReader = DirectReader.getInstance(
+                vectorAssignments.randomAccessSlice(entry.vectorAssignmentOffset, entry.vectorAssignmentLength),
+                // we added 1 to handle -1 indicating no assignment
+                entry.numCentroids + 2
+            );
+            KnnVectorValues.DocIndexIterator vectorIterator = rawVectors.iterator();
+            VectorAssignments vectorAssignments = new VectorAssignments(vectorAssignmentsReader, vectorIterator);
+            IntIntHashMap vectorAssignmentSizes = new IntIntHashMap();
+            // iterate the vectors verifying which pass the filter and count the number of vectors per centroid
+            for (int docId = vectorIterator.nextDoc(); docId != NO_MORE_DOCS; docId = vectorIterator.nextDoc()) {
+                if (acceptDocs.get(docId)) {
+                    int[] assignments = vectorAssignments.getAssignments(docId);
+                    for (int assignment : assignments) {
+                        if (assignment != -1) {
+                            vectorAssignmentSizes.putOrAdd(assignment, 1, 1);
+                        }
+                    }
+                }
+            }
+            centroidPrefetchingIterator = getCentroidIterator(
+                fieldInfo,
+                entry.numCentroids,
+                entry.centroidSlice(ivfCentroids),
+                target,
+                vectorAssignmentSizes,
+                postListSlice
+            );
+        }
         PostingVisitor scorer = getPostingVisitor(fieldInfo, postListSlice, target, acceptDocs);
         long expectedDocs = 0;
         long actualDocs = 0;
@@ -297,7 +351,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
 
     @Override
     public void close() throws IOException {
-        IOUtils.close(rawVectorsReader, ivfCentroids, ivfClusters);
+        IOUtils.close(rawVectorsReader, ivfCentroids, ivfClusters, vectorAssignments);
     }
 
     protected record FieldEntry(
@@ -309,7 +363,9 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         long postingListOffset,
         long postingListLength,
         float[] globalCentroid,
-        float globalCentroidDp
+        float globalCentroidDp,
+        long vectorAssignmentOffset,
+        long vectorAssignmentLength
     ) {
         IndexInput centroidSlice(IndexInput centroidFile) throws IOException {
             return centroidFile.slice("centroids", centroidOffset, centroidLength);
@@ -317,6 +373,27 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
 
         IndexInput postingListSlice(IndexInput postingListFile) throws IOException {
             return postingListFile.slice("postingLists", postingListOffset, postingListLength);
+        }
+    }
+
+    private static class VectorAssignments {
+        LongValues writtenAssignments;
+        KnnVectorValues.DocIndexIterator vectorIterator;
+        private final int[] assignments = new int[2];
+
+        VectorAssignments(LongValues writtenAssignments, KnnVectorValues.DocIndexIterator vectorIterator) {
+            this.writtenAssignments = writtenAssignments;
+            this.vectorIterator = vectorIterator;
+        }
+
+        int[] getAssignments(int docId) throws IOException {
+            int advancedDocId = vectorIterator.advance(docId);
+            assert advancedDocId == docId;
+            int vectorOrd = vectorIterator.index();
+            // we encode both assignments next to each other, we also added 1 to handle -1 indicating no assignment
+            assignments[0] = Math.toIntExact(writtenAssignments.get(2L * vectorOrd) - 1L);
+            assignments[1] = Math.toIntExact(writtenAssignments.get(2L * vectorOrd + 1) - 1L);
+            return assignments;
         }
     }
 

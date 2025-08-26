@@ -13,6 +13,7 @@ import org.apache.lucene.codecs.hnsw.FlatVectorsReader;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.VectorSimilarityFunction;
+import org.apache.lucene.internal.hppc.IntIntHashMap;
 import org.apache.lucene.search.KnnCollector;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.util.ArrayUtil;
@@ -89,6 +90,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         int numCentroids,
         IndexInput centroids,
         float[] targetQuery,
+        IntIntHashMap centroidAssignmentCounts,
         IndexInput postingListSlice
     ) throws IOException {
         final FieldEntry fieldEntry = fields.get(fieldInfo.number);
@@ -122,6 +124,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 scorer,
                 quantized,
                 queryParams,
+                centroidAssignmentCounts,
                 globalCentroidDp
             );
         } else {
@@ -132,6 +135,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 scorer,
                 quantized,
                 queryParams,
+                centroidAssignmentCounts,
                 globalCentroidDp
             );
         }
@@ -145,6 +149,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         ES92Int7VectorsScorer scorer,
         byte[] quantizeQuery,
         OptimizedScalarQuantizer.QuantizationResult queryParams,
+        IntIntHashMap centroidAssignmentCounts,
         float globalCentroidDp
     ) throws IOException {
         final NeighborQueue neighborQueue = new NeighborQueue(numCentroids, true);
@@ -157,6 +162,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             queryParams,
             globalCentroidDp,
             fieldInfo.getVectorSimilarityFunction(),
+            centroidAssignmentCounts,
             new float[ES92Int7VectorsScorer.BULK_SIZE]
         );
         long offset = centroids.getFilePointer();
@@ -185,6 +191,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         ES92Int7VectorsScorer scorer,
         byte[] quantizeQuery,
         OptimizedScalarQuantizer.QuantizationResult queryParams,
+        IntIntHashMap centroidAssignmentCounts,
         float globalCentroidDp
     ) throws IOException {
         // build the three queues we are going to use
@@ -204,6 +211,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             queryParams,
             globalCentroidDp,
             fieldInfo.getVectorSimilarityFunction(),
+            null,
             scores
         );
         final long centroidQuantizeSize = fieldInfo.getVectorDimension() + 3 * Float.BYTES + Integer.BYTES;
@@ -223,6 +231,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 quantizeQuery,
                 queryParams,
                 globalCentroidDp,
+                centroidAssignmentCounts,
                 scores
             );
             while (currentParentQueue.size() > 0 && neighborQueue.size() < bufferSize) {
@@ -268,6 +277,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                         quantizeQuery,
                         queryParams,
                         globalCentroidDp,
+                        centroidAssignmentCounts,
                         scores
                     );
                     updateQueue();
@@ -287,6 +297,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         byte[] quantizeQuery,
         OptimizedScalarQuantizer.QuantizationResult queryParams,
         float globalCentroidDp,
+        IntIntHashMap centroidAssignmentCounts,
         float[] scores
     ) throws IOException {
         centroids.seek(parentOffset);
@@ -302,6 +313,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             queryParams,
             globalCentroidDp,
             fieldInfo.getVectorSimilarityFunction(),
+            centroidAssignmentCounts,
             scores
         );
     }
@@ -315,6 +327,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         OptimizedScalarQuantizer.QuantizationResult queryCorrections,
         float centroidDp,
         VectorSimilarityFunction similarityFunction,
+        IntIntHashMap centroidAssignmentCounts,
         float[] scores
     ) throws IOException {
         int limit = size - ES92Int7VectorsScorer.BULK_SIZE + 1;
