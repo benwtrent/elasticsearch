@@ -28,7 +28,6 @@ import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
 import org.apache.lucene.store.RandomAccessInput;
-import org.apache.lucene.store.ReadAdvice;
 import org.apache.lucene.util.LongValues;
 import org.apache.lucene.util.VectorUtil;
 import org.apache.lucene.util.packed.DirectWriter;
@@ -340,13 +339,8 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         // Even when the file might be sample, the reads will be always in increase order, therefore we set the ReadAdvice to SEQUENTIAL
         // so the OS can optimize read ahead in low memory situations.
         try (
-            IndexInput vectors = mergeState.segmentInfo.dir.openInput(
-                tempRawVectorsFileName,
-                IOContext.DEFAULT.withReadAdvice(ReadAdvice.SEQUENTIAL)
-            );
-            IndexInput docs = docsFileName == null
-                ? null
-                : mergeState.segmentInfo.dir.openInput(docsFileName, IOContext.DEFAULT.withReadAdvice(ReadAdvice.SEQUENTIAL))
+            IndexInput vectors = mergeState.segmentInfo.dir.openInput(tempRawVectorsFileName, IOContext.READONCE);
+            IndexInput docs = docsFileName == null ? null : mergeState.segmentInfo.dir.openInput(docsFileName, IOContext.READONCE)
         ) {
             final FloatVectorValues floatVectorValues = getFloatVectorValues(fieldInfo, docs, vectors, numVectors);
 

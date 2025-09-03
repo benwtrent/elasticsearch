@@ -103,7 +103,8 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         IndexInput centroids,
         float[] target,
         IntIntHashMap centroidAssignmentCounts,
-        IndexInput postingListSlice
+        IndexInput postingListSlice,
+        float visitRatio
     ) throws IOException;
 
     private static IndexInput openDataInput(
@@ -276,7 +277,8 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
                 entry.centroidSlice(ivfCentroids),
                 target,
                 null,
-                postListSlice
+                postListSlice,
+                visitRatio
             );
             // we have a restrictive filter, let's first determine the matching centroids
         } else {
@@ -305,7 +307,8 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
                 entry.centroidSlice(ivfCentroids),
                 target,
                 vectorAssignmentSizes,
-                postListSlice
+                postListSlice,
+                visitRatio
             );
         }
         PostingVisitor scorer = getPostingVisitor(fieldInfo, postListSlice, target, acceptDocs);
@@ -323,6 +326,9 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             // is enough?
             expectedDocs += scorer.resetPostingsScorer(offsetAndLength.offset());
             actualDocs += scorer.visit(knnCollector);
+            if (knnCollector.getSearchStrategy() != null) {
+                knnCollector.getSearchStrategy().nextVectorsBlock();
+            }
         }
         if (acceptDocs != null) {
             float unfilteredRatioVisited = (float) expectedDocs / numVectors;
@@ -332,6 +338,9 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
                 CentroidOffsetAndLength offsetAndLength = centroidPrefetchingIterator.nextPostingListOffsetAndLength();
                 scorer.resetPostingsScorer(offsetAndLength.offset());
                 actualDocs += scorer.visit(knnCollector);
+                if (knnCollector.getSearchStrategy() != null) {
+                    knnCollector.getSearchStrategy().nextVectorsBlock();
+                }
             }
         }
     }
