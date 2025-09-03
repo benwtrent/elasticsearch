@@ -22,7 +22,6 @@ import org.apache.lucene.index.KnnVectorValues;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.VectorEncoding;
 import org.apache.lucene.index.VectorSimilarityFunction;
-import org.apache.lucene.internal.hppc.IntIntHashMap;
 import org.apache.lucene.internal.hppc.IntObjectHashMap;
 import org.apache.lucene.search.KnnCollector;
 import org.apache.lucene.store.ChecksumIndexInput;
@@ -31,9 +30,13 @@ import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.util.BitSet;
 import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.LongValues;
 import org.apache.lucene.util.packed.DirectReader;
+import org.apache.lucene.util.packed.DirectWriter;
 import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.search.vectors.IVFKnnSearchStrategy;
 
 import java.io.IOException;
@@ -46,6 +49,8 @@ import static org.elasticsearch.index.codec.vectors.IVFVectorsFormat.DYNAMIC_VIS
  * Reader for IVF vectors. This reader is used to read the IVF vectors from the index.
  */
 public abstract class IVFVectorsReader extends KnnVectorsReader {
+
+    private static final Logger logger = LogManager.getLogger(IVFVectorsReader.class);
 
     private final IndexInput ivfCentroids, ivfClusters, vectorAssignments;
     private final SegmentReadState state;
@@ -102,7 +107,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         int numCentroids,
         IndexInput centroids,
         float[] target,
-        IntIntHashMap centroidAssignmentCounts,
+        Bits centroidAssignmentCounts,
         IndexInput postingListSlice,
         float visitRatio
     ) throws IOException;
@@ -244,8 +249,10 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             );
         }
         float percentFiltered = 1f;
+        int passingFilter = -1;
         if (acceptDocs instanceof BitSet bitSet) {
-            percentFiltered = Math.max(0f, Math.min(1f, (float) bitSet.approximateCardinality() / bitSet.length()));
+            passingFilter = bitSet.approximateCardinality();
+            percentFiltered = Math.max(0f, Math.min(1f, (float) passingFilter / bitSet.length()));
         }
         FloatVectorValues rawVectors = rawVectorsReader.getFloatVectorValues(field);
         int numVectors = rawVectors.size();
@@ -270,6 +277,7 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         long maxVectorVisited = (long) (2.0 * visitRatio * numVectors);
         IndexInput postListSlice = entry.postingListSlice(ivfClusters);
         final CentroidIterator centroidPrefetchingIterator;
+        FixedBitSet centroidsToVisit = null;
         if (percentFiltered > 0.1 || entry.numCentroids < 10) {
             centroidPrefetchingIterator = getCentroidIterator(
                 fieldInfo,
@@ -282,31 +290,48 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             );
             // we have a restrictive filter, let's first determine the matching centroids
         } else {
+            centroidsToVisit = new FixedBitSet(entry.numCentroids + 1);
             LongValues vectorAssignmentsReader = DirectReader.getInstance(
                 vectorAssignments.randomAccessSlice(entry.vectorAssignmentOffset, entry.vectorAssignmentLength),
                 // we added 1 to handle -1 indicating no assignment
-                entry.numCentroids + 2
+                DirectWriter.bitsRequired(entry.numCentroids + 1)
             );
             KnnVectorValues.DocIndexIterator vectorIterator = rawVectors.iterator();
             VectorAssignments vectorAssignments = new VectorAssignments(vectorAssignmentsReader, vectorIterator);
-            IntIntHashMap vectorAssignmentSizes = new IntIntHashMap();
             // iterate the vectors verifying which pass the filter and count the number of vectors per centroid
-            for (int docId = vectorIterator.nextDoc(); docId != NO_MORE_DOCS; docId = vectorIterator.nextDoc()) {
-                if (acceptDocs.get(docId)) {
-                    int[] assignments = vectorAssignments.getAssignments(docId);
+            if (acceptDocs instanceof BitSet bs) {
+                // iterate over the set bits instead of all the vectors
+                for (int docId = bs.nextSetBit(0); docId != NO_MORE_DOCS; docId = bs.nextSetBit(docId + 1)) {
+                    if (vectorIterator.advance(docId) != docId) {
+                        ;
+                        throw new IllegalStateException("no vector for docID: " + docId);
+                    }
+                    int[] assignments = vectorAssignments.getAssignments(vectorIterator.index());
                     for (int assignment : assignments) {
                         if (assignment != -1) {
-                            vectorAssignmentSizes.putOrAdd(assignment, 1, 1);
+                            centroidsToVisit.set(assignment);
+                        }
+                    }
+                }
+            } else {
+                for (int docId = vectorIterator.nextDoc(); docId != NO_MORE_DOCS; docId = vectorIterator.nextDoc()) {
+                    if (acceptDocs.get(docId)) {
+                        int[] assignments = vectorAssignments.getAssignments(vectorIterator.index());
+                        for (int assignment : assignments) {
+                            if (assignment != -1) {
+                                centroidsToVisit.set(assignment);
+                            }
                         }
                     }
                 }
             }
+            // logger.info("assignments: {}", vectorAssignmentSizes);
             centroidPrefetchingIterator = getCentroidIterator(
                 fieldInfo,
                 entry.numCentroids,
                 entry.centroidSlice(ivfCentroids),
                 target,
-                vectorAssignmentSizes,
+                centroidsToVisit,
                 postListSlice,
                 visitRatio
             );

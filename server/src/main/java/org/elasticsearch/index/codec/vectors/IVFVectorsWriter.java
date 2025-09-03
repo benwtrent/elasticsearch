@@ -185,7 +185,11 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         // Note, to prevent stupid `-1` from being used to indicate overspill not being used,
         // we add `1` to all assignments and then decode when reading
         maxValue += 1;
-        DirectWriter directWriter = DirectWriter.getInstance(vectorAssignments, assignments.length, maxValue + 1);
+        DirectWriter directWriter = DirectWriter.getInstance(
+            vectorAssignments,
+            assignments.length * 2L,
+            DirectWriter.bitsRequired(maxValue + 1)
+        );
         for (int i = 0; i < overspillAssignments.length; i++) {
             directWriter.add(assignments[i] + 1);
             directWriter.add(overspillAssignments[i] + 1);

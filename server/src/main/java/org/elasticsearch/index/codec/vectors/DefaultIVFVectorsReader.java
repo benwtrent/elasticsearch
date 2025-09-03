@@ -13,7 +13,6 @@ import org.apache.lucene.codecs.hnsw.FlatVectorsReader;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.VectorSimilarityFunction;
-import org.apache.lucene.internal.hppc.IntIntHashMap;
 import org.apache.lucene.search.KnnCollector;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.util.ArrayUtil;
@@ -21,6 +20,8 @@ import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.VectorUtil;
 import org.elasticsearch.index.codec.vectors.cluster.NeighborQueue;
 import org.elasticsearch.index.codec.vectors.reflect.OffHeapStats;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.simdvec.ES91OSQVectorsScorer;
 import org.elasticsearch.simdvec.ES92Int7VectorsScorer;
 import org.elasticsearch.simdvec.ESVectorUtil;
@@ -40,17 +41,16 @@ import static org.elasticsearch.simdvec.ES91OSQVectorsScorer.BULK_SIZE;
  * brute force and then scores the top ones using the posting list.
  */
 public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeapStats {
+    private static final Logger logger = LogManager.getLogger(DefaultIVFVectorsReader.class);
 
     public DefaultIVFVectorsReader(SegmentReadState state, FlatVectorsReader rawVectorsReader) throws IOException {
         super(state, rawVectorsReader);
     }
 
     CentroidIterator getPostingListPrefetchIterator(CentroidIterator centroidIterator, IndexInput postingListSlice) throws IOException {
+        CentroidOffsetAndLength offsetAndLength = centroidIterator.hasNext() ? centroidIterator.nextPostingListOffsetAndLength() : null;
         return new CentroidIterator() {
-            CentroidOffsetAndLength nextOffsetAndLength = centroidIterator.hasNext()
-                ? centroidIterator.nextPostingListOffsetAndLength()
-                : null;
-
+            CentroidOffsetAndLength nextOffsetAndLength = offsetAndLength;
             {
                 // prefetch the first one
                 if (nextOffsetAndLength != null) {
@@ -87,7 +87,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         int numCentroids,
         IndexInput centroids,
         float[] targetQuery,
-        IntIntHashMap centroidAssignmentCounts,
+        Bits centroidsToVisit,
         IndexInput postingListSlice,
         float visitRatio
     ) throws IOException {
@@ -125,7 +125,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 scorer,
                 quantized,
                 queryParams,
-                centroidAssignmentCounts,
+                null,
                 globalCentroidDp,
                 visitRatio * centroidOversampling
             );
@@ -137,7 +137,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 scorer,
                 quantized,
                 queryParams,
-                centroidAssignmentCounts,
+                centroidsToVisit,
                 globalCentroidDp
             );
         }
@@ -151,7 +151,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         ES92Int7VectorsScorer scorer,
         byte[] quantizeQuery,
         OptimizedScalarQuantizer.QuantizationResult queryParams,
-        IntIntHashMap centroidAssignmentCounts,
+        Bits centroidsToVisit,
         float globalCentroidDp
     ) throws IOException {
         final NeighborQueue neighborQueue = new NeighborQueue(numCentroids, true);
@@ -164,7 +164,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             queryParams,
             globalCentroidDp,
             fieldInfo.getVectorSimilarityFunction(),
-            centroidAssignmentCounts,
+            centroidsToVisit,
             new float[ES92Int7VectorsScorer.BULK_SIZE]
         );
         long offset = centroids.getFilePointer();
@@ -193,7 +193,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         ES92Int7VectorsScorer scorer,
         byte[] quantizeQuery,
         OptimizedScalarQuantizer.QuantizationResult queryParams,
-        IntIntHashMap centroidAssignmentCounts,
+        Bits centroidsToVisit,
         float globalCentroidDp,
         float centroidRatio
     ) throws IOException {
@@ -234,7 +234,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 quantizeQuery,
                 queryParams,
                 globalCentroidDp,
-                centroidAssignmentCounts,
+                centroidsToVisit,
                 scores
             );
             while (currentParentQueue.size() > 0 && neighborQueue.size() < bufferSize) {
@@ -277,7 +277,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                         quantizeQuery,
                         queryParams,
                         globalCentroidDp,
-                        centroidAssignmentCounts,
+                        centroidsToVisit,
                         scores
                     );
                     return nextCentroid();
@@ -299,7 +299,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         byte[] quantizeQuery,
         OptimizedScalarQuantizer.QuantizationResult queryParams,
         float globalCentroidDp,
-        IntIntHashMap centroidAssignmentCounts,
+        Bits centroidsToVisit,
         float[] scores
     ) throws IOException {
         centroids.seek(parentOffset);
@@ -315,7 +315,7 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
             queryParams,
             globalCentroidDp,
             fieldInfo.getVectorSimilarityFunction(),
-            centroidAssignmentCounts,
+            centroidsToVisit,
             scores
         );
     }
@@ -329,12 +329,27 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
         OptimizedScalarQuantizer.QuantizationResult queryCorrections,
         float centroidDp,
         VectorSimilarityFunction similarityFunction,
-        IntIntHashMap centroidAssignmentCounts,
+        Bits centroidsToVisit,
         float[] scores
     ) throws IOException {
         int limit = size - ES92Int7VectorsScorer.BULK_SIZE + 1;
         int i = 0;
         for (; i < limit; i += ES92Int7VectorsScorer.BULK_SIZE) {
+            int numMatches = ES92Int7VectorsScorer.BULK_SIZE;
+            if (centroidsToVisit != null) {
+                for (int j = 0; j < ES92Int7VectorsScorer.BULK_SIZE; j++) {
+                    int centroidOrdinal = scoresOffset + i + j;
+                    if (centroidsToVisit.get(centroidOrdinal) == false) {
+                        numMatches--;
+                    }
+                }
+            }
+            if (numMatches == 0) {
+                // skip scoring this bulk, all centroids have no assignment
+                // logger.info("skipped block");
+                scorer.skipBytes(ES92Int7VectorsScorer.BULK_SIZE * (quantizeQuery.length + 4 * Float.BYTES));
+                continue;
+            }
             scorer.scoreBulk(
                 quantizeQuery,
                 queryCorrections.lowerInterval(),
@@ -346,11 +361,19 @@ public class DefaultIVFVectorsReader extends IVFVectorsReader implements OffHeap
                 scores
             );
             for (int j = 0; j < ES92Int7VectorsScorer.BULK_SIZE; j++) {
+                if (centroidsToVisit != null && centroidsToVisit.get(scoresOffset + i + j) == false) {
+                    continue;
+                }
                 neighborQueue.add(scoresOffset + i + j, scores[j]);
             }
         }
 
         for (; i < size; i++) {
+            if (centroidsToVisit != null && centroidsToVisit.get(scoresOffset + i) == false) {
+                scorer.skipBytes(quantizeQuery.length + 4 * Float.BYTES);
+                // logger.info("skipped centroid");
+                continue;
+            }
             float score = scorer.score(
                 quantizeQuery,
                 queryCorrections.lowerInterval(),

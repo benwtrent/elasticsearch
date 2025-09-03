@@ -41,6 +41,10 @@ public class ES92Int7VectorsScorer {
         this.dimensions = dimensions;
     }
 
+    public void skipBytes(long numBytes) throws IOException {
+        in.skipBytes(numBytes);
+    }
+
     /**
      * Checks if the current implementation supports fast native access.
      */
