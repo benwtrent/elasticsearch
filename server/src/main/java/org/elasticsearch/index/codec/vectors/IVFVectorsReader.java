@@ -303,7 +303,6 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
                 // iterate over the set bits instead of all the vectors
                 for (int docId = bs.nextSetBit(0); docId != NO_MORE_DOCS; docId = bs.nextSetBit(docId + 1)) {
                     if (vectorIterator.advance(docId) != docId) {
-                        ;
                         throw new IllegalStateException("no vector for docID: " + docId);
                     }
                     int[] assignments = vectorAssignments.getAssignments(vectorIterator.index());
