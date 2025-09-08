@@ -65,6 +65,8 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
     CentroidOffsetAndLength buildAndWritePostingsLists(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
+        int[] docStarts,
+        int[] docEnds,
         FloatVectorValues floatVectorValues,
         IndexOutput postingsOutput,
         long fileOffset,
@@ -136,6 +138,8 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
             // sort cluster.buffer by docIds values, this way cluster ordinals are sorted by docIds
             new IntSorter(clusterOrds, i -> docIds[i]).sort(0, size);
             // encode doc deltas
+            docStarts[c] = docIds[clusterOrds[0]];
+            docEnds[c] = docIds[clusterOrds[size - 1]];
             for (int j = 0; j < size; j++) {
                 docDeltas[j] = j == 0 ? docIds[clusterOrds[j]] : docIds[clusterOrds[j]] - docIds[clusterOrds[j - 1]];
             }
@@ -161,6 +165,8 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
     CentroidOffsetAndLength buildAndWritePostingsLists(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
+        int[] docStarts,
+        int[] docEnds,
         FloatVectorValues floatVectorValues,
         IndexOutput postingsOutput,
         long fileOffset,
@@ -285,6 +291,8 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
                 }
                 // sort cluster.buffer by docIds values, this way cluster ordinals are sorted by docIds
                 new IntSorter(clusterOrds, i -> docIds[i]).sort(0, size);
+                docStarts[c] = docIds[clusterOrds[0]];
+                docEnds[c] = docIds[clusterOrds[size - 1]];
                 // encode doc deltas
                 for (int j = 0; j < size; j++) {
                     docDeltas[j] = j == 0 ? docIds[clusterOrds[j]] : docIds[clusterOrds[j]] - docIds[clusterOrds[j - 1]];
@@ -355,21 +363,41 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
         CentroidSupplier centroidSupplier,
         float[] globalCentroid,
         CentroidOffsetAndLength centroidOffsetAndLength,
+        int[] docStarts,
+        int[] docEnds,
         IndexOutput centroidOutput
     ) throws IOException {
         // TODO do we want to store these distances as well for future use?
         // TODO: sort centroids by global centroid (was doing so previously here)
         // TODO: sorting tanks recall possibly because centroids ordinals no longer are aligned
         if (centroidSupplier.size() > centroidsPerParentCluster * centroidsPerParentCluster) {
-            writeCentroidsWithParents(fieldInfo, centroidSupplier, globalCentroid, centroidOffsetAndLength, centroidOutput);
+            writeCentroidsWithParents(
+                fieldInfo,
+                centroidSupplier,
+                docStarts,
+                docEnds,
+                globalCentroid,
+                centroidOffsetAndLength,
+                centroidOutput
+            );
         } else {
-            writeCentroidsWithoutParents(fieldInfo, centroidSupplier, globalCentroid, centroidOffsetAndLength, centroidOutput);
+            writeCentroidsWithoutParents(
+                fieldInfo,
+                centroidSupplier,
+                docStarts,
+                docEnds,
+                globalCentroid,
+                centroidOffsetAndLength,
+                centroidOutput
+            );
         }
     }
 
     private void writeCentroidsWithParents(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
+        int[] docStarts,
+        int[] docEnds,
         float[] globalCentroid,
         CentroidOffsetAndLength centroidOffsetAndLength,
         IndexOutput centroidOutput
@@ -379,7 +407,16 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
             centroidOutput
         );
         final OptimizedScalarQuantizer osq = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction());
+        DocIdsWriter idsWriter = new DocIdsWriter();
+        byte startsEncoding = idsWriter.calculateBlockEncoding(i -> docStarts[i], docStarts.length, ES92Int7VectorsScorer.BULK_SIZE);
+        byte endsEncoding = idsWriter.calculateBlockEncoding(
+            i -> docEnds[i] - docStarts[i],
+            docStarts.length,
+            ES92Int7VectorsScorer.BULK_SIZE
+        );
         final CentroidGroups centroidGroups = buildCentroidGroups(fieldInfo, centroidSupplier);
+        centroidOutput.writeByte(startsEncoding);
+        centroidOutput.writeByte(endsEncoding);
         centroidOutput.writeVInt(centroidGroups.centroids.length);
         centroidOutput.writeVInt(centroidGroups.maxVectorsPerCentroidLength);
         QuantizedCentroids parentQuantizeCentroid = new QuantizedCentroids(
@@ -405,7 +442,21 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
         for (int i = 0; i < centroidGroups.centroids().length; i++) {
             final int[] centroidAssignments = centroidGroups.vectors()[i];
             childrenQuantizeCentroid.reset(idx -> centroidAssignments[idx], centroidAssignments.length);
-            bulkWriter.writeVectors(childrenQuantizeCentroid, null);
+            bulkWriter.writeVectors(childrenQuantizeCentroid, j -> {
+                // for vector i we write `bulk` size docs or the remaining docs
+                idsWriter.writeDocIds(
+                    d -> docStarts[j + d],
+                    Math.min(ES91OSQVectorsScorer.BULK_SIZE, centroidGroups.centroids().length - j),
+                    startsEncoding,
+                    centroidOutput
+                );
+                idsWriter.writeDocIds(
+                    d -> docEnds[j + d] - docStarts[j + d],
+                    Math.min(ES91OSQVectorsScorer.BULK_SIZE, centroidGroups.centroids().length - j),
+                    endsEncoding,
+                    centroidOutput
+                );
+            });
         }
         // write the centroid offsets at the end of the file
         for (int i = 0; i < centroidGroups.centroids().length; i++) {
@@ -420,6 +471,8 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
     private void writeCentroidsWithoutParents(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
+        int[] docStarts,
+        int[] docEnds,
         float[] globalCentroid,
         CentroidOffsetAndLength centroidOffsetAndLength,
         IndexOutput centroidOutput
@@ -429,6 +482,14 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
             ES92Int7VectorsScorer.BULK_SIZE,
             centroidOutput
         );
+        DocIdsWriter idsWriter = new DocIdsWriter();
+        byte startsEncoding = idsWriter.calculateBlockEncoding(i -> docStarts[i], docStarts.length, ES92Int7VectorsScorer.BULK_SIZE);
+        byte endsEncoding = idsWriter.calculateBlockEncoding(
+            i -> docEnds[i] - docStarts[i],
+            docStarts.length,
+            ES92Int7VectorsScorer.BULK_SIZE
+        );
+        final int size = centroidSupplier.size();
         final OptimizedScalarQuantizer osq = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction());
         QuantizedCentroids quantizedCentroids = new QuantizedCentroids(
             centroidSupplier,
@@ -436,7 +497,21 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
             osq,
             globalCentroid
         );
-        bulkWriter.writeVectors(quantizedCentroids, null);
+        bulkWriter.writeVectors(quantizedCentroids, i -> {
+            // for vector i we write `bulk` size docs or the remaining docs
+            idsWriter.writeDocIds(
+                d -> docStarts[i + d],
+                Math.min(ES91OSQVectorsScorer.BULK_SIZE, size - i),
+                startsEncoding,
+                centroidOutput
+            );
+            idsWriter.writeDocIds(
+                d -> docEnds[i + d] - docStarts[i + d],
+                Math.min(ES91OSQVectorsScorer.BULK_SIZE, size - i),
+                endsEncoding,
+                centroidOutput
+            );
+        });
         // write the centroid offsets at the end of the file
         for (int i = 0; i < centroidSupplier.size(); i++) {
             centroidOutput.writeLong(centroidOffsetAndLength.offsets().get(i));
