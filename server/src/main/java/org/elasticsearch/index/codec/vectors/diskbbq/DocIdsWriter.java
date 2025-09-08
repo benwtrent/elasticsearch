@@ -121,6 +121,7 @@ final class DocIdsWriter {
             int current = docIds.apply(i);
             min = Math.min(min, current);
         }
+        assert min >= 0 : "Doc ids must be non-negative";
         switch (encoding) {
             case CONTINUOUS_IDS:
                 writeContinuousIds(docIds, count, out);
@@ -150,6 +151,7 @@ final class DocIdsWriter {
         for (int i = 0; i < count; i++) {
             scratch[i] = docIds.apply(i) - min;
         }
+        assert min >= 0 : "Doc ids must be non-negative";
         out.writeVInt(min);
         final int halfLen = count >> 1;
         for (int i = 0; i < halfLen; ++i) {
@@ -332,6 +334,7 @@ final class DocIdsWriter {
 
     private static void readDelta16(IndexInput in, int count, int[] docIds) throws IOException {
         final int min = in.readVInt();
+        assert min >= 0 : "Doc ids must be non-negative";
         final int half = count >> 1;
         in.readInts(docIds, 0, half);
         if (count == DEFAULT_MAX_POINTS_IN_LEAF_NODE) {

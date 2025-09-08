@@ -61,6 +61,28 @@ public class DocIdsWriterTests extends LuceneTestCase {
         }
     }
 
+    public void testDeltaEncoded() throws Exception {
+        int numIters = 16;
+        int bpvs = 27;
+        try (Directory dir = newDirectory()) {
+            for (int iter = 0; iter < numIters; ++iter) {
+                for (int bpv = 1; bpv <= bpvs; bpv++) {
+                    int[] docIDs = new int[64 * 16 - iter];
+                    for (int i = 0; i < docIDs.length; ++i) {
+                        docIDs[i] = TestUtil.nextInt(random(), 0, (1 << bpv) - 1);
+                    }
+                    Arrays.sort(docIDs);
+                    int[] deltaEncodedIds = new int[docIDs.length];
+                    deltaEncodedIds[0] = docIDs[0];
+                    for (int i = 1; i < docIDs.length; i++) {
+                        deltaEncodedIds[i] = docIDs[i] - docIDs[i - 1];
+                    }
+                    testMultiBlock(dir, deltaEncodedIds, 16);
+                }
+            }
+        }
+    }
+
     public void testSorted() throws Exception {
         int numIters = atLeast(100);
         try (Directory dir = newDirectory()) {
@@ -127,7 +149,8 @@ public class DocIdsWriterTests extends LuceneTestCase {
         if (random().nextBoolean()) {
             testSingleBlock(dir, ints);
         } else {
-            testMultiBlock(dir, ints);
+            final int blockSize = 16 + random().nextInt(100);
+            testMultiBlock(dir, ints, blockSize);
         }
     }
 
@@ -151,9 +174,8 @@ public class DocIdsWriterTests extends LuceneTestCase {
         dir.deleteFile("tmp");
     }
 
-    private void testMultiBlock(Directory dir, int[] ints) throws Exception {
+    private void testMultiBlock(Directory dir, int[] ints, int blockSize) throws Exception {
         final long len;
-        final int blockSize = 16 + random().nextInt(100);
         DocIdsWriter docIdsWriter = new DocIdsWriter();
         try (IndexOutput out = dir.createOutput("tmp", IOContext.DEFAULT)) {
             byte encoding = docIdsWriter.calculateBlockEncoding(i -> ints[i], ints.length, blockSize);
