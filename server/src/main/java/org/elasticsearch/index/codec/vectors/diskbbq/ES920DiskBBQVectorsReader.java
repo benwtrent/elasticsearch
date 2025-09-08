@@ -128,6 +128,11 @@ public class ES920DiskBBQVectorsReader extends IVFVectorsReader implements OffHe
                 visitRatio * centroidOversampling
             );
         } else {
+            byte docsStartEncoding = centroids.readByte();
+            byte docsEndEncoding = centroids.readByte();
+            int[] docStarts = new int[ES92Int7VectorsScorer.BULK_SIZE];
+            int[] docEnds = new int[ES92Int7VectorsScorer.BULK_SIZE];
+            // skip the doc starts and ends
             centroidIterator = getCentroidIteratorNoParent(
                 fieldInfo,
                 centroids,
@@ -203,6 +208,7 @@ public class ES920DiskBBQVectorsReader extends IVFVectorsReader implements OffHe
             parentsQueue,
             numParents,
             0,
+            null,
             scorer,
             quantizeQuery,
             queryParams,
@@ -285,6 +291,7 @@ public class ES920DiskBBQVectorsReader extends IVFVectorsReader implements OffHe
         long parentOffset,
         long childrenOffset,
         long centroidQuantizeSize,
+        DocRangeProvider docRangeProvider,
         FieldInfo fieldInfo,
         ES92Int7VectorsScorer scorer,
         byte[] quantizeQuery,
@@ -300,6 +307,7 @@ public class ES920DiskBBQVectorsReader extends IVFVectorsReader implements OffHe
             neighborQueue,
             numChildren,
             childrenOrdinal,
+            docRangeProvider,
             scorer,
             quantizeQuery,
             queryParams,
@@ -313,6 +321,7 @@ public class ES920DiskBBQVectorsReader extends IVFVectorsReader implements OffHe
         NeighborQueue neighborQueue,
         int size,
         int scoresOffset,
+        DocRangeProvider docRangeProvider,
         ES92Int7VectorsScorer scorer,
         byte[] quantizeQuery,
         OptimizedScalarQuantizer.QuantizationResult queryCorrections,
@@ -323,6 +332,9 @@ public class ES920DiskBBQVectorsReader extends IVFVectorsReader implements OffHe
         int limit = size - ES92Int7VectorsScorer.BULK_SIZE + 1;
         int i = 0;
         for (; i < limit; i += ES92Int7VectorsScorer.BULK_SIZE) {
+            if (docRangeProvider != null) {
+                docRangeProvider.readDocs(ES92Int7VectorsScorer.BULK_SIZE);
+            }
             scorer.scoreBulk(
                 quantizeQuery,
                 queryCorrections.lowerInterval(),
@@ -337,7 +349,9 @@ public class ES920DiskBBQVectorsReader extends IVFVectorsReader implements OffHe
                 neighborQueue.add(scoresOffset + i + j, scores[j]);
             }
         }
-
+        if (i < size && docRangeProvider != null) {
+            docRangeProvider.readDocs(size - i);
+        }
         for (; i < size; i++) {
             float score = scorer.score(
                 quantizeQuery,
@@ -349,6 +363,38 @@ public class ES920DiskBBQVectorsReader extends IVFVectorsReader implements OffHe
                 centroidDp
             );
             neighborQueue.add(scoresOffset + i, score);
+        }
+    }
+
+    private static class DocRangeProvider {
+        private final IndexInput centroids;
+        private final byte startEncoding;
+        private final byte endEncoding;
+        private final int[] docStarts = new int[ES92Int7VectorsScorer.BULK_SIZE];
+        private final int[] docEnds = new int[ES92Int7VectorsScorer.BULK_SIZE];
+        private final DocIdsWriter docIdsWriter;
+
+        private DocRangeProvider(IndexInput centroids, byte startEncoding, byte endEncoding) {
+            this.centroids = centroids;
+            this.startEncoding = startEncoding;
+            this.endEncoding = endEncoding;
+            this.docIdsWriter = new DocIdsWriter();
+        }
+
+        void readDocs(int count) throws IOException {
+            docIdsWriter.readInts(centroids, count, startEncoding, docStarts);
+            docIdsWriter.readInts(centroids, count, endEncoding, docEnds);
+            for (int j = 0; j < count; j++) {
+                docEnds[j] = docStarts[j] + docEnds[j];
+            }
+        }
+
+        int docStart(int i) {
+            return docStarts[i];
+        }
+
+        int docEnd(int i) {
+            return docEnds[i];
         }
     }
 

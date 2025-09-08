@@ -408,13 +408,9 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
         );
         final OptimizedScalarQuantizer osq = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction());
         DocIdsWriter idsWriter = new DocIdsWriter();
-        byte startsEncoding = idsWriter.calculateBlockEncoding(i -> docStarts[i], docStarts.length, ES92Int7VectorsScorer.BULK_SIZE);
-        byte endsEncoding = idsWriter.calculateBlockEncoding(
-            i -> docEnds[i] - docStarts[i],
-            docStarts.length,
-            ES92Int7VectorsScorer.BULK_SIZE
-        );
         final CentroidGroups centroidGroups = buildCentroidGroups(fieldInfo, centroidSupplier);
+        byte startsEncoding = idsWriter.calculateBlockEncoding(i -> docStarts[i], docStarts.length, docStarts.length);
+        byte endsEncoding = idsWriter.calculateBlockEncoding( i -> docEnds[i] - docStarts[i], docStarts.length, docStarts.length);
         centroidOutput.writeByte(startsEncoding);
         centroidOutput.writeByte(endsEncoding);
         centroidOutput.writeVInt(centroidGroups.centroids.length);
@@ -443,16 +439,17 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
             final int[] centroidAssignments = centroidGroups.vectors()[i];
             childrenQuantizeCentroid.reset(idx -> centroidAssignments[idx], centroidAssignments.length);
             bulkWriter.writeVectors(childrenQuantizeCentroid, j -> {
+                int count = Math.min(ES91OSQVectorsScorer.BULK_SIZE, centroidAssignments.length - j);
                 // for vector i we write `bulk` size docs or the remaining docs
                 idsWriter.writeDocIds(
-                    d -> docStarts[j + d],
-                    Math.min(ES91OSQVectorsScorer.BULK_SIZE, centroidGroups.centroids().length - j),
+                    d -> docStarts[centroidAssignments[j + d]],
+                    count,
                     startsEncoding,
                     centroidOutput
                 );
                 idsWriter.writeDocIds(
-                    d -> docEnds[j + d] - docStarts[j + d],
-                    Math.min(ES91OSQVectorsScorer.BULK_SIZE, centroidGroups.centroids().length - j),
+                    d -> docEnds[centroidAssignments[j + d]] - docStarts[centroidAssignments[j + d]],
+                    count,
                     endsEncoding,
                     centroidOutput
                 );
@@ -490,6 +487,8 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
             ES92Int7VectorsScorer.BULK_SIZE
         );
         final int size = centroidSupplier.size();
+        centroidOutput.writeByte(startsEncoding);
+        centroidOutput.writeByte(endsEncoding);
         final OptimizedScalarQuantizer osq = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction());
         QuantizedCentroids quantizedCentroids = new QuantizedCentroids(
             centroidSupplier,
