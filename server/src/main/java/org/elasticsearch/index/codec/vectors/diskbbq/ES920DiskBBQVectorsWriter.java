@@ -26,6 +26,7 @@ import org.elasticsearch.index.codec.vectors.BQVectorUtils;
 import org.elasticsearch.index.codec.vectors.OptimizedScalarQuantizer;
 import org.elasticsearch.index.codec.vectors.cluster.HierarchicalKMeans;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansResult;
+import org.elasticsearch.index.codec.vectors.cluster.PrefetchingFloatVectorValues;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
 import org.elasticsearch.simdvec.ES91OSQVectorsScorer;
@@ -449,7 +450,7 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
     private record CentroidGroups(float[][] centroids, int[][] vectors, int maxVectorsPerCentroidLength) {}
 
     private CentroidGroups buildCentroidGroups(FieldInfo fieldInfo, CentroidSupplier centroidSupplier) throws IOException {
-        final FloatVectorValues floatVectorValues = FloatVectorValues.fromFloats(new AbstractList<>() {
+        final PrefetchingFloatVectorValues floatVectorValues = PrefetchingFloatVectorValues.fromFloats(new AbstractList<>() {
             @Override
             public float[] get(int index) {
                 try {
@@ -502,7 +503,7 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
      * @throws IOException if an I/O error occurs
      */
     @Override
-    CentroidAssignments calculateCentroids(FieldInfo fieldInfo, FloatVectorValues floatVectorValues, float[] globalCentroid)
+    CentroidAssignments calculateCentroids(FieldInfo fieldInfo, PrefetchingFloatVectorValues floatVectorValues, float[] globalCentroid)
         throws IOException {
 
         long nanoTime = System.nanoTime();
@@ -529,7 +530,8 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
         return centroidAssignments;
     }
 
-    static CentroidAssignments buildCentroidAssignments(FloatVectorValues floatVectorValues, int vectorPerCluster) throws IOException {
+    static CentroidAssignments buildCentroidAssignments(PrefetchingFloatVectorValues floatVectorValues, int vectorPerCluster)
+        throws IOException {
         KMeansResult kMeansResult = new HierarchicalKMeans(floatVectorValues.dimension()).cluster(floatVectorValues, vectorPerCluster);
         float[][] centroids = kMeansResult.centroids();
         int[] assignments = kMeansResult.assignments();

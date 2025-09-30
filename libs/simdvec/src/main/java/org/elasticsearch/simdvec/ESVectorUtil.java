@@ -326,6 +326,8 @@ public class ESVectorUtil {
         IMPL.squareDistanceBulk(q, v0, v1, v2, v3, distances);
     }
 
+    public static int nearestVectorSqDistance(int ord, float[][] candidates, int[] ordsToScore);
+
     /**
      * Bulk computation of the soar distance for a vector to four centroids
      * @param v1 the vector

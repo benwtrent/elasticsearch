@@ -50,6 +50,8 @@ public interface ESVectorUtilSupport {
 
     int quantizeVectorWithIntervals(float[] vector, int[] quantize, float lowInterval, float upperInterval, byte bit);
 
+    int nearestVectorSqDistance(int ord, float[][] candidates, int[] ordsToScore);
+
     void squareDistanceBulk(float[] query, float[] v0, float[] v1, float[] v2, float[] v3, float[] distances);
 
     void soarDistanceBulk(

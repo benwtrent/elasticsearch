@@ -33,9 +33,9 @@ import org.apache.lucene.util.LongValues;
 import org.apache.lucene.util.VectorUtil;
 import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.core.SuppressForbidden;
+import org.elasticsearch.index.codec.vectors.cluster.PrefetchingFloatVectorValues;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
@@ -127,8 +127,11 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         return rawVectorDelegate;
     }
 
-    abstract CentroidAssignments calculateCentroids(FieldInfo fieldInfo, FloatVectorValues floatVectorValues, float[] globalCentroid)
-        throws IOException;
+    abstract CentroidAssignments calculateCentroids(
+        FieldInfo fieldInfo,
+        PrefetchingFloatVectorValues floatVectorValues,
+        float[] globalCentroid
+    ) throws IOException;
 
     record CentroidOffsetAndLength(LongValues offsets, LongValues lengths) {}
 
@@ -179,7 +182,11 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
             }
             final float[] globalCentroid = new float[fieldWriter.fieldInfo.getVectorDimension()];
             // build a float vector values with random access
-            final FloatVectorValues floatVectorValues = getFloatVectorValues(fieldWriter.fieldInfo, fieldWriter.delegate, maxDoc);
+            final PrefetchingFloatVectorValues floatVectorValues = getFloatVectorValues(
+                fieldWriter.fieldInfo,
+                fieldWriter.delegate,
+                maxDoc
+            );
             // build centroids
             final CentroidAssignments centroidAssignments = calculateCentroids(fieldWriter.fieldInfo, floatVectorValues, globalCentroid);
             // wrap centroids with a supplier
@@ -213,14 +220,14 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         }
     }
 
-    private static FloatVectorValues getFloatVectorValues(
+    private static PrefetchingFloatVectorValues getFloatVectorValues(
         FieldInfo fieldInfo,
         FlatFieldVectorsWriter<float[]> fieldVectorsWriter,
         int maxDoc
     ) throws IOException {
         List<float[]> vectors = fieldVectorsWriter.getVectors();
         if (vectors.size() == maxDoc) {
-            return FloatVectorValues.fromFloats(vectors, fieldInfo.getVectorDimension());
+            return PrefetchingFloatVectorValues.fromFloats(vectors, fieldInfo.getVectorDimension());
         }
         final DocIdSetIterator iterator = fieldVectorsWriter.getDocsWithFieldSet().iterator();
         final int[] docIds = new int[vectors.size()];
@@ -228,14 +235,24 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
             docIds[i] = iterator.nextDoc();
         }
         assert iterator.nextDoc() == NO_MORE_DOCS;
-        return new FloatVectorValues() {
+        return new PrefetchingFloatVectorValues() {
+            @Override
+            public IndexInput getSlice() {
+                return null;
+            }
+
             @Override
             public float[] vectorValue(int ord) {
                 return vectors.get(ord);
             }
 
             @Override
-            public FloatVectorValues copy() {
+            public void prefetch(int ord) throws IOException {
+                // all in memory, nothing to do
+            }
+
+            @Override
+            public PrefetchingFloatVectorValues copy() {
                 return this;
             }
 
@@ -421,49 +438,16 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         }
     }
 
-    private static FloatVectorValues getFloatVectorValues(FieldInfo fieldInfo, IndexInput docs, IndexInput vectors, int numVectors)
-        throws IOException {
+    private static PrefetchingFloatVectorValues getFloatVectorValues(
+        FieldInfo fieldInfo,
+        IndexInput docs,
+        IndexInput vectors,
+        int numVectors
+    ) throws IOException {
         if (numVectors == 0) {
-            return FloatVectorValues.fromFloats(List.of(), fieldInfo.getVectorDimension());
+            return PrefetchingFloatVectorValues.fromFloats(List.of(), fieldInfo.getVectorDimension());
         }
-        final long vectorLength = (long) Float.BYTES * fieldInfo.getVectorDimension();
-        final float[] vector = new float[fieldInfo.getVectorDimension()];
-        final RandomAccessInput randomDocs = docs == null ? null : docs.randomAccessSlice(0, docs.length());
-        return new FloatVectorValues() {
-            @Override
-            public float[] vectorValue(int ord) throws IOException {
-                vectors.seek(ord * vectorLength);
-                vectors.readFloats(vector, 0, vector.length);
-                return vector;
-            }
-
-            @Override
-            public FloatVectorValues copy() {
-                return this;
-            }
-
-            @Override
-            public int dimension() {
-                return fieldInfo.getVectorDimension();
-            }
-
-            @Override
-            public int size() {
-                return numVectors;
-            }
-
-            @Override
-            public int ordToDoc(int ord) {
-                if (randomDocs == null) {
-                    return ord;
-                }
-                try {
-                    return randomDocs.readInt((long) ord * Integer.BYTES);
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            }
-        };
+        return new OffHeapPrefetchingFloatVectorValues(docs, vectors, fieldInfo.getVectorDimension(), numVectors);
     }
 
     private static int writeFloatVectorValues(
@@ -548,5 +532,55 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
     }
 
     private record FieldWriter(FieldInfo fieldInfo, FlatFieldVectorsWriter<float[]> delegate) {}
+
+    static class OffHeapPrefetchingFloatVectorValues extends PrefetchingFloatVectorValues {
+        IndexInput docs, vectors;
+        RandomAccessInput randomDocs;
+        int dimension, size;
+        final long vectorLength;
+        final float[] vectorBuffer;
+
+        OffHeapPrefetchingFloatVectorValues(IndexInput docs, IndexInput vectors, int dimension, int size) throws IOException {
+            this.docs = docs;
+            this.randomDocs = docs == null ? null : docs.randomAccessSlice(0, docs.length());
+            this.vectors = vectors;
+            this.dimension = dimension;
+            this.size = size;
+            this.vectorLength = (long) Float.BYTES * dimension;
+            this.vectorBuffer = new float[dimension];
+        }
+
+        @Override
+        public void prefetch(int ord) throws IOException {
+            vectors.prefetch(ord * vectorLength, vectorLength);
+        }
+
+        @Override
+        public float[] vectorValue(int ord) throws IOException {
+            vectors.seek(ord * vectorLength);
+            vectors.readFloats(vectorBuffer, 0, vectorBuffer.length);
+            return vectorBuffer;
+        }
+
+        @Override
+        public int dimension() {
+            return dimension;
+        }
+
+        @Override
+        public int size() {
+            return size;
+        }
+
+        @Override
+        public PrefetchingFloatVectorValues copy() throws IOException {
+            return new OffHeapPrefetchingFloatVectorValues(docs.clone(), vectors.clone(), dimension, size);
+        }
+
+        @Override
+        public IndexInput getSlice() {
+            return vectors;
+        }
+    }
 
 }

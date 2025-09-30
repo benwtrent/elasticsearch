@@ -69,8 +69,26 @@ class KMeansLocal {
         return centroids;
     }
 
+    private static void add(float[] v1, float[] v2) {
+        for (int i = 0; i < v1.length; i++) {
+            v1[i] += v2[i];
+        }
+    }
+
+    private static void sub(float[] v1, float[] v2) {
+        for (int i = 0; i < v1.length; i++) {
+            v1[i] -= v2[i];
+        }
+    }
+
+    private static void multiply(float[] v1, float scalar) {
+        for (int i = 0; i < v1.length; i++) {
+            v1[i] *= scalar;
+        }
+    }
+
     private static boolean stepLloyd(
-        FloatVectorValues vectors,
+        PrefetchingFloatVectorValues vectors,
         IntToIntFunction translateOrd,
         float[][] centroids,
         FixedBitSet centroidChanged,
@@ -78,11 +96,21 @@ class KMeansLocal {
         int[] assignments,
         NeighborHood[] neighborhoods
     ) throws IOException {
+        vectors.prefetch(0);
         boolean changed = false;
         int dim = vectors.dimension();
         centroidChanged.clear();
         final float[] distances = new float[4];
+        int prefetchBlockSize = 16;
+        int prefetched = 0;
         for (int idx = 0; idx < vectors.size(); idx++) {
+            if (idx >= prefetched) {
+                int toPrefetch = Math.min(prefetchBlockSize, vectors.size() - prefetched);
+                for (int p = 0; p < toPrefetch; p++) {
+                    vectors.prefetch(prefetched + p);
+                }
+                prefetched += toPrefetch;
+            }
             float[] vector = vectors.vectorValue(idx);
             int vectorOrd = translateOrd.apply(idx);
             final int assignment = assignments[vectorOrd];
@@ -94,29 +122,23 @@ class KMeansLocal {
             }
             if (assignment != bestCentroidOffset) {
                 if (assignment != -1) {
-                    centroidChanged.set(assignment);
+                    if (centroidChanged.getAndSet(assignment) == false) {
+                        multiply(centroids[assignment], centroidCounts[assignment]);
+                    }
+                    --centroidCounts[assignment];
+                    sub(centroids[assignment], vector);
                 }
                 centroidChanged.set(bestCentroidOffset);
+                if (centroidChanged.getAndSet(bestCentroidOffset) == false) {
+                    multiply(centroids[bestCentroidOffset], centroidCounts[bestCentroidOffset]);
+                }
+                ++centroidCounts[assignment];
                 assignments[vectorOrd] = bestCentroidOffset;
+                add(centroids[bestCentroidOffset], vector);
                 changed = true;
             }
         }
         if (changed) {
-            Arrays.fill(centroidCounts, 0);
-            for (int idx = 0; idx < vectors.size(); idx++) {
-                final int assignment = assignments[translateOrd.apply(idx)];
-                if (centroidChanged.get(assignment)) {
-                    float[] centroid = centroids[assignment];
-                    if (centroidCounts[assignment]++ == 0) {
-                        Arrays.fill(centroid, 0.0f);
-                    }
-                    float[] vector = vectors.vectorValue(idx);
-                    for (int d = 0; d < dim; d++) {
-                        centroid[d] += vector[d];
-                    }
-                }
-            }
-
             for (int clusterIdx = 0; clusterIdx < centroids.length; clusterIdx++) {
                 if (centroidChanged.get(clusterIdx)) {
                     float count = (float) centroidCounts[clusterIdx];
@@ -308,7 +330,7 @@ class KMeansLocal {
      *                     passing in a valid output object with a centroids array that is the size of centroids expected
      * @throws IOException is thrown if vectors is inaccessible
      */
-    void cluster(FloatVectorValues vectors, KMeansIntermediate kMeansIntermediate) throws IOException {
+    void cluster(PrefetchingFloatVectorValues vectors, KMeansIntermediate kMeansIntermediate) throws IOException {
         doCluster(vectors, kMeansIntermediate, -1, -1);
     }
 
@@ -326,7 +348,7 @@ class KMeansLocal {
      *
      * @throws IOException is thrown if vectors is inaccessible or if the clustersPerNeighborhood is less than 2
      */
-    void cluster(FloatVectorValues vectors, KMeansIntermediate kMeansIntermediate, int clustersPerNeighborhood, float soarLambda)
+    void cluster(PrefetchingFloatVectorValues vectors, KMeansIntermediate kMeansIntermediate, int clustersPerNeighborhood, float soarLambda)
         throws IOException {
         if (clustersPerNeighborhood < 2) {
             throw new IllegalArgumentException("clustersPerNeighborhood must be at least 2, got [" + clustersPerNeighborhood + "]");
@@ -334,8 +356,12 @@ class KMeansLocal {
         doCluster(vectors, kMeansIntermediate, clustersPerNeighborhood, soarLambda);
     }
 
-    private void doCluster(FloatVectorValues vectors, KMeansIntermediate kMeansIntermediate, int clustersPerNeighborhood, float soarLambda)
-        throws IOException {
+    private void doCluster(
+        PrefetchingFloatVectorValues vectors,
+        KMeansIntermediate kMeansIntermediate,
+        int clustersPerNeighborhood,
+        float soarLambda
+    ) throws IOException {
         float[][] centroids = kMeansIntermediate.centroids();
         boolean neighborAware = clustersPerNeighborhood != -1 && centroids.length > 1;
         NeighborHood[] neighborhoods = null;
@@ -351,7 +377,7 @@ class KMeansLocal {
         }
     }
 
-    private void cluster(FloatVectorValues vectors, KMeansIntermediate kMeansIntermediate, NeighborHood[] neighborhoods)
+    private void cluster(PrefetchingFloatVectorValues vectors, KMeansIntermediate kMeansIntermediate, NeighborHood[] neighborhoods)
         throws IOException {
         float[][] centroids = kMeansIntermediate.centroids();
         int k = centroids.length;
@@ -363,9 +389,9 @@ class KMeansLocal {
             return;
         }
         IntToIntFunction translateOrd = i -> i;
-        FloatVectorValues sampledVectors = vectors;
+        PrefetchingFloatVectorValues sampledVectors = vectors;
         if (sampleSize < n) {
-            sampledVectors = SampleReader.createSampleReader(vectors, sampleSize, 42L);
+            sampledVectors = FloatVectorValuesSlice.randomSlice(vectors, sampleSize, 42L);
             translateOrd = sampledVectors::ordToDoc;
         }
 
@@ -386,7 +412,7 @@ class KMeansLocal {
     }
 
     /**
-     * helper that calls {@link KMeansLocal#cluster(FloatVectorValues, KMeansIntermediate)} given a set of initialized centroids,
+     * helper that calls {@link KMeansLocal#cluster(PrefetchingFloatVectorValues, KMeansIntermediate)} given a set of initialized centroids,
      * this call is not neighbor aware
      *
      * @param vectors the vectors to cluster
@@ -394,7 +420,8 @@ class KMeansLocal {
      * @param sampleSize the subset of vectors to use when shifting centroids
      * @param maxIterations the max iterations to shift centroids
      */
-    public static void cluster(FloatVectorValues vectors, float[][] centroids, int sampleSize, int maxIterations) throws IOException {
+    public static void cluster(PrefetchingFloatVectorValues vectors, float[][] centroids, int sampleSize, int maxIterations)
+        throws IOException {
         KMeansIntermediate kMeansIntermediate = new KMeansIntermediate(centroids, new int[vectors.size()], vectors::ordToDoc);
         KMeansLocal kMeans = new KMeansLocal(sampleSize, maxIterations);
         kMeans.cluster(vectors, kMeansIntermediate);

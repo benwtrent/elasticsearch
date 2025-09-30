@@ -9,8 +9,6 @@
 
 package org.elasticsearch.index.codec.vectors.cluster;
 
-import org.apache.lucene.index.FloatVectorValues;
-
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Objects;
@@ -53,7 +51,7 @@ public class HierarchicalKMeans {
      * @return the centroids and the vectors assignments and SOAR (spilled from nearby neighborhoods) assignments
      * @throws IOException is thrown if vectors is inaccessible
      */
-    public KMeansResult cluster(FloatVectorValues vectors, int targetSize) throws IOException {
+    public KMeansResult cluster(PrefetchingFloatVectorValues vectors, int targetSize) throws IOException {
 
         if (vectors.size() == 0) {
             return new KMeansIntermediate();
@@ -87,7 +85,7 @@ public class HierarchicalKMeans {
         return kMeansIntermediate;
     }
 
-    KMeansIntermediate clusterAndSplit(final FloatVectorValues vectors, final int targetSize) throws IOException {
+    KMeansIntermediate clusterAndSplit(final PrefetchingFloatVectorValues vectors, final int targetSize) throws IOException {
         if (vectors.size() <= targetSize) {
             return new KMeansIntermediate();
         }
@@ -133,7 +131,7 @@ public class HierarchicalKMeans {
             final int count = centroidVectorCount[c];
             final int adjustedCentroid = c - removedElements;
             if (100 * count > 134 * targetSize) {
-                final FloatVectorValues sample = createClusterSlice(count, adjustedCentroid, vectors, assignments);
+                final PrefetchingFloatVectorValues sample = createClusterSlice(count, adjustedCentroid, vectors, assignments);
                 // TODO: consider iterative here instead of recursive
                 // recursive call to build out the sub partitions around this centroid c
                 // subsequently reconcile and flatten the space of all centroids and assignments into one structure we can return
@@ -164,7 +162,12 @@ public class HierarchicalKMeans {
         return kMeansIntermediate;
     }
 
-    static FloatVectorValues createClusterSlice(int clusterSize, int cluster, FloatVectorValues vectors, int[] assignments) {
+    static PrefetchingFloatVectorValues createClusterSlice(
+        int clusterSize,
+        int cluster,
+        PrefetchingFloatVectorValues vectors,
+        int[] assignments
+    ) {
         int[] slice = new int[clusterSize];
         int idx = 0;
         for (int i = 0; i < assignments.length; i++) {
