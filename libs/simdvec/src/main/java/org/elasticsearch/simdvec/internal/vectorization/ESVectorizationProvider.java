@@ -30,8 +30,12 @@ public abstract class ESVectorizationProvider {
 
     public abstract ESVectorUtilSupport getVectorUtilSupport();
 
+    public final ES91OSQVectorsScorer newES91OSQVectorsScorer(IndexInput input, int dimension) throws IOException {
+        return newES91OSQVectorsScorer(input, 16, dimension);
+    }
+
     /** Create a new {@link ES91OSQVectorsScorer} for the given {@link IndexInput}. */
-    public abstract ES91OSQVectorsScorer newES91OSQVectorsScorer(IndexInput input, int dimension) throws IOException;
+    public abstract ES91OSQVectorsScorer newES91OSQVectorsScorer(IndexInput input, int bulkSize, int dimension) throws IOException;
 
     /** Create a new {@link ES91Int4VectorsScorer} for the given {@link IndexInput}. */
     public abstract ES91Int4VectorsScorer newES91Int4VectorsScorer(IndexInput input, int dimension) throws IOException;
