@@ -54,13 +54,13 @@ public class OSQScorerBenchmark {
         LogConfigurator.configureESLogging(); // native access requires logging to be initialized
     }
 
-    @Param({ "384", "782", "1024" })
+    @Param({ "768" })
     int dims;
 
     int length;
 
-    int numVectors = ES91OSQVectorsScorer.BULK_SIZE * 10;
-    int numQueries = 10;
+    int numVectors = ES91OSQVectorsScorer.BULK_SIZE * 20;
+    int numQueries = 1;
 
     byte[][] binaryVectors;
     byte[][] binaryQueries;
@@ -134,24 +134,24 @@ public class OSQScorerBenchmark {
         IOUtils.close(dirMmap, inMmap, dirNiofs, inNiofs);
     }
 
-    @Benchmark
+    //@Benchmark
     public void scoreFromMemorySegmentOnlyVectorMmapScalar(Blackhole bh) throws IOException {
         scoreFromMemorySegmentOnlyVector(bh, inMmap, scorerMmap);
     }
 
-    @Benchmark
-    @Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
+    //@Benchmark
+    //@Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
     public void scoreFromMemorySegmentOnlyVectorMmapVect(Blackhole bh) throws IOException {
         scoreFromMemorySegmentOnlyVector(bh, inMmap, scorerMmap);
     }
 
-    @Benchmark
+    //@Benchmark
     public void scoreFromMemorySegmentOnlyVectorNiofsScalar(Blackhole bh) throws IOException {
         scoreFromMemorySegmentOnlyVector(bh, inNiofs, scorerNfios);
     }
 
-    @Benchmark
-    @Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
+    //@Benchmark
+    //@Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
     public void scoreFromMemorySegmentOnlyVectorNiofsVect(Blackhole bh) throws IOException {
         scoreFromMemorySegmentOnlyVector(bh, inNiofs, scorerNfios);
     }
@@ -181,24 +181,24 @@ public class OSQScorerBenchmark {
         }
     }
 
-    @Benchmark
+    //@Benchmark
     public void scoreFromMemorySegmentOnlyVectorBulkMmapScalar(Blackhole bh) throws IOException {
         scoreFromMemorySegmentOnlyVectorBulk(bh, inMmap, scorerMmap);
     }
 
-    @Benchmark
-    @Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
+    //@Benchmark
+    //@Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
     public void scoreFromMemorySegmentOnlyVectorBulkMmapVect(Blackhole bh) throws IOException {
         scoreFromMemorySegmentOnlyVectorBulk(bh, inMmap, scorerMmap);
     }
 
-    @Benchmark
+    //@Benchmark
     public void scoreFromMemorySegmentOnlyVectorBulkNiofsScalar(Blackhole bh) throws IOException {
         scoreFromMemorySegmentOnlyVectorBulk(bh, inNiofs, scorerNfios);
     }
 
-    @Benchmark
-    @Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
+    //@Benchmark
+    //@Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
     public void scoreFromMemorySegmentOnlyVectorBulkNiofsVect(Blackhole bh) throws IOException {
         scoreFromMemorySegmentOnlyVectorBulk(bh, inNiofs, scorerNfios);
     }
@@ -230,7 +230,7 @@ public class OSQScorerBenchmark {
         }
     }
 
-    @Benchmark
+    //@Benchmark
     public void scoreFromMemorySegmentAllBulkMmapScalar(Blackhole bh) throws IOException {
         scoreFromMemorySegmentAllBulk(bh, inMmap, scorerMmap);
     }
@@ -241,13 +241,13 @@ public class OSQScorerBenchmark {
         scoreFromMemorySegmentAllBulk(bh, inMmap, scorerMmap);
     }
 
-    @Benchmark
+    //@Benchmark
     public void scoreFromMemorySegmentAllBulkNiofsScalar(Blackhole bh) throws IOException {
         scoreFromMemorySegmentAllBulk(bh, inNiofs, scorerNfios);
     }
 
-    @Benchmark
-    @Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
+    //@Benchmark
+    //@Fork(jvmArgsPrepend = { "--add-modules=jdk.incubator.vector" })
     public void scoreFromMemorySegmentAllBulkNiofsVect(Blackhole bh) throws IOException {
         scoreFromMemorySegmentAllBulk(bh, inNiofs, scorerNfios);
     }
