@@ -43,11 +43,11 @@ import java.util.concurrent.TimeUnit;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
 // first iteration is complete garbage, so make sure we really warmup
-@Warmup(iterations = 4, time = 1)
+@Warmup(iterations = 5, time = 1)
 // real iterations. not useful to spend tons of time here, better to fork more
 @Measurement(iterations = 5, time = 1)
 // engage some noise reduction
-@Fork(value = 1)
+@Fork(value = 5)
 public class OSQScorerBenchmark {
 
     static {
