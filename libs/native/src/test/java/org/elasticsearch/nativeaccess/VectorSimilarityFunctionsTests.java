@@ -118,5 +118,4 @@ public abstract class VectorSimilarityFunctionsTests extends ESTestCase {
         }
         return t instanceof RuntimeException re ? re : new RuntimeException(t);
     }
-
 }

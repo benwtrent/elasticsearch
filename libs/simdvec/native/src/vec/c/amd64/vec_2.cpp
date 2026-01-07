@@ -113,12 +113,78 @@ static inline int32_t dot7u_inner_avx512(const int8_t* a, const int8_t* b, const
     return _mm512_reduce_add_epi32(_mm512_add_epi32(acc0, acc4));
 }
 
+static inline int32_t dot8s_inner_avx512(const int8_t* a, const int8_t* b, const int32_t dims) {
+    constexpr int stride8 = 8 * STRIDE_BYTES_LEN;
+    constexpr int stride4 = 4 * STRIDE_BYTES_LEN;
+    const int8_t* p1 = a;
+    const int8_t* p2 = b;
+
+    // Init accumulator(s) with 0
+    __m512i acc0 = _mm512_setzero_si512();
+    __m512i acc1 = _mm512_setzero_si512();
+    __m512i acc2 = _mm512_setzero_si512();
+    __m512i acc3 = _mm512_setzero_si512();
+    __m512i acc4 = _mm512_setzero_si512();
+    __m512i acc5 = _mm512_setzero_si512();
+    __m512i acc6 = _mm512_setzero_si512();
+    __m512i acc7 = _mm512_setzero_si512();
+
+    const int8_t* p1End = a + (dims & ~(stride8 - 1));
+    while (p1 < p1End) {
+        acc0 = fma8<0>(acc0, p1, p2);
+        acc1 = fma8<1>(acc1, p1, p2);
+        acc2 = fma8<2>(acc2, p1, p2);
+        acc3 = fma8<3>(acc3, p1, p2);
+        acc4 = fma8<4>(acc4, p1, p2);
+        acc5 = fma8<5>(acc5, p1, p2);
+        acc6 = fma8<6>(acc6, p1, p2);
+        acc7 = fma8<7>(acc7, p1, p2);
+        p1 += stride8;
+        p2 += stride8;
+    }
+
+    p1End = a + (dims & ~(stride4 - 1));
+    while (p1 < p1End) {
+        acc0 = fma8<0>(acc0, p1, p2);
+        acc1 = fma8<1>(acc1, p1, p2);
+        acc2 = fma8<2>(acc2, p1, p2);
+        acc3 = fma8<3>(acc3, p1, p2);
+        p1 += stride4;
+        p2 += stride4;
+    }
+
+    p1End = a + (dims & ~(STRIDE_BYTES_LEN - 1));
+    while (p1 < p1End) {
+        acc0 = fma8<0>(acc0, p1, p2);
+        p1 += STRIDE_BYTES_LEN;
+        p2 += STRIDE_BYTES_LEN;
+    }
+
+    // reduce (accumulate all)
+    acc0 = _mm512_add_epi32(_mm512_add_epi32(acc0, acc1), _mm512_add_epi32(acc2, acc3));
+    acc4 = _mm512_add_epi32(_mm512_add_epi32(acc4, acc5), _mm512_add_epi32(acc6, acc7));
+    return _mm512_reduce_add_epi32(_mm512_add_epi32(acc0, acc4));
+}
+
 EXPORT int32_t vec_dot7u_2(const int8_t* a, const int8_t* b, const int32_t dims) {
     int32_t res = 0;
     int i = 0;
     if (dims > STRIDE_BYTES_LEN) {
         i += dims & ~(STRIDE_BYTES_LEN - 1);
         res = dot7u_inner_avx512(a, b, i);
+    }
+    for (; i < dims; i++) {
+        res += a[i] * b[i];
+    }
+    return res;
+}
+
+EXPORT int32_t vec_dot8s_2(const int8_t* a, const int8_t* b, const int32_t dims) {
+    int32_t res = 0;
+    int i = 0;
+    if (dims > STRIDE_BYTES_LEN) {
+        i += dims & ~(STRIDE_BYTES_LEN - 1);
+        res = dot8s_inner_avx512(a, b, i);
     }
     for (; i < dims; i++) {
         res += a[i] * b[i];
@@ -196,6 +262,76 @@ static inline void dot7u_inner_bulk(
     }
 }
 
+template <int64_t(*mapper)(int32_t, const int32_t*)>
+static inline void dot8s_inner_bulk(
+    const int8_t* a,
+    const int8_t* b,
+    const int32_t dims,
+    const int32_t pitch,
+    const int32_t* offsets,
+    const int32_t count,
+    f32_t* results
+) {
+    const int blk = dims & ~(STRIDE_BYTES_LEN - 1);
+    const int lines_to_fetch = dims / CACHE_LINE_SIZE + 1;
+    int c = 0;
+
+    const int8_t* a0 = safe_mapper_offset<0, mapper>(a, pitch, offsets, count);
+    const int8_t* a1 = safe_mapper_offset<1, mapper>(a, pitch, offsets, count);
+    const int8_t* a2 = safe_mapper_offset<2, mapper>(a, pitch, offsets, count);
+    const int8_t* a3 = safe_mapper_offset<3, mapper>(a, pitch, offsets, count);
+
+    // Process a batch of 4 vectors at a time, after instructing the CPU to
+    // prefetch the next batch.
+    // Prefetching multiple memory locations while computing keeps the CPU
+    // execution units busy.
+    for (; c + 7 < count; c += 4) {
+        const int8_t* next_a0 = a + mapper(c + 4, offsets) * pitch;
+        const int8_t* next_a1 = a + mapper(c + 5, offsets) * pitch;
+        const int8_t* next_a2 = a + mapper(c + 6, offsets) * pitch;
+        const int8_t* next_a3 = a + mapper(c + 7, offsets) * pitch;
+
+        prefetch(next_a0, lines_to_fetch);
+        prefetch(next_a1, lines_to_fetch);
+        prefetch(next_a2, lines_to_fetch);
+        prefetch(next_a3, lines_to_fetch);
+
+        int32_t res0 = 0;
+        int32_t res1 = 0;
+        int32_t res2 = 0;
+        int32_t res3 = 0;
+        int i = 0;
+        if (dims > STRIDE_BYTES_LEN) {
+            i = blk;
+            res0 = dot8s_inner_avx512(a0, b, i);
+            res1 = dot8s_inner_avx512(a1, b, i);
+            res2 = dot8s_inner_avx512(a2, b, i);
+            res3 = dot8s_inner_avx512(a3, b, i);
+        }
+        for (; i < dims; i++) {
+            const int8_t bb = b[i];
+            res0 += a0[i] * bb;
+            res1 += a1[i] * bb;
+            res2 += a2[i] * bb;
+            res3 += a3[i] * bb;
+        }
+        results[c + 0] = (f32_t)res0;
+        results[c + 1] = (f32_t)res1;
+        results[c + 2] = (f32_t)res2;
+        results[c + 3] = (f32_t)res3;
+        a0 = next_a0;
+        a1 = next_a1;
+        a2 = next_a2;
+        a3 = next_a3;
+    }
+
+    // Tail-handling: remaining vectors
+    for (; c < count; c++) {
+        const int8_t* a0 = a + mapper(c, offsets) * pitch;
+        results[c] = (f32_t)vec_dot8s_2(a0, b, dims);
+    }
+}
+
 EXPORT void vec_dot7u_bulk_2(const int8_t* a, const int8_t* b, const int32_t dims, const int32_t count, f32_t* results) {
     dot7u_inner_bulk<identity_mapper>(a, b, dims, dims, NULL, count, results);
 }
@@ -209,6 +345,17 @@ EXPORT void vec_dot7u_bulk_offsets_2(
     const int32_t count,
     f32_t* results) {
     dot7u_inner_bulk<array_mapper>(a, b, dims, pitch, offsets, count, results);
+}
+
+EXPORT void vec_dot8s_bulk_offsets_2(
+    const int8_t* a,
+    const int8_t* b,
+    const int32_t dims,
+    const int32_t pitch,
+    const int32_t* offsets,
+    const int32_t count,
+    f32_t* results) {
+    dot8s_inner_bulk<array_mapper>(a, b, dims, pitch, offsets, count, results);
 }
 
 template<int offsetRegs>

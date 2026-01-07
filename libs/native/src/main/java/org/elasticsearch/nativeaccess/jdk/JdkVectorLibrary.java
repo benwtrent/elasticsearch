@@ -34,6 +34,8 @@ public final class JdkVectorLibrary implements VectorLibrary {
     static final MethodHandle dot7u$mh;
     static final MethodHandle dot7uBulk$mh;
     static final MethodHandle dot7uBulkWithOffsets$mh;
+    static final MethodHandle dot8s$mh;
+    static final MethodHandle dot8sBulkWithOffsets$mh;
     static final MethodHandle sqr7u$mh;
     static final MethodHandle sqr7uBulk$mh;
     static final MethodHandle sqr7uBulkWithOffsets$mh;
@@ -70,6 +72,8 @@ public final class JdkVectorLibrary implements VectorLibrary {
                 sqr7u$mh = downcallHandle("vec_sqr7u" + suffix, intSingle, LinkerHelperUtil.critical());
                 sqr7uBulk$mh = downcallHandle("vec_sqr7u_bulk" + suffix, bulk, LinkerHelperUtil.critical());
                 sqr7uBulkWithOffsets$mh = downcallHandle("vec_sqr7u_bulk_offsets" + suffix, bulkOffsets, LinkerHelperUtil.critical());
+                dot8s$mh = downcallHandle("vec_dot8s" + suffix, intSingle, LinkerHelperUtil.critical());
+                dot8sBulkWithOffsets$mh = downcallHandle("vec_dot8s_bulk_offsets" + suffix, bulkOffsets, LinkerHelperUtil.critical());
                 dotf32$mh = downcallHandle("vec_dotf32" + suffix, floatSingle, LinkerHelperUtil.critical());
                 sqrf32$mh = downcallHandle("vec_sqrf32" + suffix, floatSingle, LinkerHelperUtil.critical());
                 INSTANCE = new JdkVectorSimilarityFunctions();
@@ -85,6 +89,8 @@ public final class JdkVectorLibrary implements VectorLibrary {
                 sqr7u$mh = null;
                 sqr7uBulk$mh = null;
                 sqr7uBulkWithOffsets$mh = null;
+                dot8s$mh = null;
+                dot8sBulkWithOffsets$mh = null;
                 dotf32$mh = null;
                 sqrf32$mh = null;
                 INSTANCE = null;
@@ -134,6 +140,33 @@ public final class JdkVectorLibrary implements VectorLibrary {
             MemorySegment result
         ) {
             dot7uBulkWithOffsets(a, b, length, pitch, offsets, count, result);
+        }
+
+        /**
+         * Computes the dot product of given unsigned int7 byte vectors.
+         *
+         * <p> signed int8 byte vectors have values in the range of -128 to 127 (inclusive).
+         *
+         * @param a      address of the first vector
+         * @param b      address of the second vector
+         * @param length the vector dimensions
+         */
+        static int dotProduct8s(MemorySegment a, MemorySegment b, int length) {
+            checkByteSize(a, b);
+            Objects.checkFromIndexSize(0, length, (int) a.byteSize());
+            return dot8s(a, b, length);
+        }
+
+        static void dotProduct8sBulkWithOffsets(
+            MemorySegment a,
+            MemorySegment b,
+            int length,
+            int pitch,
+            MemorySegment offsets,
+            int count,
+            MemorySegment result
+        ) {
+            dot8sBulkWithOffsets(a, b, length, pitch, offsets, count, result);
         }
 
         /**
@@ -210,6 +243,14 @@ public final class JdkVectorLibrary implements VectorLibrary {
             }
         }
 
+        private static int dot8s(MemorySegment a, MemorySegment b, int length) {
+            try {
+                return (int) JdkVectorLibrary.dot8s$mh.invokeExact(a, b, length);
+            } catch (Throwable t) {
+                throw new AssertionError(t);
+            }
+        }
+
         private static void dot7uBulk(MemorySegment a, MemorySegment b, int length, int count, MemorySegment result) {
             try {
                 JdkVectorLibrary.dot7uBulk$mh.invokeExact(a, b, length, count, result);
@@ -229,6 +270,22 @@ public final class JdkVectorLibrary implements VectorLibrary {
         ) {
             try {
                 JdkVectorLibrary.dot7uBulkWithOffsets$mh.invokeExact(a, b, length, pitch, offsets, count, result);
+            } catch (Throwable t) {
+                throw new AssertionError(t);
+            }
+        }
+
+        private static void dot8sBulkWithOffsets(
+            MemorySegment a,
+            MemorySegment b,
+            int length,
+            int pitch,
+            MemorySegment offsets,
+            int count,
+            MemorySegment result
+        ) {
+            try {
+                JdkVectorLibrary.dot8sBulkWithOffsets$mh.invokeExact(a, b, length, pitch, offsets, count, result);
             } catch (Throwable t) {
                 throw new AssertionError(t);
             }
@@ -285,6 +342,8 @@ public final class JdkVectorLibrary implements VectorLibrary {
         static final MethodHandle DOT_HANDLE_7U;
         static final MethodHandle DOT_HANDLE_7U_BULK;
         static final MethodHandle DOT_HANDLE_7U_BULK_WITH_OFFSETS;
+        static final MethodHandle DOT_HANDLE_8S;
+        static final MethodHandle DOT_HANDLE_8S_BULK_WITH_OFFSETS;
         static final MethodHandle SQR_HANDLE_7U;
         static final MethodHandle SQR_HANDLE_7U_BULK;
         static final MethodHandle SQR_HANDLE_7U_BULK_WITH_OFFSETS;
@@ -330,6 +389,12 @@ public final class JdkVectorLibrary implements VectorLibrary {
                     "squareDistance7uBulkWithOffsets",
                     bulkInt7OffsetScorer
                 );
+                DOT_HANDLE_8S = lookup.findStatic(JdkVectorSimilarityFunctions.class, "dotProduct8s", singleInt7Scorer);
+                DOT_HANDLE_8S_BULK_WITH_OFFSETS = lookup.findStatic(
+                    JdkVectorSimilarityFunctions.class,
+                    "dotProduct8sBulkWithOffsets",
+                    bulkInt7OffsetScorer
+                );
 
                 MethodType singleFloatScorer = MethodType.methodType(float.class, MemorySegment.class, MemorySegment.class, int.class);
                 DOT_HANDLE_FLOAT32 = lookup.findStatic(JdkVectorSimilarityFunctions.class, "dotProductF32", singleFloatScorer);
@@ -367,6 +432,16 @@ public final class JdkVectorLibrary implements VectorLibrary {
         @Override
         public MethodHandle squareDistanceHandle7uBulkWithOffsets() {
             return SQR_HANDLE_7U_BULK_WITH_OFFSETS;
+        }
+
+        @Override
+        public MethodHandle dotProductHandle8s() {
+            return DOT_HANDLE_8S;
+        }
+
+        @Override
+        public MethodHandle dotProductHandle8sBulkWithOffsets() {
+            return DOT_HANDLE_8S_BULK_WITH_OFFSETS;
         }
 
         @Override

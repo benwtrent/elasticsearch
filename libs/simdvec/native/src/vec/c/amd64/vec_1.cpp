@@ -146,12 +146,49 @@ static inline int32_t dot7u_inner(const int8_t* a, const int8_t* b, const int32_
     return hsum_i32_8(acc1);
 }
 
+static inline int32_t dot8s_inner(const int8_t* a, const int8_t* b, const int32_t dims) {
+    const __m256i ones = _mm256_set1_epi16(1);
+
+    // Init accumulator(s) with 0
+    __m256i acc1 = _mm256_setzero_si256();
+
+#pragma GCC unroll 4
+    for(int i = 0; i < dims; i += STRIDE_BYTES_LEN) {
+        // Load packed 8-bit integers
+        __m256i va1 = _mm256_loadu_si256((const __m256i_u *)(a + i));
+        __m256i vb1 = _mm256_loadu_si256((const __m256i_u *)(b + i));
+
+        // Perform multiplication and create 16-bit values
+        // Vertically multiply each unsigned 8-bit integer from va with the corresponding
+        // 8-bit integer from vb, producing intermediate signed 16-bit integers.
+        const __m256i vab = _mm256_maddubs_epi16(va1, vb1);
+        // Horizontally add adjacent pairs of intermediate signed 16-bit integers, and pack the results.
+        acc1 = _mm256_add_epi32(_mm256_madd_epi16(ones, vab), acc1);
+    }
+
+    // reduce (horizontally add all)
+    return hsum_i32_8(acc1);
+}
+
 EXPORT int32_t vec_dot7u(const int8_t* a, const int8_t* b, const int32_t dims) {
     int32_t res = 0;
     int i = 0;
     if (dims > STRIDE_BYTES_LEN) {
         i += dims & ~(STRIDE_BYTES_LEN - 1);
         res = dot7u_inner(a, b, i);
+    }
+    for (; i < dims; i++) {
+        res += a[i] * b[i];
+    }
+    return res;
+}
+
+EXPORT int32_t vec_dot8s(const int8_t* a, const int8_t* b, const int32_t dims) {
+    int32_t res = 0;
+    int i = 0;
+    if (dims > STRIDE_BYTES_LEN) {
+        i += dims & ~(STRIDE_BYTES_LEN - 1);
+        res = dot8s_inner(a, b, i);
     }
     for (; i < dims; i++) {
         res += a[i] * b[i];
@@ -215,6 +252,62 @@ static inline void dot7u_inner_bulk(
     }
 }
 
+template <int64_t(*mapper)(int32_t, const int32_t*)>
+static inline void dot8s_inner_bulk(
+    const int8_t* a,
+    const int8_t* b,
+    const int32_t dims,
+    const int32_t pitch,
+    const int32_t* offsets,
+    const int32_t count,
+    f32_t* results
+) {
+    const int blk = dims & ~(STRIDE_BYTES_LEN - 1);
+    const int lines_to_fetch = dims / CACHE_LINE_SIZE + 1;
+    int c = 0;
+
+    const int8_t* a0 = safe_mapper_offset<0, mapper>(a, pitch, offsets, count);
+    const int8_t* a1 = safe_mapper_offset<1, mapper>(a, pitch, offsets, count);
+
+    // Process a batch of 2 vectors at a time, after instructing the CPU to
+    // prefetch the next batch.
+    // Prefetching multiple memory locations while computing keeps the CPU
+    // execution units busy. For this "older" generation of x64 processors
+    // (supporting AVX2, but not AVX-512), benchmarks show that a batch of 2
+    // is ideal -- more, and it starts to hurt performances due to bandwidth
+    for (; c + 3 < count; c += 2) {
+        const int8_t* next_a0 = a + mapper(c + 2, offsets) * pitch;
+        const int8_t* next_a1 = a + mapper(c + 3, offsets) * pitch;
+
+        prefetch(next_a0, lines_to_fetch);
+        prefetch(next_a1, lines_to_fetch);
+
+        int32_t res0 = 0;
+        int32_t res1 = 0;
+        int i = 0;
+        if (dims > STRIDE_BYTES_LEN) {
+            i = blk;
+            res0 = dot7u_inner(a0, b, i);
+            res1 = dot7u_inner(a1, b, i);
+        }
+        for (; i < dims; i++) {
+            const int8_t bb = b[i];
+            res0 += a0[i] * bb;
+            res1 += a1[i] * bb;
+        }
+        results[c + 0] = (f32_t)res0;
+        results[c + 1] = (f32_t)res1;
+        a0 = next_a0;
+        a1 = next_a1;
+    }
+
+    // Tail-handling: remaining vectors
+    for (; c < count; c++) {
+        const int8_t* a0 = a + mapper(c, offsets) * pitch;
+        results[c] = (f32_t)vec_dot8s(a0, b, dims);
+    }
+}
+
 EXPORT void vec_dot7u_bulk(const int8_t* a, const int8_t* b, const int32_t dims, const int32_t count, f32_t* results) {
     dot7u_inner_bulk<identity_mapper>(a, b, dims, dims, NULL, count, results);
 }
@@ -228,6 +321,17 @@ EXPORT void vec_dot7u_bulk_offsets(
     const int32_t count,
     f32_t* results) {
     dot7u_inner_bulk<array_mapper>(a, b, dims, pitch, offsets, count, results);
+}
+
+EXPORT void vec_dot8s_bulk_offsets(
+    const int8_t* a,
+    const int8_t* b,
+    const int32_t dims,
+    const int32_t pitch,
+    const int32_t* offsets,
+    const int32_t count,
+    f32_t* results) {
+    dot8s_inner_bulk<array_mapper>(a, b, dims, pitch, offsets, count, results);
 }
 
 static inline int32_t sqr7u_inner(const int8_t *a, const int8_t *b, const int32_t dims) {
