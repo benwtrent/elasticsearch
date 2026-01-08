@@ -112,24 +112,24 @@ public class VectorScorerSignedInt8OperationBenchmark {
     }
 
     @Benchmark
-    public byte lucene() {
+    public int lucene() {
         return luceneImpl.run(bytesA, bytesB);
     }
 
     @Benchmark
-    public byte luceneWithCopy() {
+    public int luceneWithCopy() {
         // add a copy to better reflect what Lucene has to do to get the target vector on-heap
         MemorySegment.copy(nativeSegB, ValueLayout.JAVA_INT, 0L, scratch, 0, scratch.length);
         return luceneImpl.run(bytesA, scratch);
     }
 
     @Benchmark
-    public byte nativeWithNativeSeg() {
+    public int nativeWithNativeSeg() {
         return nativeImpl.run(nativeSegA, nativeSegB, size);
     }
 
     @Benchmark
-    public byte nativeWithHeapSeg() {
+    public int nativeWithHeapSeg() {
         return nativeImpl.run(heapSegA, heapSegB, size);
     }
 
@@ -139,9 +139,9 @@ public class VectorScorerSignedInt8OperationBenchmark {
         return NativeAccess.instance().getVectorSimilarityFunctions().get();
     }
 
-    static byte dotProductbyte(MemorySegment a, MemorySegment b, int length) {
+    static int dotProductbyte(MemorySegment a, MemorySegment b, int length) {
         try {
-            return (byte) vectorSimilarityFunctions.dotProductHandle8s().invokeExact(a, b, length);
+            return (int) vectorSimilarityFunctions.dotProductHandle8s().invokeExact(a, b, length);
         } catch (Throwable e) {
             throw rethrow(e);
         }
