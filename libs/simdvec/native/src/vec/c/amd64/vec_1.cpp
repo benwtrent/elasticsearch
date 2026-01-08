@@ -146,28 +146,41 @@ static inline int32_t dot7u_inner(const int8_t* a, const int8_t* b, const int32_
     return hsum_i32_8(acc1);
 }
 
+int reduce_i32x8(__m256i vec) {
+    __m128i low = _mm256_castsi256_si128(vec);
+    __m128i high = _mm256_extracti128_si256(vec, 1);
+    __m128i sum = _mm_add_epi32(low, high);
+    sum = _mm_hadd_epi32(sum, sum);
+    sum = _mm_hadd_epi32(sum, sum);
+    return _mm_cvtsi128_si32(sum);
+}
+
 static inline int32_t dot8s_inner(const int8_t* a, const int8_t* b, const int32_t dims) {
     const __m256i ones = _mm256_set1_epi16(1);
 
+// SIMSIMD inspiration ANNOT:
     // Init accumulator(s) with 0
-    __m256i acc1 = _mm256_setzero_si256();
+    __m256i acc_low = _mm256_setzero_si256();
+    __m256i acc_high = _mm256_setzero_si256();
 
 #pragma GCC unroll 4
     for(int i = 0; i < dims; i += STRIDE_BYTES_LEN) {
         // Load packed 8-bit integers
-        __m256i va1 = _mm256_loadu_si256((const __m256i_u *)(a + i));
-        __m256i vb1 = _mm256_loadu_si256((const __m256i_u *)(b + i));
+        __m256i a_i8_vec = _mm256_lddqu_si256((const __m256i *)(a + i));
+        __m256i b_i8_vec = _mm256_lddqu_si256((const __m256i *)(b + i));
 
-        // Perform multiplication and create 16-bit values
-        // Vertically multiply each unsigned 8-bit integer from va with the corresponding
-        // 8-bit integer from vb, producing intermediate signed 16-bit integers.
-        const __m256i vab = _mm256_maddubs_epi16(va1, vb1);
-        // Horizontally add adjacent pairs of intermediate signed 16-bit integers, and pack the results.
-        acc1 = _mm256_add_epi32(_mm256_madd_epi16(ones, vab), acc1);
+        // Upcast `int8` to `int16`
+        __m256i a_i16_low_vec = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(a_i8_vec, 0));
+        __m256i a_i16_high_vec = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(a_i8_vec, 1));
+        __m256i b_i16_low_vec = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(b_i8_vec, 0));
+        __m256i b_i16_high_vec = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(b_i8_vec, 1));
+
+        // Multiply and accumulate at `int16` level, accumulate at `int32` level
+        acc_low = _mm256_add_epi32(acc_low, _mm256_madd_epi16(a_i16_low_vec, b_i16_low_vec));
+        acc_high = _mm256_add_epi32(acc_high, _mm256_madd_epi16(a_i16_high_vec, b_i16_high_vec));
     }
-
     // reduce (horizontally add all)
-    return hsum_i32_8(acc1);
+    return hsum_i32_8(_mm256_add_epi32(acc_low, acc_high));
 }
 
 EXPORT int32_t vec_dot7u(const int8_t* a, const int8_t* b, const int32_t dims) {
@@ -287,8 +300,8 @@ static inline void dot8s_inner_bulk(
         int i = 0;
         if (dims > STRIDE_BYTES_LEN) {
             i = blk;
-            res0 = dot7u_inner(a0, b, i);
-            res1 = dot7u_inner(a1, b, i);
+            res0 = dot8s_inner(a0, b, i);
+            res1 = dot8s_inner(a1, b, i);
         }
         for (; i < dims; i++) {
             const int8_t bb = b[i];
