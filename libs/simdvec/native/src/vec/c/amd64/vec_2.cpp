@@ -42,6 +42,9 @@
 #ifndef STRIDE_BYTES_LEN
 #define STRIDE_BYTES_LEN sizeof(__m512i) // Must be a power of 2
 #endif
+#ifndef STRIDE_SIGNED_BYTES_LEN
+#define STRIDE_SIGNED_BYTES_LEN sizeof(__m256i) // Must be a power of
+#endif
 
 // Returns acc + ( p1 * p2 ), for 64-wide int lanes.
 template<int offsetRegs>
@@ -58,6 +61,16 @@ inline __m512i fma8(__m512i acc, const int8_t* p1, const int8_t* p2) {
     // Horizontally add adjacent pairs of intermediate signed 16-bit ints, and pack the results in 32-bit ints.
     // Using madd with 1, as this is faster than extract 2 halves, add 16-bit ints, and convert to 32-bit ints.
     return _mm512_add_epi32(_mm512_madd_epi16(ones, dot), acc);
+}
+
+template<int offsetRegs>
+inline __m512i fma8i(__m512i acc, const int8_t* p1, const int8_t* p2) {
+//SIMSIMD inspiration ANNOT:
+    constexpr int lanes = offsetRegs * STRIDE_SIGNED_BYTES_LEN;
+    __m512i ab_i32_vec = _mm512_setzero_si512();
+    const __m512i a = _mm512_cvtepi8_epi16(_mm256_lddqu_si256((const __m512i*)(p1 + lanes)));
+    const __m512i b = _mm512_cvtepi8_epi16(_mm256_lddqu_si256((const __m512i*)(p2 + lanes)));
+    return _mm512_dpwssd_epi32(acc, a, b);
 }
 
 static inline int32_t dot7u_inner_avx512(const int8_t* a, const int8_t* b, const int32_t dims) {
@@ -114,8 +127,8 @@ static inline int32_t dot7u_inner_avx512(const int8_t* a, const int8_t* b, const
 }
 
 static inline int32_t dot8s_inner_avx512(const int8_t* a, const int8_t* b, const int32_t dims) {
-    constexpr int stride8 = 8 * STRIDE_BYTES_LEN;
-    constexpr int stride4 = 4 * STRIDE_BYTES_LEN;
+    constexpr int stride8 = 8 * STRIDE_SIGNED_BYTES_LEN;
+    constexpr int stride4 = 4 * STRIDE_SIGNED_BYTES_LEN;
     const int8_t* p1 = a;
     const int8_t* p2 = b;
 
@@ -131,33 +144,33 @@ static inline int32_t dot8s_inner_avx512(const int8_t* a, const int8_t* b, const
 
     const int8_t* p1End = a + (dims & ~(stride8 - 1));
     while (p1 < p1End) {
-        acc0 = fma8<0>(acc0, p1, p2);
-        acc1 = fma8<1>(acc1, p1, p2);
-        acc2 = fma8<2>(acc2, p1, p2);
-        acc3 = fma8<3>(acc3, p1, p2);
-        acc4 = fma8<4>(acc4, p1, p2);
-        acc5 = fma8<5>(acc5, p1, p2);
-        acc6 = fma8<6>(acc6, p1, p2);
-        acc7 = fma8<7>(acc7, p1, p2);
+        acc0 = fma8i<0>(acc0, p1, p2);
+        acc1 = fma8i<1>(acc1, p1, p2);
+        acc2 = fma8i<2>(acc2, p1, p2);
+        acc3 = fma8i<3>(acc3, p1, p2);
+        acc4 = fma8i<4>(acc4, p1, p2);
+        acc5 = fma8i<5>(acc5, p1, p2);
+        acc6 = fma8i<6>(acc6, p1, p2);
+        acc7 = fma8i<7>(acc7, p1, p2);
         p1 += stride8;
         p2 += stride8;
     }
 
     p1End = a + (dims & ~(stride4 - 1));
     while (p1 < p1End) {
-        acc0 = fma8<0>(acc0, p1, p2);
-        acc1 = fma8<1>(acc1, p1, p2);
-        acc2 = fma8<2>(acc2, p1, p2);
-        acc3 = fma8<3>(acc3, p1, p2);
+        acc0 = fma8i<0>(acc0, p1, p2);
+        acc1 = fma8i<1>(acc1, p1, p2);
+        acc2 = fma8i<2>(acc2, p1, p2);
+        acc3 = fma8i<3>(acc3, p1, p2);
         p1 += stride4;
         p2 += stride4;
     }
 
-    p1End = a + (dims & ~(STRIDE_BYTES_LEN - 1));
+    p1End = a + (dims & ~(STRIDE_SIGNED_BYTES_LEN - 1));
     while (p1 < p1End) {
-        acc0 = fma8<0>(acc0, p1, p2);
-        p1 += STRIDE_BYTES_LEN;
-        p2 += STRIDE_BYTES_LEN;
+        acc0 = fma8i<0>(acc0, p1, p2);
+        p1 += STRIDE_SIGNED_BYTES_LEN;
+        p2 += STRIDE_SIGNED_BYTES_LEN;
     }
 
     // reduce (accumulate all)
