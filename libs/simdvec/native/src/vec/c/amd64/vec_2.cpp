@@ -17,10 +17,10 @@
 
 // Force the preprocessor to pick up AVX-512 intrinsics, and the compiler to emit AVX-512 code
 #ifdef __clang__
-#pragma clang attribute push(__attribute__((target("arch=skylake-avx512"))), apply_to=function)
+#pragma clang attribute push(__attribute__((target("arch=skylake-avx512,avx512vnni"))), apply_to=function)
 #elif __GNUC__
 #pragma GCC push_options
-#pragma GCC target ("arch=skylake-avx512")
+#pragma GCC target ("arch=skylake-avx512,avx512vnni")
 #endif
 
 #include "vec.h"
@@ -67,7 +67,6 @@ template<int offsetRegs>
 inline __m512i fma8i(__m512i acc, const int8_t* p1, const int8_t* p2) {
 //SIMSIMD inspiration ANNOT:
     constexpr int lanes = offsetRegs * STRIDE_SIGNED_BYTES_LEN;
-    __m512i ab_i32_vec = _mm512_setzero_si512();
     const __m512i a = _mm512_cvtepi8_epi16(_mm256_lddqu_si256((const __m256i*)(p1 + lanes)));
     const __m512i b = _mm512_cvtepi8_epi16(_mm256_lddqu_si256((const __m256i*)(p2 + lanes)));
     return _mm512_dpwssd_epi32(acc, a, b);
@@ -195,8 +194,8 @@ EXPORT int32_t vec_dot7u_2(const int8_t* a, const int8_t* b, const int32_t dims)
 EXPORT int32_t vec_dot8s_2(const int8_t* a, const int8_t* b, const int32_t dims) {
     int32_t res = 0;
     int i = 0;
-    if (dims > STRIDE_BYTES_LEN) {
-        i += dims & ~(STRIDE_BYTES_LEN - 1);
+    if (dims > STRIDE_SIGNED_BYTES_LEN) {
+        i += dims & ~(STRIDE_SIGNED_BYTES_LEN - 1);
         res = dot8s_inner_avx512(a, b, i);
     }
     for (; i < dims; i++) {

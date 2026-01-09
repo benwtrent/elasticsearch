@@ -58,7 +58,7 @@ public class VectorScorerSignedInt8OperationBenchmark {
 
     Arena arena;
 
-    @Param({ "1", "128", "207", "256", "300", "512", "702", "1024", "1536", "2048" })
+    @Param({ "128", "258", "280", "2048" })
     public int size;
 
     @Param({ "DOT_PRODUCT" })
