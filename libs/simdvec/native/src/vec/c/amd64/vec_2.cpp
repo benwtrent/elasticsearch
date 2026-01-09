@@ -43,7 +43,7 @@
 #define STRIDE_BYTES_LEN sizeof(__m512i) // Must be a power of 2
 #endif
 #ifndef STRIDE_SIGNED_BYTES_LEN
-#define STRIDE_SIGNED_BYTES_LEN sizeof(__m256i) // Must be a power of
+#define STRIDE_SIGNED_BYTES_LEN sizeof(__m256i) // Must be a power of 2
 #endif
 
 // Returns acc + ( p1 * p2 ), for 64-wide int lanes.
@@ -68,8 +68,8 @@ inline __m512i fma8i(__m512i acc, const int8_t* p1, const int8_t* p2) {
 //SIMSIMD inspiration ANNOT:
     constexpr int lanes = offsetRegs * STRIDE_SIGNED_BYTES_LEN;
     __m512i ab_i32_vec = _mm512_setzero_si512();
-    const __m512i a = _mm512_cvtepi8_epi16(_mm256_lddqu_si256((const __m512i*)(p1 + lanes)));
-    const __m512i b = _mm512_cvtepi8_epi16(_mm256_lddqu_si256((const __m512i*)(p2 + lanes)));
+    const __m512i a = _mm512_cvtepi8_epi16(_mm256_lddqu_si256((const __m256i*)(p1 + lanes)));
+    const __m512i b = _mm512_cvtepi8_epi16(_mm256_lddqu_si256((const __m256i*)(p2 + lanes)));
     return _mm512_dpwssd_epi32(acc, a, b);
 }
 
