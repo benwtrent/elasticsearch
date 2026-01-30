@@ -13,7 +13,6 @@ import org.apache.lucene.codecs.hnsw.FlatVectorsFormat;
 import org.apache.lucene.codecs.hnsw.FlatVectorsReader;
 import org.apache.lucene.codecs.hnsw.FlatVectorsScorer;
 import org.apache.lucene.codecs.hnsw.FlatVectorsWriter;
-import org.apache.lucene.codecs.hnsw.ScalarQuantizedVectorScorer;
 import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorScorer;
 import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorsFormat;
 import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorsReader;
@@ -37,9 +36,7 @@ public class ES94ScalarQuantizedVectorsFormat extends FlatVectorsFormat {
     static final String NAME = "ES94ScalarQuantizedVectorsFormat";
     private static final int ALLOWED_BITS = (1 << 7) | (1 << 4) | (1 << 2) | (1 << 1);
 
-    static final Lucene104ScalarQuantizedVectorScorer flatVectorScorer = new ESQuantizedFlatVectorsScorer(
-        new ScalarQuantizedVectorScorer(ES93FlatVectorScorer.INSTANCE)
-    );
+    static final Lucene104ScalarQuantizedVectorScorer flatVectorScorer = new ESQuantizedFlatVectorsScorer(ES93FlatVectorScorer.INSTANCE);
     private final FlatVectorsFormat rawVectorFormat;
     private final Lucene104ScalarQuantizedVectorsFormat.ScalarEncoding encoding;
 
@@ -111,12 +108,30 @@ public class ES94ScalarQuantizedVectorsFormat extends FlatVectorsFormat {
         @Override
         public RandomVectorScorerSupplier getRandomVectorScorerSupplier(VectorSimilarityFunction sim, KnnVectorValues values)
             throws IOException {
+            if (values instanceof QuantizedByteVectorValues quantizedValues && quantizedValues.getSlice() != null) {
+                // TODO: optimize int4 quantization
+                if (quantizedValues.getScalarEncoding() != Lucene104ScalarQuantizedVectorsFormat.ScalarEncoding.SEVEN_BIT) {
+                    return super.getRandomVectorScorerSupplier(sim, values);
+                }
+                if (factory != null) {
+                    // TODO Add Int7OSQVectorScorerSupplier via getInt7SQVectorScorerSupplier
+                }
+            }
             return super.getRandomVectorScorerSupplier(sim, values);
         }
 
         @Override
         public RandomVectorScorer getRandomVectorScorer(VectorSimilarityFunction sim, KnnVectorValues values, float[] query)
             throws IOException {
+            if (values instanceof QuantizedByteVectorValues quantizedValues && quantizedValues.getSlice() != null) {
+                // TODO: optimize int4 quantization
+                if (quantizedValues.getScalarEncoding() != Lucene104ScalarQuantizedVectorsFormat.ScalarEncoding.SEVEN_BIT) {
+                    return super.getRandomVectorScorer(sim, values, query);
+                }
+                if (factory != null) {
+                    // TODO Add Int7OSQVectorScorer via getInt7SQVectorScorer
+                }
+            }
             return super.getRandomVectorScorer(sim, values, query);
         }
 
@@ -132,6 +147,7 @@ public class ES94ScalarQuantizedVectorsFormat extends FlatVectorsFormat {
             org.apache.lucene.codecs.lucene104.QuantizedByteVectorValues scoringVectors,
             QuantizedByteVectorValues targetVectors
         ) {
+            // TODO improve merge-times for HNSW through off-heap optimized search
             return super.getRandomVectorScorerSupplier(similarityFunction, scoringVectors, targetVectors);
         }
 
