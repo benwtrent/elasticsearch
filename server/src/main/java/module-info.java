@@ -475,7 +475,9 @@ module org.elasticsearch.server {
             org.elasticsearch.index.codec.vectors.es93.ES93ScalarQuantizedVectorsFormat,
             org.elasticsearch.index.codec.vectors.es93.ES93HnswScalarQuantizedVectorsFormat,
             org.elasticsearch.index.codec.vectors.es93.ES93BinaryQuantizedVectorsFormat,
-            org.elasticsearch.index.codec.vectors.es93.ES93HnswBinaryQuantizedVectorsFormat;
+            org.elasticsearch.index.codec.vectors.es93.ES93HnswBinaryQuantizedVectorsFormat,
+            org.elasticsearch.index.codec.vectors.es94.ES94HnswScalarQuantizedVectorsFormat,
+            org.elasticsearch.index.codec.vectors.es94.ES94ScalarQuantizedVectorsFormat;
 
     provides org.apache.lucene.codecs.Codec
         with
