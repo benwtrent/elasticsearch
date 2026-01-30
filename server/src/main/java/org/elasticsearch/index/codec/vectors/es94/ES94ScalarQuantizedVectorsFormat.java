@@ -32,7 +32,6 @@ import org.elasticsearch.simdvec.VectorScorerFactory;
 
 import java.io.IOException;
 
-
 public class ES94ScalarQuantizedVectorsFormat extends FlatVectorsFormat {
 
     static final String NAME = "ES94ScalarQuantizedVectorsFormat";
@@ -52,11 +51,7 @@ public class ES94ScalarQuantizedVectorsFormat extends FlatVectorsFormat {
         this(elementType, 7, false);
     }
 
-    public ES94ScalarQuantizedVectorsFormat(
-        DenseVectorFieldMapper.ElementType elementType,
-        int bits,
-        boolean useDirectIO
-    ) {
+    public ES94ScalarQuantizedVectorsFormat(DenseVectorFieldMapper.ElementType elementType, int bits, boolean useDirectIO) {
         super(NAME);
         if (bits < 1 || bits > 8 || (ALLOWED_BITS & (1 << bits)) == 0) {
             throw new IllegalArgumentException("bits must be one of: 1, 2, 4, 7; bits=" + bits);
@@ -75,21 +70,12 @@ public class ES94ScalarQuantizedVectorsFormat extends FlatVectorsFormat {
 
     @Override
     public FlatVectorsWriter fieldsWriter(SegmentWriteState state) throws IOException {
-        return new Lucene104ScalarQuantizedVectorsWriter(
-            state,
-            encoding,
-            rawVectorFormat.fieldsWriter(state),
-            flatVectorScorer
-        );
+        return new Lucene104ScalarQuantizedVectorsWriter(state, encoding, rawVectorFormat.fieldsWriter(state), flatVectorScorer);
     }
 
     @Override
     public FlatVectorsReader fieldsReader(SegmentReadState state) throws IOException {
-        return new Lucene104ScalarQuantizedVectorsReader(
-            state,
-            rawVectorFormat.fieldsReader(state),
-            flatVectorScorer
-        );
+        return new Lucene104ScalarQuantizedVectorsReader(state, rawVectorFormat.fieldsReader(state), flatVectorScorer);
     }
 
     @Override
@@ -144,7 +130,8 @@ public class ES94ScalarQuantizedVectorsFormat extends FlatVectorsFormat {
         public RandomVectorScorerSupplier getRandomVectorScorerSupplier(
             VectorSimilarityFunction similarityFunction,
             org.apache.lucene.codecs.lucene104.QuantizedByteVectorValues scoringVectors,
-            QuantizedByteVectorValues targetVectors) {
+            QuantizedByteVectorValues targetVectors
+        ) {
             return super.getRandomVectorScorerSupplier(similarityFunction, scoringVectors, targetVectors);
         }
 
