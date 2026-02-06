@@ -586,7 +586,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         IndexInput indexInput,
         float[] target,
         Bits acceptDocs,
-        IndexInput centroidSlice
+        IndexInput centroidSlice,
+        int queryBits
     ) throws IOException {
         FieldEntry entry = fields.get(fieldInfo.number);
         final int bitsRequired = DirectWriter.bitsRequired(entry.numCentroids());
@@ -596,6 +597,18 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         );
         centroidSlice.skipBytes(sizeLookup);
         ESNextDiskBBQVectorsFormat.QuantEncoding quantEncoding = ((NextFieldEntry) entry).quantEncoding();
+        int resolvedQueryBits = queryBits < 0 ? quantEncoding.queryBits() : queryBits;
+        if (resolvedQueryBits < quantEncoding.bits()) {
+            throw new IllegalArgumentException(
+                "query_bits must be at least the index bits (" + quantEncoding.bits() + "), got: " + resolvedQueryBits
+            );
+        }
+        // TODO: propagate query_bits to the OSQ scorers instead of assuming quantEncoding.queryBits().
+        if (resolvedQueryBits != quantEncoding.queryBits()) {
+            throw new IllegalArgumentException(
+                "query_bits=" + resolvedQueryBits + " is not supported yet; expected " + quantEncoding.queryBits()
+            );
+        }
         int numParents = centroidSlice.readVInt();
         final QueryQuantizer queryQuantizer;
         if (numParents > 0) {
@@ -606,9 +619,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 centroidSlice.getFilePointer(),
                 (long) numParents * fieldInfo.getVectorDimension() * Float.BYTES
             );
-            queryQuantizer = new QueryQuantizer(quantEncoding, fieldInfo, target, parentsSlice, entry.globalCentroid());
+            queryQuantizer = new QueryQuantizer(quantEncoding, fieldInfo, target, parentsSlice, entry.globalCentroid(), resolvedQueryBits);
         } else {
-            queryQuantizer = new QueryQuantizer(quantEncoding, fieldInfo, target, null, entry.globalCentroid());
+            queryQuantizer = new QueryQuantizer(quantEncoding, fieldInfo, target, null, entry.globalCentroid(), resolvedQueryBits);
         }
 
         return new MemorySegmentPostingsVisitor(queryQuantizer, quantEncoding, indexInput, entry, fieldInfo, acceptDocs);
@@ -619,6 +632,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
     private static class QueryQuantizer {
         private final Cache<Integer, QueryQuantizerResult> cache;
         private final ESNextDiskBBQVectorsFormat.QuantEncoding quantEncoding;
+        private final int queryBits;
         private final float[] target;
         private final float[] scratch;
         private final int[] quantizationScratch;
@@ -636,9 +650,11 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             FieldInfo fieldInfo,
             float[] target,
             IndexInput parentsSlice,
-            float[] globalCentroid
+            float[] globalCentroid,
+            int queryBits
         ) {
             this.quantEncoding = quantEncoding;
+            this.queryBits = queryBits;
             this.target = target;
             this.scratch = new float[fieldInfo.getVectorDimension()];
             this.centroidScratch = new float[fieldInfo.getVectorDimension()];
@@ -686,7 +702,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                     target,
                     scratch,
                     quantizationScratch,
-                    quantEncoding.queryBits(),
+                    (byte) queryBits,
                     queryCentroid
                 );
                 quantEncoding.packQuery(quantizationScratch, quantizedQuery);

@@ -2559,6 +2559,13 @@ public class DenseVectorFieldMapper extends FieldMapper {
             return clusterSize;
         }
 
+        public int queryBits() {
+            return switch (bits) {
+                case 1, 2, 4 -> 4;
+                default -> throw new IllegalStateException("Unsupported bits: " + bits);
+            };
+        }
+
         public double getDefaultVisitPercentage() {
             return defaultVisitPercentage;
         }

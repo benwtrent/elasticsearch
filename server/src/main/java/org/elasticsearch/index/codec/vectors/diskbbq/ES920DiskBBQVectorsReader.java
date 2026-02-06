@@ -41,6 +41,9 @@ import static org.elasticsearch.simdvec.ESVectorUtil.transposeHalfByte;
  */
 public class ES920DiskBBQVectorsReader extends IVFVectorsReader {
 
+    private static final int DOC_BITS = 1;
+    private static final int DEFAULT_QUERY_BITS = QUERY_BITS;
+
     ES920DiskBBQVectorsReader(SegmentReadState state, GenericFlatVectorReaders.LoadFlatVectorsReader getFormatReader) throws IOException {
         super(state, getFormatReader);
     }
@@ -364,12 +367,21 @@ public class ES920DiskBBQVectorsReader extends IVFVectorsReader {
         IndexInput indexInput,
         float[] target,
         Bits acceptDocs,
-        IndexInput centroidSlice
+        IndexInput centroidSlice,
+        int queryBits
     ) throws IOException {
         FieldEntry entry = fields.get(fieldInfo.number);
         // max postings list size, no longer utilized
         indexInput.readVInt();
-        QueryQuantizer queryQuantizer = new QueryQuantizer(fieldInfo, target);
+        int resolvedQueryBits = queryBits < 0 ? DEFAULT_QUERY_BITS : queryBits;
+        if (resolvedQueryBits < DOC_BITS) {
+            throw new IllegalArgumentException("query_bits must be at least the index bits (" + DOC_BITS + "), got: " + resolvedQueryBits);
+        }
+        // TODO: propagate query_bits to the OSQ scorers instead of assuming the static QUERY_BITS.
+        if (resolvedQueryBits != DEFAULT_QUERY_BITS) {
+            throw new IllegalArgumentException("query_bits=" + resolvedQueryBits + " is not supported yet; expected " + DEFAULT_QUERY_BITS);
+        }
+        QueryQuantizer queryQuantizer = new QueryQuantizer(fieldInfo, target, resolvedQueryBits);
         return new MemorySegmentPostingsVisitor(queryQuantizer, indexInput, entry, fieldInfo, acceptDocs);
     }
 
@@ -383,13 +395,15 @@ public class ES920DiskBBQVectorsReader extends IVFVectorsReader {
         private float[] currentCentroid;
         private int nextCentroidOrdinal = -1;
         private int currentCentroidOrdinal = -2;
+        private final int queryBits;
 
-        QueryQuantizer(FieldInfo fieldInfo, float[] target) {
+        QueryQuantizer(FieldInfo fieldInfo, float[] target, int queryBits) {
             assert fieldInfo.getVectorSimilarityFunction() != COSINE || VectorUtil.isUnitVector(target);
             this.target = target;
             this.scratch = new float[fieldInfo.getVectorDimension()];
-            this.quantizationScratch = new int[fieldInfo.getVectorDimension()];
-            this.quantizedQuery = new byte[QUERY_BITS * discretize(fieldInfo.getVectorDimension(), 64) / 8];
+            this.quantizationScratch = new int[discretize(fieldInfo.getVectorDimension(), 64)];
+            this.queryBits = queryBits;
+            this.quantizedQuery = new byte[queryBits * discretize(fieldInfo.getVectorDimension(), 64) / 8];
             this.quantizer = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction(), DEFAULT_LAMBDA, 1);
         }
 
@@ -400,7 +414,7 @@ public class ES920DiskBBQVectorsReader extends IVFVectorsReader {
 
         void quantizeQueryIfNecessary() throws IOException {
             if (this.nextCentroidOrdinal != currentCentroidOrdinal) {
-                queryCorrections = quantizer.scalarQuantize(target, scratch, quantizationScratch, (byte) 4, currentCentroid);
+                queryCorrections = quantizer.scalarQuantize(target, scratch, quantizationScratch, (byte) queryBits, currentCentroid);
                 transposeHalfByte(quantizationScratch, quantizedQuery);
                 currentCentroidOrdinal = this.nextCentroidOrdinal;
             }

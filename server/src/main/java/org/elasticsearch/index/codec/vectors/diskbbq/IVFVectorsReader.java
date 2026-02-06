@@ -282,9 +282,11 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             : esAcceptDocs.approximateCost());
         float percentFiltered = Math.max(0f, Math.min(1f, approximateCost / numVectors));
         float visitRatio = DYNAMIC_VISIT_RATIO;
+        int queryBits = -1;
         // Search strategy may be null if this is being called from checkIndex (e.g. from a test)
         if (knnCollector.getSearchStrategy() instanceof IVFKnnSearchStrategy ivfSearchStrategy) {
             visitRatio = ivfSearchStrategy.getVisitRatio();
+            queryBits = ivfSearchStrategy.getQueryBits();
         }
 
         FieldEntry entry = fields.get(fieldInfo.number);
@@ -313,7 +315,14 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
             visitRatio
         );
         Bits acceptDocsBits = acceptDocs.bits();
-        PostingVisitor scorer = getPostingVisitor(fieldInfo, postListSlice, target, acceptDocsBits, entry.centroidSlice(ivfCentroids));
+        PostingVisitor scorer = getPostingVisitor(
+            fieldInfo,
+            postListSlice,
+            target,
+            acceptDocsBits,
+            entry.centroidSlice(ivfCentroids),
+            queryBits
+        );
         long expectedDocs = 0;
         long actualDocs = 0;
         // initially we visit only the "centroids to search"
@@ -464,7 +473,8 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
         IndexInput postingsLists,
         float[] target,
         Bits needsScoring,
-        IndexInput centroidSlice
+        IndexInput centroidSlice,
+        int queryBits
     ) throws IOException;
 
     public interface PostingVisitor {

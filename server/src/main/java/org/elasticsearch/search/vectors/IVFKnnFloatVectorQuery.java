@@ -39,6 +39,31 @@ public class IVFKnnFloatVectorQuery extends AbstractIVFKnnVectorQuery {
      * @param numCands the number of nearest neighbors to gather per shard
      * @param filter the filter to apply to the results
      * @param visitRatio the ratio of vectors to score for the IVF search strategy
+     * @param queryBits the number of bits to use for query quantization
+     */
+    public IVFKnnFloatVectorQuery(
+        String field,
+        float[] query,
+        int k,
+        int numCands,
+        Query filter,
+        float visitRatio,
+        int queryBits,
+        boolean doPrecondition
+    ) {
+        super(field, visitRatio, k, numCands, filter, queryBits, doPrecondition);
+        this.query = query;
+    }
+
+    /**
+     * Creates a new {@link IVFKnnFloatVectorQuery} with the given parameters using the default query bits.
+     *
+     * @param field the field to search
+     * @param query the query vector
+     * @param k the number of nearest neighbors to return
+     * @param numCands the number of nearest neighbors to gather per shard
+     * @param filter the filter to apply to the results
+     * @param visitRatio the ratio of vectors to score for the IVF search strategy
      */
     public IVFKnnFloatVectorQuery(
         String field,
@@ -49,12 +74,15 @@ public class IVFKnnFloatVectorQuery extends AbstractIVFKnnVectorQuery {
         float visitRatio,
         boolean doPrecondition
     ) {
-        super(field, visitRatio, k, numCands, filter, doPrecondition);
-        this.query = query;
+        this(field, query, k, numCands, filter, visitRatio, -1, doPrecondition);
     }
 
     public float[] getQuery() {
         return query;
+    }
+
+    public int getQueryBits() {
+        return queryBits;
     }
 
     @Override
@@ -137,7 +165,7 @@ public class IVFKnnFloatVectorQuery extends AbstractIVFKnnVectorQuery {
         if (floatVectorValues.size() == 0) {
             return NO_RESULTS;
         }
-        IVFKnnSearchStrategy strategy = new IVFKnnSearchStrategy(visitRatio, knnCollectorManager.longAccumulator);
+        IVFKnnSearchStrategy strategy = new IVFKnnSearchStrategy(visitRatio, queryBits, knnCollectorManager.longAccumulator);
         AbstractMaxScoreKnnCollector knnCollector = knnCollectorManager.newCollector(visitedLimit, strategy, context);
         if (knnCollector == null) {
             return NO_RESULTS;
