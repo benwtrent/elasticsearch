@@ -31,6 +31,7 @@ import org.elasticsearch.index.codec.vectors.cluster.HierarchicalKMeans;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansResult;
 import org.elasticsearch.index.codec.vectors.cluster.KmeansFloatVectorValues;
 import org.elasticsearch.index.codec.vectors.diskbbq.CentroidAssignments;
+import org.elasticsearch.index.codec.vectors.diskbbq.CentroidOrdering;
 import org.elasticsearch.index.codec.vectors.diskbbq.CentroidSupplier;
 import org.elasticsearch.index.codec.vectors.diskbbq.DiskBBQBulkWriter;
 import org.elasticsearch.index.codec.vectors.diskbbq.DocIdsWriter;
@@ -771,7 +772,19 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         }
         int[] assignments = kMeansResult.assignments();
         int[] soarAssignments = kMeansResult.soarAssignments();
-        return new CentroidAssignments(fieldInfo.getVectorDimension(), centroids, assignments, soarAssignments);
+        CentroidOrdering.Result reordered = CentroidOrdering.reorder(
+            fieldInfo.getVectorDimension(),
+            centroids,
+            assignments,
+            soarAssignments,
+            kMeansResult.neighborhoods()
+        );
+        return new CentroidAssignments(
+            fieldInfo.getVectorDimension(),
+            reordered.centroids(),
+            reordered.assignments(),
+            reordered.overspillAssignments()
+        );
     }
 
     static void writeQuantizedValue(IndexOutput indexOutput, byte[] binaryValue, OptimizedScalarQuantizer.QuantizationResult corrections)
