@@ -116,7 +116,8 @@ public class HierarchicalKMeans {
         return cluster(vectors, targetSize, null);
     }
 
-    public KMeansResult cluster(FloatVectorValues vectors, int targetSize, Consumer<NeighborHood[]> neighborhoodsConsumer) throws IOException {
+    public KMeansResult cluster(FloatVectorValues vectors, int targetSize, Consumer<NeighborHood[]> neighborhoodsConsumer)
+        throws IOException {
         if (vectors.size() == 0) {
             return new KMeansIntermediate();
         }

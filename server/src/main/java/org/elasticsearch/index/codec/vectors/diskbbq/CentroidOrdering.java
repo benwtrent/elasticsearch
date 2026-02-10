@@ -72,13 +72,8 @@ public final class CentroidOrdering {
         return reorder(dims, centroids, assignments, overspillAssignments, null);
     }
 
-    public static Result reorder(
-        int dims,
-        float[][] centroids,
-        int[] assignments,
-        int[] overspillAssignments,
-        NeighborHood[] neighborhoods
-    ) throws IOException {
+    public static Result reorder(int dims, float[][] centroids, int[] assignments, int[] overspillAssignments, NeighborHood[] neighborhoods)
+        throws IOException {
         if (centroids.length < MIN_CENTROID_COUNT) {
             return new Result(centroids, assignments, overspillAssignments);
         }
@@ -582,7 +577,7 @@ public final class CentroidOrdering {
                 return;
             }
             Arrays.fill(scratch, 0L);
-            for (int i = nextBitSetSafe(0); i >= 0; ) {
+            for (int i = nextBitSetSafe(0); i >= 0;) {
                 int target = Math.floorMod(i - shift, length);
                 int word = target >>> 6;
                 scratch[word] |= 1L << (target & 63);
