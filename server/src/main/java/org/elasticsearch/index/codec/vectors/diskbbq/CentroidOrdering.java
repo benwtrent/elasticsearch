@@ -84,9 +84,6 @@ public final class CentroidOrdering {
         }
         int n = centroids.length;
         int k = Math.min(DEFAULT_K, n - 1);
-        if (k <= 0) {
-            return new Result(centroids, assignments, overspillAssignments);
-        }
 
         // Build a centroid neighborhood graph to approximate co-visit likelihood during queries.
         final NeighborHood[] resolvedNeighborhoods;
@@ -167,7 +164,7 @@ public final class CentroidOrdering {
         }
 
         // Hilbert-based initialization provides a fast, locality-preserving starting order.
-        int[] ptovHilbert = hilbertOrder(dims, HILBERT_ORDER, centroids);
+        int[] ptovHilbert = hilbertOrder(dims, centroids);
         int[] vtopHilbert = new int[n];
         for (int i = 0; i < n; i++) {
             vtopHilbert[ptovHilbert[i]] = i;
@@ -359,7 +356,7 @@ public final class CentroidOrdering {
         return (float) (1.0 / (1.0 + Math.exp(-value)));
     }
 
-    private static int[] hilbertOrder(int dim, int order, float[][] points) {
+    private static int[] hilbertOrder(int dim, float[][] points) {
         int n = points.length;
         float min = Float.POSITIVE_INFINITY;
         float max = Float.NEGATIVE_INFINITY;
@@ -379,10 +376,10 @@ public final class CentroidOrdering {
 
         BitVector[] hilbertIndices = new BitVector[n];
         int[] coords = new int[dim];
-        HilbertEncoder encoder = new HilbertEncoder(dim, order);
+        HilbertEncoder encoder = new HilbertEncoder(dim, CentroidOrdering.HILBERT_ORDER);
         for (int i = 0; i < n; i++) {
             float[] point = points[i];
-            ESVectorUtil.quantizeVectorWithIntervals(point, coords, min, max, order);
+            ESVectorUtil.quantizeVectorWithIntervals(point, coords, min, max, CentroidOrdering.HILBERT_ORDER);
             hilbertIndices[i] = encoder.encode(coords);
         }
 
@@ -466,7 +463,7 @@ public final class CentroidOrdering {
                 }
 
                 if (i > 0) {
-                    calcT(p, t, dim);
+                    calcT(p, t);
                     t.rotateRight(xj);
                     w.xorVector(t);
                     xj += (calcJ(p, dim) - 1);
@@ -488,15 +485,18 @@ public final class CentroidOrdering {
 
         private static int calcJ(BitVector p, int dim) {
             boolean zeroBit = p.getBit(0);
+            if (zeroBit) {
+                return dim - p.nextBitSetSafe(1);
+            }
             for (int i = 1; i < dim; i++) {
-                if (p.getBit(i) != zeroBit) {
+                if (p.getBit(i) == false) {
                     return dim - i;
                 }
             }
             return dim;
         }
 
-        private static void calcT(BitVector p, BitVector out, int dim) {
+        private static void calcT(BitVector p, BitVector out) {
             if (p.lessThanThree()) {
                 out.clear();
                 return;
@@ -566,7 +566,8 @@ public final class CentroidOrdering {
             if (fromIndex >= length) {
                 return -1;
             }
-            return bits.nextSetBit(fromIndex);
+            int next = bits.nextSetBit(fromIndex);
+            return next >= length ? -1 : next;
         }
 
         void rotateRight(int shift) {
