@@ -18,6 +18,39 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Random;
 
+/**
+ * Reorders DiskBBQ centroids to improve memory locality at query time.
+ *
+ * <p>Why this exists: modern CPUs and the OS move data in cache line sized blocks. When an IVF query
+ * visits multiple centroids and their posting lists, the best case is that those centroids live near
+ * each other on disk and in memory so the same cache line pull serves multiple useful values. The
+ * default centroid order from hierarchical clustering is better than random but still leaves
+ * unrelated centroids interleaved. Since postings inherit centroid order, improving centroid layout
+ * improves vector layout too.
+ *
+ * <p>We model the layout problem as a weighted graph placement problem (Minimum Linear Arrangement).
+ * Vertices are centroids, edges connect centroids that are likely to be visited in the same search,
+ * and the cost is the weighted linear distance between their assigned positions. This objective
+ * favors keeping groups of related centroids close without over-optimizing a single long edge.
+ *
+ * <p>Edge construction: we approximate the unknown query co-visit graph with a nearest-neighbor graph
+ * over centroids. The triangle inequality implies closer centroids are more likely to be similar in
+ * distance to a query, so they co-occur more often. Edge weights scale by local neighbor distance
+ * statistics so weights are bounded and roughly normalized across centroid densities.
+ *
+ * <p>Initialization: a <a href="https://en.wikipedia.org/wiki/Hilbert_curve">Hilbert space-filling curve</a>
+ * provides a fast, locality-preserving ordering of centroids. Hilbert indices are computed from
+ * quantized centroid coordinates (Butz algorithm), and the centroids are initially sorted by those
+ * indices. This can be worse than the hierarchical traversal baseline but gives a strong starting
+ * point for refinement.
+ *
+ * <p>Optimization: we approximate MLA via a <a href="https://en.wikipedia.org/wiki/Simulated_annealing">simulated
+ * annealing</a> variant of the <a href="https://en.wikipedia.org/wiki/Kernighan%E2%80%93Lin_algorithm">Kernighan-Lin</a>
+ * min-cut heuristic. For each temperature, we compute vertex cut weights once and propose swaps in
+ * decreasing cut-weight order using a sigmoid acceptance rule. This reduces the per-level complexity
+ * while allowing occasional uphill moves to escape local minima. We recursively apply the procedure
+ * to left/right halves of the layout and finish with a local 1-opt pass to polish adjacent swaps.
+ */
 public final class CentroidOrdering {
 
     private static final int DEFAULT_K = 32;
@@ -55,9 +88,29 @@ public final class CentroidOrdering {
             return new Result(centroids, assignments, overspillAssignments);
         }
 
-        NeighborHood[] resolvedNeighborhoods = neighborhoods;
-        if (resolvedNeighborhoods == null || resolvedNeighborhoods.length != n) {
+        // Build a centroid neighborhood graph to approximate co-visit likelihood during queries.
+        final NeighborHood[] resolvedNeighborhoods;
+        if (neighborhoods == null || neighborhoods.length != n) {
             resolvedNeighborhoods = NeighborHood.computeNeighborhoods(centroids, k);
+        } else {
+            // trim any provided neighborhoods to k neighbors, if necessary
+            resolvedNeighborhoods = new NeighborHood[n];
+            for (int i = 0; i < n; i++) {
+                int[] localNeighbors = neighborhoods[i].neighbors();
+                float[] localDistances = neighborhoods[i].distances();
+                final int[] topNeighbors;
+                final float[] topDistances;
+                if (localNeighbors.length > k) {
+                    topNeighbors = new int[k];
+                    topDistances = new float[k];
+                    System.arraycopy(localNeighbors, 0, topNeighbors, 0, k);
+                    System.arraycopy(localDistances, 0, topDistances, 0, k);
+                } else {
+                    topNeighbors = localNeighbors;
+                    topDistances = localDistances;
+                }
+                resolvedNeighborhoods[i] = new NeighborHood(topNeighbors, topDistances, topDistances[topDistances.length - 1]);
+            }
         }
         int[][] neighbors = new int[n][];
         float[][] distances = new float[n][];
@@ -76,6 +129,7 @@ public final class CentroidOrdering {
             avgDistances[i] = localNeighbors.length == 0 ? 0.0f : totalDistance / localNeighbors.length;
         }
 
+        // Normalize edge weights by local neighbor distance scale to keep weights bounded.
         float[][] weights = new float[n][];
         float totalWeight = 0.0f;
         for (int i = 0; i < n; i++) {
@@ -104,6 +158,7 @@ public final class CentroidOrdering {
             return new Result(centroids, assignments, overspillAssignments);
         }
 
+        // Layout permutation: ptov maps position -> vertex, vtop maps vertex -> position.
         int[] ptov = new int[n];
         int[] vtop = new int[n];
         for (int i = 0; i < n; i++) {
@@ -111,12 +166,14 @@ public final class CentroidOrdering {
             vtop[i] = i;
         }
 
+        // Hilbert-based initialization provides a fast, locality-preserving starting order.
         int[] ptovHilbert = hilbertOrder(dims, HILBERT_ORDER, centroids);
         int[] vtopHilbert = new int[n];
         for (int i = 0; i < n; i++) {
             vtopHilbert[ptovHilbert[i]] = i;
         }
 
+        // Annealing loop: recursive min-cut with probabilistic swaps to escape local minima.
         Random rng = new Random(RNG_SEED);
         int[] minPtov = Arrays.copyOf(ptov, n);
         int[] minVtop = Arrays.copyOf(vtop, n);
@@ -207,6 +264,7 @@ public final class CentroidOrdering {
         }
         int mid = (a + b) / 2;
         int length = b - a;
+        // Compute per-vertex cut weights for this partition boundary.
         for (int i = 0; i < length; i++) {
             dcostOrder[i] = i;
         }
@@ -229,12 +287,14 @@ public final class CentroidOrdering {
                 dcosts[pos - a] = lcost - rcost;
             }
 
+            // Rank vertices on each side by decreasing potential cut reduction.
             intArraySorter(dcostOrder, 0, mid - a, (lhs, rhs) -> Float.compare(dcosts[rhs], dcosts[lhs]));
             intArraySorter(dcostOrder, mid - a, length, (lhs, rhs) -> Float.compare(dcosts[lhs], dcosts[rhs]));
 
             for (int j = 0; j < mid - a; j++) {
                 int lhs = dcostOrder[j];
                 int rhs = dcostOrder[mid - a + j];
+                // Annealed swap acceptance using a sigmoid of the cut-weight delta.
                 float acceptanceLogit = (dcosts[lhs] - dcosts[rhs] - margin) / (temperature * margin);
                 if (rng.nextFloat() < sigmoid(acceptanceLogit)) {
                     int leftPos = lhs + a;
@@ -252,6 +312,7 @@ public final class CentroidOrdering {
             }
         }
 
+        // Recurse on the left/right halves of the current arrangement.
         recursiveMinCutPartition(rng, a, mid, neighbors, weights, ptov, vtop, margin, dcosts, dcostOrder);
         recursiveMinCutPartition(rng, mid, b, neighbors, weights, ptov, vtop, margin, dcosts, dcostOrder);
     }
@@ -318,10 +379,11 @@ public final class CentroidOrdering {
 
         BitVector[] hilbertIndices = new BitVector[n];
         int[] coords = new int[dim];
+        HilbertEncoder encoder = new HilbertEncoder(dim, order);
         for (int i = 0; i < n; i++) {
             float[] point = points[i];
             ESVectorUtil.quantizeVectorWithIntervals(point, coords, min, max, order);
-            hilbertIndices[i] = hilbertEncode(coords, dim, order);
+            hilbertIndices[i] = encoder.encode(coords);
         }
 
         int[] positions = new int[n];
@@ -364,73 +426,89 @@ public final class CentroidOrdering {
         }.sort(from, length);
     }
 
-    private static BitVector hilbertEncode(int[] point, int dim, int order) {
-        BitVector hcode = new BitVector(dim * order);
-        BitVector w = new BitVector(dim);
-        BitVector tS = new BitVector(dim);
-        BitVector p = new BitVector(dim);
-        BitVector t = new BitVector(dim);
-        int xj = 0;
+    private static final class HilbertEncoder {
+        private final int dim;
+        private final int order;
+        private final BitVector w;
+        private final BitVector tS;
+        private final BitVector p;
+        private final BitVector t;
 
-        for (int i = order - 1; i >= 0; i--) {
-            for (int j = 0; j < dim; j++) {
-                tS.setBit(dim - 1 - j, ((point[j] >> i) & 1) != 0);
-            }
+        private HilbertEncoder(int dim, int order) {
+            this.dim = dim;
+            this.order = order;
+            this.w = new BitVector(dim);
+            this.tS = new BitVector(dim);
+            this.p = new BitVector(dim);
+            this.t = new BitVector(dim);
+        }
 
-            tS.xorVector(w);
-            tS.rotateRight(xj);
-            calcP(tS, p, dim);
+        private BitVector encode(int[] point) {
+            BitVector hcode = new BitVector(dim * order);
+            w.clear();
+            tS.clear();
+            int xj = 0;
 
-            int base = i * dim;
-            for (int j = 0; j < dim; j++) {
-                if (p.getBit(j)) {
-                    hcode.setBit(base + j, true);
+            for (int i = order - 1; i >= 0; i--) {
+                for (int j = 0; j < dim; j++) {
+                    tS.setBit(dim - 1 - j, ((point[j] >> i) & 1) != 0);
+                }
+
+                tS.xorVector(w);
+                tS.rotateRight(xj);
+                calcP(tS, p, dim);
+
+                int base = i * dim;
+                for (int j = 0; j < dim; j++) {
+                    if (p.getBit(j)) {
+                        hcode.setBit(base + j, true);
+                    }
+                }
+
+                if (i > 0) {
+                    calcT(p, t, dim);
+                    t.rotateRight(xj);
+                    w.xorVector(t);
+                    xj += (calcJ(p, dim) - 1);
+                    xj %= dim;
                 }
             }
-
-            if (i > 0) {
-                calcT(p, t, dim);
-                t.rotateRight(xj);
-                w.xorVector(t);
-                xj += (calcJ(p, dim) - 1);
-                xj %= dim;
-            }
+            return hcode;
         }
-        return hcode;
-    }
 
-    private static void calcP(BitVector s, BitVector out, int dim) {
-        out.clear();
-        boolean last = false;
-        for (int i = dim - 1; i >= 0; i--) {
-            boolean pbit = s.getBit(i) ^ last;
-            out.setBit(i, pbit);
-            last = pbit;
-        }
-    }
-
-    private static int calcJ(BitVector p, int dim) {
-        boolean zeroBit = p.getBit(0);
-        for (int i = 1; i < dim; i++) {
-            if (p.getBit(i) != zeroBit) {
-                return dim - i;
-            }
-        }
-        return dim;
-    }
-
-    private static void calcT(BitVector p, BitVector out, int dim) {
-        if (p.lessThanThree()) {
+        private static void calcP(BitVector s, BitVector out, int dim) {
             out.clear();
-            return;
+            boolean last = false;
+            for (int i = dim - 1; i >= 0; i--) {
+                boolean pbit = s.getBit(i) ^ last;
+                out.setBit(i, pbit);
+                last = pbit;
+            }
         }
-        out.copyFrom(p);
-        if (out.getBit(0)) {
-            out.decrement(1);
-        } else {
-            out.decrement(2);
+
+        private static int calcJ(BitVector p, int dim) {
+            boolean zeroBit = p.getBit(0);
+            for (int i = 1; i < dim; i++) {
+                if (p.getBit(i) != zeroBit) {
+                    return dim - i;
+                }
+            }
+            return dim;
         }
-        out.transformToGray();
+
+        private static void calcT(BitVector p, BitVector out, int dim) {
+            if (p.lessThanThree()) {
+                out.clear();
+                return;
+            }
+            out.copyFrom(p);
+            if (out.getBit(0)) {
+                out.decrement(1);
+            } else {
+                out.decrement(2);
+            }
+            out.transformToGray();
+        }
     }
 
     private static final class BitVector implements Comparable<BitVector> {
