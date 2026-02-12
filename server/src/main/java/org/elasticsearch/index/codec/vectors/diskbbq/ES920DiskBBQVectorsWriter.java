@@ -27,7 +27,6 @@ import org.elasticsearch.index.codec.vectors.OptimizedScalarQuantizer;
 import org.elasticsearch.index.codec.vectors.cluster.HierarchicalKMeans;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansResult;
 import org.elasticsearch.index.codec.vectors.cluster.KmeansFloatVectorValues;
-import org.elasticsearch.index.codec.vectors.diskbbq.CentroidOrdering;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
 import org.elasticsearch.simdvec.ESVectorUtil;
@@ -653,20 +652,11 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
         if (logger.isDebugEnabled()) {
             logger.debug("final centroid count: {}", centroids.length);
         }
-        int[] assignments = kMeansResult.assignments();
-        int[] soarAssignments = kMeansResult.soarAssignments();
-        CentroidOrdering.Result reordered = CentroidOrdering.reorder(
-            fieldInfo.getVectorDimension(),
-            centroids,
-            assignments,
-            soarAssignments,
-            kMeansResult.neighborhoods()
-        );
         return new CentroidAssignments(
             fieldInfo.getVectorDimension(),
-            reordered.centroids(),
-            reordered.assignments(),
-            reordered.overspillAssignments()
+            kMeansResult.centroids(),
+            kMeansResult.assignments(),
+            kMeansResult.soarAssignments()
         );
     }
 

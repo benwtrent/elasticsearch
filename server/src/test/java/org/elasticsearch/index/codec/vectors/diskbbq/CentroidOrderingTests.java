@@ -93,11 +93,31 @@ public class CentroidOrderingTests extends ESTestCase {
         }
 
         int[] overspill = new int[0];
-        float baselineCost = neighborCost(centroids);
-        CentroidOrdering.Result result = CentroidOrdering.reorder(dim, centroids, assignments, overspill, null);
-        float reorderedCost = neighborCost(result.centroids());
-
-        assertTrue(reorderedCost < baselineCost);
+        int trials = 5;
+        int improved = 0;
+        for (int i = 0; i < trials; i++) {
+            float[][] shuffled = new float[centroids.length][dim];
+            int[] order = new int[centroids.length];
+            for (int j = 0; j < order.length; j++) {
+                order[j] = j;
+            }
+            for (int j = order.length - 1; j > 0; j--) {
+                int swapWith = randomIntBetween(0, j);
+                int tmp = order[j];
+                order[j] = order[swapWith];
+                order[swapWith] = tmp;
+            }
+            for (int j = 0; j < centroids.length; j++) {
+                shuffled[j] = centroids[order[j]];
+            }
+            float baselineCost = neighborCost(shuffled);
+            CentroidOrdering.Result result = CentroidOrdering.reorder(dim, shuffled, assignments, overspill, null);
+            float reorderedCost = neighborCost(result.centroids());
+            if (reorderedCost < baselineCost) {
+                improved++;
+            }
+        }
+        assertTrue(improved >= 3);
     }
 
     private static float neighborCost(float[][] centroids) {

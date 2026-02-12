@@ -62,7 +62,7 @@ public final class CentroidOrdering {
     private static final int LOCAL_1_OPT_ROUNDS = 128;
     private static final float WEIGHT_CAP = 5.0f;
     private static final float MARGIN_SCALE = 0.08f;
-    private static final long RNG_SEED = 0L;
+    private static final long RNG_SEED = 42L;
 
     private CentroidOrdering() {}
 
@@ -72,13 +72,8 @@ public final class CentroidOrdering {
         return reorder(dims, centroids, assignments, overspillAssignments, null);
     }
 
-    public static Result reorder(
-        int dims,
-        float[][] centroids,
-        int[] assignments,
-        int[] overspillAssignments,
-        NeighborHood[] neighborhoods
-    ) throws IOException {
+    public static Result reorder(int dims, float[][] centroids, int[] assignments, int[] overspillAssignments, NeighborHood[] neighborhoods)
+        throws IOException {
         if (centroids.length < MIN_CENTROID_COUNT) {
             return new Result(centroids, assignments, overspillAssignments);
         }
@@ -90,41 +85,29 @@ public final class CentroidOrdering {
         if (neighborhoods == null || neighborhoods.length != n) {
             resolvedNeighborhoods = NeighborHood.computeNeighborhoods(centroids, k);
         } else {
-            // trim any provided neighborhoods to k neighbors, if necessary
-            resolvedNeighborhoods = new NeighborHood[n];
-            for (int i = 0; i < n; i++) {
-                int[] localNeighbors = neighborhoods[i].neighbors();
-                float[] localDistances = neighborhoods[i].distances();
-                final int[] topNeighbors;
-                final float[] topDistances;
-                if (localNeighbors.length > k) {
-                    topNeighbors = new int[k];
-                    topDistances = new float[k];
-                    System.arraycopy(localNeighbors, 0, topNeighbors, 0, k);
-                    System.arraycopy(localDistances, 0, topDistances, 0, k);
-                } else {
-                    topNeighbors = localNeighbors;
-                    topDistances = localDistances;
-                }
-                resolvedNeighborhoods[i] = new NeighborHood(topNeighbors, topDistances, topDistances[topDistances.length - 1]);
-            }
+            resolvedNeighborhoods = neighborhoods;
         }
+
         int[][] neighbors = new int[n][];
         float[][] distances = new float[n][];
         float[] avgDistances = new float[n];
         for (int i = 0; i < n; i++) {
             int[] localNeighbors = resolvedNeighborhoods[i].neighbors();
-            neighbors[i] = localNeighbors;
             float[] localDistances = resolvedNeighborhoods[i].distances();
+            int limit = Math.min(localNeighbors.length, k);
             float totalDistance = 0.0f;
-            for (int j = 0; j < localNeighbors.length; j++) {
+            for (int j = 0; j < limit; j++) {
                 float dist = (float) Math.sqrt(localDistances[j]);
                 localDistances[j] = dist;
                 totalDistance += dist;
             }
+            neighbors[i] = localNeighbors;
             distances[i] = localDistances;
-            avgDistances[i] = localNeighbors.length == 0 ? 0.0f : totalDistance / localNeighbors.length;
+            avgDistances[i] = limit == 0 ? 0.0f : totalDistance / limit;
         }
+
+        // Opportunistically symmetrize neighbor lists without exceeding k.
+        symmetrizeNeighbors(neighbors, distances, k);
 
         // Normalize edge weights by local neighbor distance scale to keep weights bounded.
         float[][] weights = new float[n][];
@@ -132,8 +115,9 @@ public final class CentroidOrdering {
         for (int i = 0; i < n; i++) {
             int[] localNeighbors = neighbors[i];
             float[] localDistances = distances[i];
-            float[] localWeights = new float[localNeighbors.length];
-            for (int j = 0; j < localNeighbors.length; j++) {
+            int limit = Math.min(localNeighbors.length, k);
+            float[] localWeights = new float[limit];
+            for (int j = 0; j < limit; j++) {
                 int neighbor = localNeighbors[j];
                 float avg = 0.5f * (avgDistances[i] + avgDistances[neighbor]);
                 float dist = localDistances[j];
@@ -227,6 +211,59 @@ public final class CentroidOrdering {
         return remapped;
     }
 
+    private static void symmetrizeNeighbors(int[][] neighbors, float[][] distances, int k) {
+        int n = neighbors.length;
+        for (int i = 0; i < n; i++) {
+            int[] localNeighbors = neighbors[i];
+            float[] localDistances = distances[i];
+            int limit = Math.min(localNeighbors.length, k);
+            for (int j = 0; j < limit; j++) {
+                int neighbor = localNeighbors[j];
+                if (neighbor == i) {
+                    continue;
+                }
+                if (containsNeighbor(neighbors[neighbor], i, k)) {
+                    continue;
+                }
+                int insertAt = findReplaceCandidate(distances[neighbor], k);
+                if (insertAt == -1) {
+                    continue;
+                }
+                if (insertAt >= neighbors[neighbor].length) {
+                    continue;
+                }
+                neighbors[neighbor][insertAt] = i;
+                distances[neighbor][insertAt] = localDistances[j];
+            }
+        }
+    }
+
+    private static boolean containsNeighbor(int[] neighbors, int target, int k) {
+        int limit = Math.min(neighbors.length, k);
+        for (int i = 0; i < limit; i++) {
+            if (neighbors[i] == target) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int findReplaceCandidate(float[] distances, int k) {
+        int limit = Math.min(distances.length, k);
+        if (limit == 0) {
+            return -1;
+        }
+        int worstIndex = 0;
+        float worstDistance = distances[distances.length - 1];
+        for (int i = 1; i < limit; i++) {
+            if (distances[i] > worstDistance) {
+                worstDistance = distances[i];
+                worstIndex = i;
+            }
+        }
+        return worstIndex;
+    }
+
     private static float permutationCost(int[][] neighbors, float[][] weights, int[] vtop) {
         float cost = 0.0f;
         int endpoints = 0;
@@ -234,7 +271,7 @@ public final class CentroidOrdering {
             int pos = vtop[i];
             int[] localNeighbors = neighbors[i];
             float[] localWeights = weights[i];
-            for (int j = 0; j < localNeighbors.length; j++) {
+            for (int j = 0; j < localWeights.length; j++) {
                 int neighbor = localNeighbors[j];
                 int neighborPos = vtop[neighbor];
                 cost += localWeights[j] * Math.abs(pos - neighborPos);
@@ -273,7 +310,7 @@ public final class CentroidOrdering {
                 float lcost = 0.0f;
                 int[] localNeighbors = neighbors[vertex];
                 float[] localWeights = weights[vertex];
-                for (int i = 0; i < localNeighbors.length; i++) {
+                for (int i = 0; i < localWeights.length; i++) {
                     int neighbor = localNeighbors[i];
                     if (vtop[neighbor] < mid) {
                         rcost += localWeights[i];
@@ -325,7 +362,7 @@ public final class CentroidOrdering {
                 int vertexJ = ptov[j];
                 int[] neighborsI = neighbors[vertexI];
                 float[] weightsI = weights[vertexI];
-                for (int n = 0; n < neighborsI.length; n++) {
+                for (int n = 0; n < weightsI.length; n++) {
                     int k = vtop[neighborsI[n]];
                     if (k == j) {
                         continue;
@@ -334,7 +371,7 @@ public final class CentroidOrdering {
                 }
                 int[] neighborsJ = neighbors[vertexJ];
                 float[] weightsJ = weights[vertexJ];
-                for (int n = 0; n < neighborsJ.length; n++) {
+                for (int n = 0; n < weightsJ.length; n++) {
                     int k = vtop[neighborsJ[n]];
                     if (k == i) {
                         continue;
@@ -582,7 +619,7 @@ public final class CentroidOrdering {
                 return;
             }
             Arrays.fill(scratch, 0L);
-            for (int i = nextBitSetSafe(0); i >= 0; ) {
+            for (int i = nextBitSetSafe(0); i >= 0;) {
                 int target = Math.floorMod(i - shift, length);
                 int word = target >>> 6;
                 scratch[word] |= 1L << (target & 63);
