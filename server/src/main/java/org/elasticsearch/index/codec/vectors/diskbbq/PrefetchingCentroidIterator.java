@@ -108,4 +108,12 @@ public final class PrefetchingCentroidIterator implements CentroidIterator {
 
         return result;
     }
+
+    /**
+     * Returns the underlying delegate iterator. This allows access to implementation-specific
+     * methods (e.g., beam search continuation) that are not part of the CentroidIterator interface.
+     */
+    public CentroidIterator delegate() {
+        return delegate;
+    }
 }

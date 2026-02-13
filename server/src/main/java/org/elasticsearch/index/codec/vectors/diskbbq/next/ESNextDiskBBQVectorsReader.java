@@ -140,8 +140,6 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
 
         CentroidIterator centroidIterator;
         if (numParents > 0) {
-            // equivalent to (float) centroidsPerParentCluster / 2
-            float centroidOversampling = (float) fieldEntry.numCentroids() / (2 * numParents);
             centroidIterator = getCentroidIteratorWithParents(
                 fieldInfo,
                 centroids,
@@ -151,7 +149,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 quantized,
                 queryParams,
                 fieldEntry.globalCentroidDp(),
-                visitRatio * centroidOversampling,
+                visitRatio,
                 acceptCentroids,
                 bulkSize
             );
@@ -343,20 +341,16 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         byte[] quantizeQuery,
         OptimizedScalarQuantizer.QuantizationResult queryParams,
         float globalCentroidDp,
-        float centroidRatio,
+        float visitRatio,
         FixedBitSet acceptCentroids,
         int bulkSize
     ) throws IOException {
-        // build the three queues we are going to use
         final long rawParentSize = (long) fieldInfo.getVectorDimension() * Float.BYTES;
         final long centroidQuantizeSize = fieldInfo.getVectorDimension() + 3 * Float.BYTES + Integer.BYTES;
         final NeighborQueue parentsQueue = new NeighborQueue(numParents, true);
         final int maxChildrenSize = centroids.readVInt();
-        final NeighborQueue currentParentQueue = new NeighborQueue(maxChildrenSize, true);
-        final int bufferSize = (int) Math.min(Math.max(centroidRatio * numCentroids, 1), numCentroids);
         final int numCentroidsFiltered = acceptCentroids == null ? numCentroids : acceptCentroids.cardinality();
         if (numCentroidsFiltered == 0) {
-            // TODO maybe this makes CentroidIterator polymorphic?
             return new CentroidIterator() {
                 @Override
                 public boolean hasNext() {
@@ -369,19 +363,20 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 }
             };
         }
+        // Compute static target centroid count and beam width from visitRatio
+        final int targetCentroids = Math.min(Math.max(1, Math.round(visitRatio * numCentroids)), numCentroids);
+        final int beamWidth;
         final float[] scores = new float[bulkSize];
-        final NeighborQueue neighborQueue;
-        if (acceptCentroids != null && numCentroidsFiltered <= bufferSize) {
-            // we are collecting every non-filter centroid, therefore we do not need to score the
-            // parents. We give each of them the same score.
-            neighborQueue = new NeighborQueue(numCentroidsFiltered, true);
+        if (acceptCentroids != null && numCentroidsFiltered <= targetCentroids) {
+            // All filtered centroids fit within the target, no need to score parents
+            beamWidth = numParents;
             for (int i = 0; i < numParents; i++) {
                 parentsQueue.add(i, 0.5f);
             }
             centroids.skipBytes((centroidQuantizeSize + rawParentSize) * numParents);
         } else {
-            neighborQueue = new NeighborQueue(bufferSize, true);
-            // score the parents
+            beamWidth = (int) Math.min(Math.ceil((double) targetCentroids * numParents / numCentroids), numParents);
+            // Score all parents
             centroids.skipBytes(rawParentSize * numParents);
             score(
                 parentsQueue,
@@ -399,81 +394,131 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 bulkSize
             );
         }
-
         final long offset = centroids.getFilePointer();
         final long childrenOffset = offset + (long) Long.BYTES * numParents;
-        // populate the children's queue by reading parents one by one
-        while (parentsQueue.size() > 0 && neighborQueue.size() < bufferSize) {
-            final int pop = parentsQueue.pop();
-            populateOneChildrenGroup(
-                currentParentQueue,
-                centroids,
-                offset + 2L * Integer.BYTES * pop,
-                childrenOffset,
-                centroidQuantizeSize,
-                fieldInfo,
-                scorer,
-                quantizeQuery,
-                queryParams,
-                globalCentroidDp,
-                scores,
-                acceptCentroids,
-                bulkSize
-            );
-            while (currentParentQueue.size() > 0 && neighborQueue.size() < bufferSize) {
-                final float score = currentParentQueue.topScore();
-                final int children = currentParentQueue.pop();
-                neighborQueue.add(children, score);
+        final long childrenFileOffsets = childrenOffset + centroidQuantizeSize * numCentroids;
+
+        ClusterLevelExpander expander = (nodeOrd, childrenQueue) -> populateOneChildrenGroup(
+            childrenQueue,
+            centroids,
+            offset + 2L * Integer.BYTES * nodeOrd,
+            childrenOffset,
+            centroidQuantizeSize,
+            fieldInfo,
+            scorer,
+            quantizeQuery,
+            queryParams,
+            globalCentroidDp,
+            scores,
+            acceptCentroids,
+            bulkSize
+        );
+
+        LeafPostingReader leafReader = (centroidOrd, centroidScore) -> {
+            centroids.seek(childrenFileOffsets + (long) (Long.BYTES * 2 + Integer.BYTES) * centroidOrd);
+            long postingListOffset = centroids.readLong();
+            long postingListLength = centroids.readLong();
+            int parentOrd = centroids.readInt();
+            return new PostingMetadata(postingListOffset, postingListLength, parentOrd, centroidScore);
+        };
+
+        return new BeamSearchCentroidIterator(parentsQueue, beamWidth, numCentroids, maxChildrenSize, expander, leafReader);
+    }
+
+    /**
+     * Expands a node at one level of the cluster hierarchy into scored children.
+     * For single-parent: expands a parent ordinal into scored child centroids.
+     * For future multi-level hierarchies: one instance per non-leaf level.
+     */
+    @FunctionalInterface
+    interface ClusterLevelExpander {
+        /**
+         * Expand the node at the given ordinal, scoring its children
+         * and adding them to the provided queue.
+         */
+        void expandNode(int nodeOrd, NeighborQueue childrenQueue) throws IOException;
+    }
+
+    /**
+     * Converts a leaf-level centroid ordinal and score into {@link PostingMetadata}.
+     * Decouples the beam search result iteration from the on-disk posting metadata layout.
+     */
+    @FunctionalInterface
+    interface LeafPostingReader {
+        PostingMetadata readPostingMetadata(int centroidOrd, float centroidScore) throws IOException;
+    }
+
+    /**
+     * A centroid iterator that uses beam-width search to find the best centroids.
+     * Scores all parents, expands the top-B parents (the beam), scores all their children,
+     * and ranks children from all expanded parents together (interleaved by score).
+     * Supports continuation via {@link #continueSearch()} for exceptional cases where
+     * the initial beam didn't produce enough centroids.
+     */
+    public static class BeamSearchCentroidIterator implements CentroidIterator {
+        private final NeighborQueue resultQueue;
+        private final NeighborQueue parentsQueue;
+        private final NeighborQueue tempQueue;
+        private final ClusterLevelExpander expander;
+        private final LeafPostingReader leafReader;
+
+        BeamSearchCentroidIterator(
+            NeighborQueue parentsQueue,
+            int beamWidth,
+            int initialResultCapacity,
+            int maxChildrenPerNode,
+            ClusterLevelExpander expander,
+            LeafPostingReader leafReader
+        ) throws IOException {
+            this.parentsQueue = parentsQueue;
+            this.expander = expander;
+            this.leafReader = leafReader;
+            this.tempQueue = new NeighborQueue(maxChildrenPerNode, true);
+            this.resultQueue = new NeighborQueue(initialResultCapacity, true);
+            // Expand the beam: pop top beamWidth parents and score all their children
+            int expanded = 0;
+            while (parentsQueue.size() > 0 && expanded < beamWidth) {
+                expandNode(parentsQueue.pop());
+                expanded++;
             }
         }
-        final long childrenFileOffsets = childrenOffset + centroidQuantizeSize * numCentroids;
-        return new CentroidIterator() {
 
-            @Override
-            public boolean hasNext() {
-                return neighborQueue.size() > 0;
+        private void expandNode(int nodeOrd) throws IOException {
+            tempQueue.clear();
+            expander.expandNode(nodeOrd, tempQueue);
+            // Move all scored children into the result queue (interleaved with existing results)
+            while (tempQueue.size() > 0) {
+                float childScore = tempQueue.topScore();
+                int child = tempQueue.pop();
+                resultQueue.add(child, childScore);
             }
+        }
 
-            @Override
-            public PostingMetadata nextPosting() throws IOException {
-                long centroidOrdinalAndScore = nextCentroid();
-                int centroidOrdinal = neighborQueue.decodeNodeId(centroidOrdinalAndScore);
-                float score = neighborQueue.decodeScore(centroidOrdinalAndScore);
-                centroids.seek(childrenFileOffsets + (long) (Long.BYTES * 2 + Integer.BYTES) * centroidOrdinal);
-                long postingListOffset = centroids.readLong();
-                long postingListLength = centroids.readLong();
-                int parentOrd = centroids.readInt();
-                return new PostingMetadata(postingListOffset, postingListLength, parentOrd, score);
-            }
+        @Override
+        public boolean hasNext() {
+            return resultQueue.size() > 0;
+        }
 
-            private long nextCentroid() throws IOException {
-                if (currentParentQueue.size() > 0) {
-                    // return next centroid and maybe add a children from the current parent queue
-                    return neighborQueue.popRawAndAddRaw(currentParentQueue.popRaw());
-                } else if (parentsQueue.size() > 0) {
-                    // current parent queue is empty, populate it again with the next parent
-                    int pop = parentsQueue.pop();
-                    populateOneChildrenGroup(
-                        currentParentQueue,
-                        centroids,
-                        offset + 2L * Integer.BYTES * pop,
-                        childrenOffset,
-                        centroidQuantizeSize,
-                        fieldInfo,
-                        scorer,
-                        quantizeQuery,
-                        queryParams,
-                        globalCentroidDp,
-                        scores,
-                        acceptCentroids,
-                        bulkSize
-                    );
-                    return nextCentroid();
-                } else {
-                    return neighborQueue.popRaw();
-                }
+        @Override
+        public PostingMetadata nextPosting() throws IOException {
+            long centroidOrdinalAndScore = resultQueue.popRaw();
+            int centroidOrd = resultQueue.decodeNodeId(centroidOrdinalAndScore);
+            float score = resultQueue.decodeScore(centroidOrdinalAndScore);
+            return leafReader.readPostingMetadata(centroidOrd, score);
+        }
+
+        /**
+         * Continue the beam search by expanding the next best unexplored parent.
+         * This is intended for exceptional cases where the initial beam didn't produce enough centroids.
+         * @return true if new centroids were added to the result queue, false if no more parents to explore
+         */
+        public boolean continueSearch() throws IOException {
+            if (parentsQueue.size() == 0) {
+                return false;
             }
-        };
+            expandNode(parentsQueue.pop());
+            return resultQueue.size() > 0;
+        }
     }
 
     private static void populateOneChildrenGroup(
