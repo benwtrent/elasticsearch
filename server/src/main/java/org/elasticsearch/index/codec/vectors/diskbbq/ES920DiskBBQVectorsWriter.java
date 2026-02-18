@@ -490,8 +490,14 @@ public class ES920DiskBBQVectorsWriter extends IVFVectorsWriter {
     }
 
     @Override
-    public void doWriteMeta(IndexOutput ivfMeta, FieldInfo field, int numCentroids, long preconditionerOfffset, long preconditionerLength)
-        throws IOException {
+    public void doWriteMeta(
+        IndexOutput ivfMeta,
+        FieldInfo field,
+        int numCentroids,
+        long preconditionerOffset,
+        long preconditionerLength,
+        CentroidIndexMetaWriter centroidIndexMetaWriter
+    ) throws IOException {
         // Do Nothing Extra
     }
 

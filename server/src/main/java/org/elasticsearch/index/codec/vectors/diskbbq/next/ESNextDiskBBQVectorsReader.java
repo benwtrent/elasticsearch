@@ -19,10 +19,16 @@ import org.apache.lucene.search.AcceptDocs;
 import org.apache.lucene.search.ConjunctionUtils;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.KnnCollector;
+import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.TopKnnCollector;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.FixedBitSet;
+import org.apache.lucene.util.GroupVIntUtil;
 import org.apache.lucene.util.LongValues;
+import org.apache.lucene.util.hnsw.HnswGraph;
+import org.apache.lucene.util.hnsw.HnswGraphSearcher;
+import org.apache.lucene.util.hnsw.RandomVectorScorer;
 import org.apache.lucene.util.packed.DirectReader;
 import org.apache.lucene.util.packed.DirectWriter;
 import org.elasticsearch.common.cache.Cache;
@@ -42,12 +48,14 @@ import org.elasticsearch.simdvec.ESNextOSQVectorsScorer;
 import org.elasticsearch.simdvec.ESVectorUtil;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
 import static org.elasticsearch.index.codec.vectors.OptimizedScalarQuantizer.DEFAULT_LAMBDA;
 import static org.elasticsearch.index.codec.vectors.diskbbq.PostingMetadata.NO_ORDINAL;
+import static org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS;
 import static org.elasticsearch.simdvec.ESNextOSQVectorsScorer.BULK_SIZE;
 
 /**
@@ -55,6 +63,8 @@ import static org.elasticsearch.simdvec.ESNextOSQVectorsScorer.BULK_SIZE;
  * brute force and then scores the top ones using the posting list.
  */
 public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements VectorPreconditioner {
+    private static final float GRAPH_CENTROID_OVERSAMPLE_MULTIPLIER = 2.5f;
+    private static final int CENTROID_BULK_SIZE = 1;
 
     public ESNextDiskBBQVectorsReader(SegmentReadState state, GenericFlatVectorReaders.LoadFlatVectorsReader getFormatReader)
         throws IOException {
@@ -97,7 +107,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         float visitRatio
     ) throws IOException {
         final FieldEntry fieldEntry = fields.get(fieldInfo.number);
-        int bulkSize = fieldEntry.getBulkSize();
+        int bulkSize = CENTROID_BULK_SIZE;
         float approximateDocsPerCentroid = approximateCost / numCentroids;
         if (approximateDocsPerCentroid <= 1.25) {
             // TODO: we need to make this call to build the iterator, otherwise accept docs breaks all together
@@ -137,10 +147,23 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         final ES92Int7VectorsScorer scorer = ESVectorUtil.getES92Int7VectorsScorer(centroids, fieldInfo.getVectorDimension(), bulkSize);
         centroids.seek(fp + sizeLookup);
         int numParents = centroids.readVInt();
-
-        CentroidIterator centroidIterator;
-        if (numParents > 0) {
-            centroidIterator = getCentroidIteratorWithParents(
+        final NextFieldEntry nextFieldEntry = (NextFieldEntry) fieldEntry;
+        final long quantizedStart = centroids.getFilePointer() + (long) numParents * fieldInfo.getVectorDimension() * Float.BYTES;
+        final CentroidIterator centroidIterator = nextFieldEntry.hasCentroidGraph()
+            ? getCentroidIteratorGraph(
+                fieldInfo,
+                centroids,
+                nextFieldEntry,
+                quantizedStart,
+                numParents,
+                numCentroids,
+                quantized,
+                queryParams,
+                fieldEntry.globalCentroidDp(),
+                acceptCentroids,
+                visitRatio
+            )
+            : getCentroidIteratorFlat(
                 fieldInfo,
                 centroids,
                 numParents,
@@ -149,23 +172,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 quantized,
                 queryParams,
                 fieldEntry.globalCentroidDp(),
-                visitRatio,
                 acceptCentroids,
                 bulkSize
             );
-        } else {
-            centroidIterator = getCentroidIteratorNoParent(
-                fieldInfo,
-                centroids,
-                numCentroids,
-                scorer,
-                quantized,
-                queryParams,
-                fieldEntry.globalCentroidDp(),
-                acceptCentroids,
-                bulkSize
-            );
-        }
         return getPostingListPrefetchIterator(centroidIterator, postingListSlice);
     }
 
@@ -191,6 +200,36 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         if (preconditionerLength > 0) {
             preconditionerOffset = input.readLong();
         }
+        long centroidIndexLength = input.readLong();
+        long centroidIndexOffset = -1;
+        int centroidGraphNumLevels = 0;
+        int centroidGraphMaxConn = HnswGraph.UNKNOWN_MAX_CONN;
+        int[][] centroidGraphNodesByLevel = new int[0][];
+        int centroidGraphOffsetsBitsPerValue = -1;
+        long centroidGraphValueCount = 0L;
+        long centroidGraphOffsetsDataOffset = -1L;
+        long centroidGraphOffsetsDataLength = 0L;
+        if (centroidIndexLength > 0) {
+            centroidIndexOffset = input.readLong();
+            centroidGraphNumLevels = input.readVInt();
+            centroidGraphMaxConn = input.readVInt();
+            centroidGraphNodesByLevel = new int[centroidGraphNumLevels][];
+            centroidGraphNodesByLevel[0] = new int[0];
+            for (int level = 1; level < centroidGraphNumLevels; level++) {
+                final int count = input.readVInt();
+                final int[] nodes = new int[count];
+                int previous = 0;
+                for (int i = 0; i < count; i++) {
+                    previous += input.readVInt();
+                    nodes[i] = previous;
+                }
+                centroidGraphNodesByLevel[level] = nodes;
+            }
+            centroidGraphValueCount = input.readVLong();
+            centroidGraphOffsetsBitsPerValue = input.readVInt();
+            centroidGraphOffsetsDataOffset = input.readVLong();
+            centroidGraphOffsetsDataLength = input.readVLong();
+        }
         return new NextFieldEntry(
             rawVectorFormat,
             useDirectIOReads,
@@ -206,7 +245,16 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             quantEncoding,
             bulkSize,
             preconditionerOffset,
-            preconditionerLength
+            preconditionerLength,
+            centroidIndexOffset,
+            centroidIndexLength,
+            centroidGraphNumLevels,
+            centroidGraphMaxConn,
+            centroidGraphNodesByLevel,
+            centroidGraphOffsetsBitsPerValue,
+            centroidGraphValueCount,
+            centroidGraphOffsetsDataOffset,
+            centroidGraphOffsetsDataLength
         );
     }
 
@@ -233,6 +281,15 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         private final ESNextDiskBBQVectorsFormat.QuantEncoding quantEncoding;
         protected final long preconditionerOffset;
         protected final long preconditionerLength;
+        protected final long centroidIndexOffset;
+        protected final long centroidIndexLength;
+        protected final int centroidGraphNumLevels;
+        protected final int centroidGraphMaxConn;
+        protected final int[][] centroidGraphNodesByLevel;
+        protected final int centroidGraphOffsetsBitsPerValue;
+        protected final long centroidGraphValueCount;
+        protected final long centroidGraphOffsetsDataOffset;
+        protected final long centroidGraphOffsetsDataLength;
 
         NextFieldEntry(
             String rawVectorFormat,
@@ -249,7 +306,16 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             ESNextDiskBBQVectorsFormat.QuantEncoding quantEncoding,
             int bulkSize,
             long preconditionerOffset,
-            long preconditionerLength
+            long preconditionerLength,
+            long centroidIndexOffset,
+            long centroidIndexLength,
+            int centroidGraphNumLevels,
+            int centroidGraphMaxConn,
+            int[][] centroidGraphNodesByLevel,
+            int centroidGraphOffsetsBitsPerValue,
+            long centroidGraphValueCount,
+            long centroidGraphOffsetsDataOffset,
+            long centroidGraphOffsetsDataLength
         ) {
             super(
                 rawVectorFormat,
@@ -268,6 +334,15 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             this.quantEncoding = quantEncoding;
             this.preconditionerOffset = preconditionerOffset;
             this.preconditionerLength = preconditionerLength;
+            this.centroidIndexOffset = centroidIndexOffset;
+            this.centroidIndexLength = centroidIndexLength;
+            this.centroidGraphNumLevels = centroidGraphNumLevels;
+            this.centroidGraphMaxConn = centroidGraphMaxConn;
+            this.centroidGraphNodesByLevel = centroidGraphNodesByLevel;
+            this.centroidGraphOffsetsBitsPerValue = centroidGraphOffsetsBitsPerValue;
+            this.centroidGraphValueCount = centroidGraphValueCount;
+            this.centroidGraphOffsetsDataOffset = centroidGraphOffsetsDataOffset;
+            this.centroidGraphOffsetsDataLength = centroidGraphOffsetsDataLength;
         }
 
         public ESNextDiskBBQVectorsFormat.QuantEncoding quantEncoding() {
@@ -281,11 +356,121 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         public long preconditionerLength() {
             return preconditionerLength;
         }
+
+        public long centroidIndexOffset() {
+            return centroidIndexOffset;
+        }
+
+        public long centroidIndexLength() {
+            return centroidIndexLength;
+        }
+
+        public boolean hasCentroidGraph() {
+            return centroidIndexLength > 0 && centroidGraphValueCount > 0 && centroidGraphOffsetsBitsPerValue > 0;
+        }
     }
 
-    private static CentroidIterator getCentroidIteratorNoParent(
+    private CentroidIterator getCentroidIteratorGraph(
         FieldInfo fieldInfo,
         IndexInput centroids,
+        NextFieldEntry fieldEntry,
+        long quantizedStart,
+        int numParents,
+        int numCentroids,
+        byte[] quantizeQuery,
+        OptimizedScalarQuantizer.QuantizationResult queryParams,
+        float globalCentroidDp,
+        FixedBitSet acceptCentroids,
+        float visitRatio
+    ) throws IOException {
+        final OffHeapHnswGraph graph = new OffHeapHnswGraph(fieldEntry, numCentroids, ivfCentroids);
+        if (graph.isEmpty()) {
+            final ES92Int7VectorsScorer scorer = ESVectorUtil.getES92Int7VectorsScorer(
+                centroids,
+                fieldInfo.getVectorDimension(),
+                CENTROID_BULK_SIZE
+            );
+            return getCentroidIteratorFlat(
+                fieldInfo,
+                centroids,
+                numParents,
+                numCentroids,
+                scorer,
+                quantizeQuery,
+                queryParams,
+                globalCentroidDp,
+                acceptCentroids,
+                CENTROID_BULK_SIZE
+            );
+        }
+        final int desiredCentroids = Math.max(1, Math.min(numCentroids, (int) Math.ceil(numCentroids * visitRatio)));
+        final int gatheredCentroids = Math.max(
+            desiredCentroids,
+            Math.min(numCentroids, (int) Math.ceil(desiredCentroids * GRAPH_CENTROID_OVERSAMPLE_MULTIPLIER))
+        );
+        final RandomVectorScorer centroidScorer = new OffHeapCentroidQueryScorer(
+            fieldInfo.getVectorDimension(),
+            numCentroids,
+            centroids.slice(
+                "quantized-centroids",
+                quantizedStart,
+                (long) numCentroids * (fieldInfo.getVectorDimension() + 3L * Float.BYTES + Integer.BYTES)
+            ),
+            quantizeQuery,
+            queryParams,
+            fieldInfo.getVectorSimilarityFunction(),
+            globalCentroidDp
+        );
+        final TopKnnCollector collector = new TopKnnCollector(gatheredCentroids, Integer.MAX_VALUE);
+        final int filteredDocCount = acceptCentroids == null ? numCentroids : acceptCentroids.cardinality();
+        HnswGraphSearcher.search(centroidScorer, collector, graph, acceptCentroids, filteredDocCount);
+        final ScoreDoc[] scoreDocs = collector.topDocs().scoreDocs;
+        if (scoreDocs.length == 0) {
+            final ES92Int7VectorsScorer scorer = ESVectorUtil.getES92Int7VectorsScorer(
+                centroids,
+                fieldInfo.getVectorDimension(),
+                CENTROID_BULK_SIZE
+            );
+            return getCentroidIteratorFlat(
+                fieldInfo,
+                centroids,
+                numParents,
+                numCentroids,
+                scorer,
+                quantizeQuery,
+                queryParams,
+                globalCentroidDp,
+                acceptCentroids,
+                CENTROID_BULK_SIZE
+            );
+        }
+        final long postingsOffset = quantizedStart + (long) numCentroids * (fieldInfo.getVectorDimension() + 3L * Float.BYTES + Integer.BYTES);
+        return new CentroidIterator() {
+            private int scoreDocIdx = 0;
+
+            @Override
+            public boolean hasNext() {
+                return scoreDocIdx < scoreDocs.length;
+            }
+
+            @Override
+            public PostingMetadata nextPosting() throws IOException {
+                ScoreDoc scoreDoc = scoreDocs[scoreDocIdx++];
+                int centroidOrd = scoreDoc.doc;
+                float score = scoreDoc.score;
+                centroids.seek(postingsOffset + (Long.BYTES * 2L + Integer.BYTES) * centroidOrd);
+                long postingListOffset = centroids.readLong();
+                long postingListLength = centroids.readLong();
+                int parentOrd = centroids.readInt();
+                return new PostingMetadata(postingListOffset, postingListLength, parentOrd, score);
+            }
+        };
+    }
+
+    private static CentroidIterator getCentroidIteratorFlat(
+        FieldInfo fieldInfo,
+        IndexInput centroids,
+        int numParents,
         int numCentroids,
         ES92Int7VectorsScorer scorer,
         byte[] quantizeQuery,
@@ -294,6 +479,10 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         FixedBitSet acceptCentroids,
         int bulkSize
     ) throws IOException {
+        if (numParents > 0) {
+            // Parent centroids are stored raw only for query quantization; centroid scoring is always flat.
+            centroids.skipBytes((long) numParents * fieldInfo.getVectorDimension() * Float.BYTES);
+        }
         final NeighborQueue neighborQueue = new NeighborQueue(numCentroids, true);
         final long centroidQuantizeSize = fieldInfo.getVectorDimension() + 3 * Float.BYTES + Integer.BYTES;
         score(
@@ -323,106 +512,13 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 long centroidOrdinalAndScore = neighborQueue.popRaw();
                 int centroidOrd = neighborQueue.decodeNodeId(centroidOrdinalAndScore);
                 float score = neighborQueue.decodeScore(centroidOrdinalAndScore);
-                centroids.seek(offset + (long) Long.BYTES * 2 * centroidOrd);
+                centroids.seek(offset + (Long.BYTES * 2L + Integer.BYTES) * centroidOrd);
                 long postingListOffset = centroids.readLong();
                 long postingListLength = centroids.readLong();
-                // NO_ORDINAL indicates that the global centroid should be used for query quantization
-                return new PostingMetadata(postingListOffset, postingListLength, NO_ORDINAL, score);
+                int parentOrd = centroids.readInt();
+                return new PostingMetadata(postingListOffset, postingListLength, parentOrd, score);
             }
         };
-    }
-
-    private static CentroidIterator getCentroidIteratorWithParents(
-        FieldInfo fieldInfo,
-        IndexInput centroids,
-        int numParents,
-        int numCentroids,
-        ES92Int7VectorsScorer scorer,
-        byte[] quantizeQuery,
-        OptimizedScalarQuantizer.QuantizationResult queryParams,
-        float globalCentroidDp,
-        float visitRatio,
-        FixedBitSet acceptCentroids,
-        int bulkSize
-    ) throws IOException {
-        final long rawParentSize = (long) fieldInfo.getVectorDimension() * Float.BYTES;
-        final long centroidQuantizeSize = fieldInfo.getVectorDimension() + 3 * Float.BYTES + Integer.BYTES;
-        final NeighborQueue parentsQueue = new NeighborQueue(numParents, true);
-        final int maxChildrenSize = centroids.readVInt();
-        final int numCentroidsFiltered = acceptCentroids == null ? numCentroids : acceptCentroids.cardinality();
-        if (numCentroidsFiltered == 0) {
-            return new CentroidIterator() {
-                @Override
-                public boolean hasNext() {
-                    return false;
-                }
-
-                @Override
-                public PostingMetadata nextPosting() {
-                    return null;
-                }
-            };
-        }
-        // Compute static target centroid count and beam width from visitRatio
-        final int targetCentroids = Math.min(Math.max(1, Math.round(visitRatio * numCentroids)), numCentroids);
-        final int beamWidth;
-        final float[] scores = new float[bulkSize];
-        if (acceptCentroids != null && numCentroidsFiltered <= targetCentroids) {
-            // All filtered centroids fit within the target, no need to score parents
-            beamWidth = numParents;
-            for (int i = 0; i < numParents; i++) {
-                parentsQueue.add(i, 0.5f);
-            }
-            centroids.skipBytes((centroidQuantizeSize + rawParentSize) * numParents);
-        } else {
-            beamWidth = (int) Math.min(Math.ceil((double) targetCentroids * numParents / numCentroids), numParents);
-            // Score all parents
-            centroids.skipBytes(rawParentSize * numParents);
-            score(
-                parentsQueue,
-                numParents,
-                0,
-                scorer,
-                centroids,
-                centroidQuantizeSize,
-                quantizeQuery,
-                queryParams,
-                globalCentroidDp,
-                fieldInfo.getVectorSimilarityFunction(),
-                scores,
-                null,
-                bulkSize
-            );
-        }
-        final long offset = centroids.getFilePointer();
-        final long childrenOffset = offset + (long) Long.BYTES * numParents;
-        final long childrenFileOffsets = childrenOffset + centroidQuantizeSize * numCentroids;
-
-        ClusterLevelExpander expander = (nodeOrd, childrenQueue) -> populateOneChildrenGroup(
-            childrenQueue,
-            centroids,
-            offset + 2L * Integer.BYTES * nodeOrd,
-            childrenOffset,
-            centroidQuantizeSize,
-            fieldInfo,
-            scorer,
-            quantizeQuery,
-            queryParams,
-            globalCentroidDp,
-            scores,
-            acceptCentroids,
-            bulkSize
-        );
-
-        LeafPostingReader leafReader = (centroidOrd, centroidScore) -> {
-            centroids.seek(childrenFileOffsets + (long) (Long.BYTES * 2 + Integer.BYTES) * centroidOrd);
-            long postingListOffset = centroids.readLong();
-            long postingListLength = centroids.readLong();
-            int parentOrd = centroids.readInt();
-            return new PostingMetadata(postingListOffset, postingListLength, parentOrd, centroidScore);
-        };
-
-        return new BeamSearchCentroidIterator(parentsQueue, beamWidth, numCentroids, maxChildrenSize, expander, leafReader);
     }
 
     /**
@@ -521,42 +617,6 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         }
     }
 
-    private static void populateOneChildrenGroup(
-        NeighborQueue neighborQueue,
-        IndexInput centroids,
-        long parentOffset,
-        long childrenOffset,
-        long centroidQuantizeSize,
-        FieldInfo fieldInfo,
-        ES92Int7VectorsScorer scorer,
-        byte[] quantizeQuery,
-        OptimizedScalarQuantizer.QuantizationResult queryParams,
-        float globalCentroidDp,
-        float[] scores,
-        FixedBitSet acceptCentroids,
-        int bulkSize
-    ) throws IOException {
-        centroids.seek(parentOffset);
-        int childrenOrdinal = centroids.readInt();
-        int numChildren = centroids.readInt();
-        centroids.seek(childrenOffset + centroidQuantizeSize * childrenOrdinal);
-        score(
-            neighborQueue,
-            numChildren,
-            childrenOrdinal,
-            scorer,
-            centroids,
-            centroidQuantizeSize,
-            quantizeQuery,
-            queryParams,
-            globalCentroidDp,
-            fieldInfo.getVectorSimilarityFunction(),
-            scores,
-            acceptCentroids,
-            bulkSize
-        );
-    }
-
     private static void score(
         NeighborQueue neighborQueue,
         int size,
@@ -625,6 +685,208 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
 
     }
 
+    private static class OffHeapCentroidQueryScorer implements RandomVectorScorer {
+        private final IndexInput quantizedCentroids;
+        private final byte[] quantizedQuery;
+        private final OptimizedScalarQuantizer.QuantizationResult queryParams;
+        private final VectorSimilarityFunction similarityFunction;
+        private final float globalCentroidDp;
+        private final int size;
+        private final int fullBlockCount;
+        private final int tailBlockCount;
+        private final long fullBlockByteSize;
+        private final float[] blockScores = new float[CENTROID_BULK_SIZE];
+        private final ES92Int7VectorsScorer scorer;
+        private int cachedBlock = -1;
+        private int cachedBlockSize = 0;
+
+        OffHeapCentroidQueryScorer(
+            int dimension,
+            int size,
+            IndexInput quantizedCentroids,
+            byte[] quantizedQuery,
+            OptimizedScalarQuantizer.QuantizationResult queryParams,
+            VectorSimilarityFunction similarityFunction,
+            float globalCentroidDp
+        ) throws IOException {
+            this.quantizedCentroids = quantizedCentroids;
+            this.quantizedQuery = quantizedQuery;
+            this.queryParams = queryParams;
+            this.similarityFunction = similarityFunction;
+            this.globalCentroidDp = globalCentroidDp;
+            this.size = size;
+            this.fullBlockCount = size / CENTROID_BULK_SIZE;
+            this.tailBlockCount = size % CENTROID_BULK_SIZE;
+            this.fullBlockByteSize = (long) CENTROID_BULK_SIZE * (dimension + 4L * Integer.BYTES);
+            this.scorer = ESVectorUtil.getES92Int7VectorsScorer(quantizedCentroids, dimension, CENTROID_BULK_SIZE);
+        }
+
+        @Override
+        public float score(int node) throws IOException {
+            final int block = node / CENTROID_BULK_SIZE;
+            if (block != cachedBlock) {
+                cachedBlock = block;
+                cachedBlockSize = blockVectorCount(block);
+                quantizedCentroids.seek(blockStartOffset(block));
+                scorer.scoreBulk(
+                    quantizedQuery,
+                    queryParams.lowerInterval(),
+                    queryParams.upperInterval(),
+                    queryParams.quantizedComponentSum(),
+                    queryParams.additionalCorrection(),
+                    similarityFunction,
+                    globalCentroidDp,
+                    blockScores,
+                    cachedBlockSize
+                );
+            }
+            return blockScores[node % CENTROID_BULK_SIZE];
+        }
+
+        @Override
+        public int maxOrd() {
+            return size;
+        }
+
+        private int blockVectorCount(int block) {
+            if (block < fullBlockCount) {
+                return CENTROID_BULK_SIZE;
+            }
+            return tailBlockCount;
+        }
+
+        private long blockStartOffset(int block) {
+            if (block < fullBlockCount) {
+                return block * fullBlockByteSize;
+            }
+            return (long) fullBlockCount * fullBlockByteSize;
+        }
+    }
+
+    private static class OffHeapHnswGraph extends HnswGraph {
+        private final int numCentroids;
+        private final int numLevels;
+        private final int maxConn;
+        private final int[][] nodesByLevel;
+        private final long[] levelBaseOffsets;
+        private final LongValues nodeOffsets;
+        private final IndexInput graphData;
+        private int[] currentNeighbors = new int[0];
+        private int currentNeighborCount = 0;
+        private int currentNeighborOrd = 0;
+
+        OffHeapHnswGraph(NextFieldEntry fieldEntry, int numCentroids, IndexInput ivfCentroids) throws IOException {
+            this.numCentroids = numCentroids;
+            this.numLevels = fieldEntry.centroidGraphNumLevels;
+            this.maxConn = fieldEntry.centroidGraphMaxConn;
+            this.nodesByLevel = fieldEntry.centroidGraphNodesByLevel;
+            this.graphData = ivfCentroids.slice("centroid-graph-data", fieldEntry.centroidIndexOffset, fieldEntry.centroidIndexLength);
+            this.nodeOffsets = DirectReader.getInstance(
+                ivfCentroids.randomAccessSlice(fieldEntry.centroidGraphOffsetsDataOffset, fieldEntry.centroidGraphOffsetsDataLength),
+                fieldEntry.centroidGraphOffsetsBitsPerValue
+            );
+            this.levelBaseOffsets = new long[numLevels];
+            long base = 0L;
+            for (int level = 0; level < numLevels; level++) {
+                levelBaseOffsets[level] = base;
+                base += levelNodeCount(level);
+            }
+        }
+
+        boolean isEmpty() {
+            return numLevels == 0 || numCentroids == 0;
+        }
+
+        @Override
+        public void seek(int level, int target) throws IOException {
+            currentNeighbors = readNeighbors(level, target);
+            currentNeighborCount = currentNeighbors.length;
+            currentNeighborOrd = 0;
+        }
+
+        @Override
+        public int size() {
+            return numCentroids;
+        }
+
+        @Override
+        public int nextNeighbor() {
+            if (currentNeighborOrd >= currentNeighborCount) {
+                return NO_MORE_DOCS;
+            }
+            return currentNeighbors[currentNeighborOrd++];
+        }
+
+        @Override
+        public int numLevels() {
+            return numLevels;
+        }
+
+        @Override
+        public int maxConn() {
+            return maxConn;
+        }
+
+        @Override
+        public int entryNode() {
+            if (numLevels <= 1) {
+                return numCentroids == 0 ? -1 : 0;
+            }
+            int[] topLevelNodes = nodesByLevel[numLevels - 1];
+            return topLevelNodes.length == 0 ? 0 : topLevelNodes[0];
+        }
+
+        @Override
+        public NodesIterator getNodesOnLevel(int level) {
+            if (level == 0) {
+                return new ArrayNodesIterator(numCentroids);
+            }
+            return new ArrayNodesIterator(nodesByLevel[level], nodesByLevel[level].length);
+        }
+
+        @Override
+        public int neighborCount() {
+            return currentNeighborCount;
+        }
+
+        private int[] readNeighbors(int level, int node) throws IOException {
+            long index = nodeIndex(level, node);
+            if (index < 0) {
+                return new int[0];
+            }
+            final long offset = nodeOffsets.get(index);
+            graphData.seek(offset);
+            int size = graphData.readVInt();
+            if (size == 0) {
+                return new int[0];
+            }
+            int[] deltas = new int[size];
+            GroupVIntUtil.readGroupVInts(graphData, deltas, size);
+            for (int i = 1; i < size; i++) {
+                deltas[i] += deltas[i - 1];
+            }
+            return deltas;
+        }
+
+        private long nodeIndex(int level, int node) {
+            if (level == 0) {
+                return levelBaseOffsets[0] + node;
+            }
+            int position = Arrays.binarySearch(nodesByLevel[level], node);
+            if (position < 0) {
+                return -1L;
+            }
+            return levelBaseOffsets[level] + position;
+        }
+
+        private int levelNodeCount(int level) {
+            if (level == 0) {
+                return numCentroids;
+            }
+            return nodesByLevel[level].length;
+        }
+    }
+
     @Override
     public PostingVisitor getPostingVisitor(
         FieldInfo fieldInfo,
@@ -644,8 +906,6 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         int numParents = centroidSlice.readVInt();
         final QueryQuantizer queryQuantizer;
         if (numParents > 0) {
-            // unused
-            int longestPostingList = centroidSlice.readVInt();
             IndexInput parentsSlice = centroidSlice.slice(
                 "parents-slice",
                 centroidSlice.getFilePointer(),
