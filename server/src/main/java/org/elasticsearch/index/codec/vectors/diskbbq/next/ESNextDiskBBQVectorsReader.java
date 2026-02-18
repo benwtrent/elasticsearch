@@ -33,6 +33,8 @@ import org.apache.lucene.util.packed.DirectReader;
 import org.apache.lucene.util.packed.DirectWriter;
 import org.elasticsearch.common.cache.Cache;
 import org.elasticsearch.common.cache.CacheBuilder;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.index.codec.vectors.GenericFlatVectorReaders;
 import org.elasticsearch.index.codec.vectors.OptimizedScalarQuantizer;
 import org.elasticsearch.index.codec.vectors.cluster.NeighborQueue;
@@ -63,6 +65,7 @@ import static org.elasticsearch.simdvec.ESNextOSQVectorsScorer.BULK_SIZE;
  * brute force and then scores the top ones using the posting list.
  */
 public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements VectorPreconditioner {
+    private static final Logger logger = LogManager.getLogger(ESNextDiskBBQVectorsReader.class);
     private static final float GRAPH_CENTROID_OVERSAMPLE_MULTIPLIER = 2.5f;
     private static final int CENTROID_BULK_SIZE = 1;
 
@@ -408,7 +411,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             desiredCentroids,
             Math.min(numCentroids, (int) Math.ceil(desiredCentroids * GRAPH_CENTROID_OVERSAMPLE_MULTIPLIER))
         );
-        final RandomVectorScorer centroidScorer = new OffHeapCentroidQueryScorer(
+        final CentroidSearchStats searchStats = logger.isDebugEnabled() ? new CentroidSearchStats() : null;
+        final OffHeapCentroidQueryScorer centroidScorer = new OffHeapCentroidQueryScorer(
             fieldInfo.getVectorDimension(),
             numCentroids,
             centroids.slice(
@@ -419,12 +423,26 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             quantizeQuery,
             queryParams,
             fieldInfo.getVectorSimilarityFunction(),
-            globalCentroidDp
+            globalCentroidDp,
+            searchStats
         );
         final TopKnnCollector collector = new TopKnnCollector(gatheredCentroids, Integer.MAX_VALUE);
         final int filteredDocCount = acceptCentroids == null ? numCentroids : acceptCentroids.cardinality();
         HnswGraphSearcher.search(centroidScorer, collector, graph, acceptCentroids, filteredDocCount);
         final ScoreDoc[] scoreDocs = collector.topDocs().scoreDocs;
+        if (searchStats != null) {
+            logger.debug(
+                "graph centroid search stats [field={}, centroids={}, acceptedCentroids={}, desiredCentroids={}, gatheredCentroids={}, returnedCentroids={}, nodesVisited={}, blocksVisited={}]",
+                fieldInfo.name,
+                numCentroids,
+                filteredDocCount,
+                desiredCentroids,
+                gatheredCentroids,
+                scoreDocs.length,
+                searchStats.nodesVisited(),
+                searchStats.blocksVisited()
+            );
+        }
         if (scoreDocs.length == 0) {
             final ES92Int7VectorsScorer scorer = ESVectorUtil.getES92Int7VectorsScorer(
                 centroids,
@@ -484,6 +502,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             centroids.skipBytes((long) numParents * fieldInfo.getVectorDimension() * Float.BYTES);
         }
         final NeighborQueue neighborQueue = new NeighborQueue(numCentroids, true);
+        final CentroidSearchStats searchStats = logger.isDebugEnabled() ? new CentroidSearchStats() : null;
         final long centroidQuantizeSize = fieldInfo.getVectorDimension() + 3 * Float.BYTES + Integer.BYTES;
         score(
             neighborQueue,
@@ -498,8 +517,19 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             fieldInfo.getVectorSimilarityFunction(),
             new float[bulkSize],
             acceptCentroids,
-            bulkSize
+            bulkSize,
+            searchStats
         );
+        if (searchStats != null) {
+            logger.debug(
+                "flat centroid search stats [field={}, centroids={}, acceptedCentroids={}, nodesVisited={}, blocksVisited={}]",
+                fieldInfo.name,
+                numCentroids,
+                acceptCentroids == null ? numCentroids : acceptCentroids.cardinality(),
+                searchStats.nodesVisited(),
+                searchStats.blocksVisited()
+            );
+        }
         long offset = centroids.getFilePointer();
         return new CentroidIterator() {
             @Override
@@ -630,12 +660,16 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         VectorSimilarityFunction similarityFunction,
         float[] scores,
         FixedBitSet acceptCentroids,
-        int bulkSize
+        int bulkSize,
+        CentroidSearchStats searchStats
     ) throws IOException {
         int limit = size - bulkSize + 1;
         int i = 0;
         for (; i < limit; i += bulkSize) {
             if (acceptCentroids == null || acceptCentroids.cardinality(scoresOffset + i, scoresOffset + i + bulkSize) > 0) {
+                if (searchStats != null) {
+                    searchStats.recordScoredBlock(bulkSize);
+                }
                 scorer.scoreBulk(
                     quantizeQuery,
                     queryCorrections.lowerInterval(),
@@ -661,6 +695,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         int tailBulkSize = size - i;
         if (tailBulkSize > 0) {
             if (acceptCentroids == null || acceptCentroids.cardinality(scoresOffset + i, scoresOffset + i + tailBulkSize) > 0) {
+                if (searchStats != null) {
+                    searchStats.recordScoredBlock(tailBulkSize);
+                }
                 scorer.scoreBulk(
                     quantizeQuery,
                     queryCorrections.lowerInterval(),
@@ -685,6 +722,24 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
 
     }
 
+    private static class CentroidSearchStats {
+        private long nodesVisited;
+        private long blocksVisited;
+
+        void recordScoredBlock(int blockSize) {
+            blocksVisited++;
+            nodesVisited += blockSize;
+        }
+
+        long nodesVisited() {
+            return nodesVisited;
+        }
+
+        long blocksVisited() {
+            return blocksVisited;
+        }
+    }
+
     private static class OffHeapCentroidQueryScorer implements RandomVectorScorer {
         private final IndexInput quantizedCentroids;
         private final byte[] quantizedQuery;
@@ -697,6 +752,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         private final long fullBlockByteSize;
         private final float[] blockScores = new float[CENTROID_BULK_SIZE];
         private final ES92Int7VectorsScorer scorer;
+        private final CentroidSearchStats searchStats;
         private int cachedBlock = -1;
         private int cachedBlockSize = 0;
 
@@ -707,7 +763,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             byte[] quantizedQuery,
             OptimizedScalarQuantizer.QuantizationResult queryParams,
             VectorSimilarityFunction similarityFunction,
-            float globalCentroidDp
+            float globalCentroidDp,
+            CentroidSearchStats searchStats
         ) throws IOException {
             this.quantizedCentroids = quantizedCentroids;
             this.quantizedQuery = quantizedQuery;
@@ -715,6 +772,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             this.similarityFunction = similarityFunction;
             this.globalCentroidDp = globalCentroidDp;
             this.size = size;
+            this.searchStats = searchStats;
             this.fullBlockCount = size / CENTROID_BULK_SIZE;
             this.tailBlockCount = size % CENTROID_BULK_SIZE;
             this.fullBlockByteSize = (long) CENTROID_BULK_SIZE * (dimension + 4L * Integer.BYTES);
@@ -727,6 +785,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             if (block != cachedBlock) {
                 cachedBlock = block;
                 cachedBlockSize = blockVectorCount(block);
+                if (searchStats != null) {
+                    searchStats.recordScoredBlock(cachedBlockSize);
+                }
                 quantizedCentroids.seek(blockStartOffset(block));
                 scorer.scoreBulk(
                     quantizedQuery,

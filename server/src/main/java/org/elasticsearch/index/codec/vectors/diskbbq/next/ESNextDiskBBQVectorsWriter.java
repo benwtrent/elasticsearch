@@ -72,7 +72,7 @@ import static org.elasticsearch.simdvec.ESNextOSQVectorsScorer.BULK_SIZE;
  */
 public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
     private static final Logger logger = LogManager.getLogger(ESNextDiskBBQVectorsWriter.class);
-    private static final int CENTROID_BULK_SIZE = 1;
+    private static final int CENTROID_BULK_SIZE = 16;
 
     private final int vectorPerCluster;
     private final int centroidsPerParentCluster;
