@@ -633,68 +633,184 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         IndexInput centroidsInput,
         IndexOutput centroidOutput
     ) throws IOException {
-        final RandomVectorScorerSupplier centroidScorerSupplier = createQuantizedCentroidScorerSupplier(
-            fieldInfo,
-            centroidSupplier,
-            centroidAssignments,
-            centroidsInput
-        );
-        final OnHeapHnswGraph graph = buildCentroidGraph(centroidSupplier.size(), centroidScorerSupplier);
+        final KMeansResult parentClusters = centroidSupplier.secondLevelClusters();
+        if (parentClusters == null) {
+            return defaultCentroidIndexMetaWriter();
+        }
+        final int numParents = parentClusters.centroids().length > 1 ? parentClusters.centroids().length : 0;
+        if (numParents <= 0) {
+            return defaultCentroidIndexMetaWriter();
+        }
+        final int numCentroids = centroidSupplier.size();
+        final int[] parentAssignments = parentClusters.assignments();
+        final KMeansResult grandParentClusters = buildThirdLevelClusters(fieldInfo, parentClusters);
+        final int numGrandParents = grandParentClusters.centroids().length;
+        if (numGrandParents <= 0) {
+            return defaultCentroidIndexMetaWriter();
+        }
+
+        final float[] centroidGlobal = approximateGlobalCentroid(centroidSupplier, fieldInfo.getVectorDimension());
         final long centroidIndexOffset = centroidOutput.getFilePointer();
-        int[][] graphLevelNodeLengths = writeGraph(graph, centroidOutput);
-        final int numLevels = graph.numLevels();
-        final int[][] graphNodesByLevel = new int[numLevels][];
-        long graphNodeCount = 0L;
-        for (int level = 0; level < numLevels; level++) {
-            final int[] sortedNodes = HnswGraph.NodesIterator.getSortedNodes(graph.getNodesOnLevel(level));
-            graphNodesByLevel[level] = sortedNodes;
-            graphNodeCount += sortedNodes.length;
-        }
-        final long finalGraphNodeCount = graphNodeCount;
-        long maxOffset = 0L;
-        for (int[] levelLengths : graphLevelNodeLengths) {
-            for (int length : levelLengths) {
-                maxOffset += length;
+        centroidOutput.writeVInt(numGrandParents);
+        centroidOutput.writeVInt(numParents);
+        centroidOutput.writeVInt(numCentroids);
+
+        final OptimizedScalarQuantizer quantizer = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction());
+        final int dim = fieldInfo.getVectorDimension();
+
+        final float[][] grandParentCentroids = grandParentClusters.centroids();
+        writeQuantizedCentroidGroup(centroidOutput, quantizer, centroidGlobal, dim, numGrandParents, ord -> grandParentCentroids[ord]);
+
+        final int[] grandParentAssignments = grandParentClusters.assignments();
+        final int[][] grandParentChildren = buildChildrenByAssignment(numGrandParents, grandParentAssignments, numParents);
+        final float[][] parentCentroids = parentClusters.centroids();
+        for (int grandParentOrd = 0; grandParentOrd < numGrandParents; grandParentOrd++) {
+            final int[] childParents = grandParentChildren[grandParentOrd];
+            centroidOutput.writeVInt(childParents.length);
+            writeQuantizedCentroidGroup(
+                centroidOutput,
+                quantizer,
+                centroidGlobal,
+                dim,
+                childParents.length,
+                ord -> parentCentroids[childParents[ord]]
+            );
+            for (int parentOrd : childParents) {
+                centroidOutput.writeVInt(parentOrd);
             }
         }
-        final int offsetBitsPerValue = maxOffset == 0L ? 1 : DirectWriter.bitsRequired(maxOffset);
-        final long centroidIndexOffsetsDataOffset = centroidOutput.getFilePointer();
-        final DirectWriter centroidIndexOffsetsWriter = DirectWriter.getInstance(centroidOutput, finalGraphNodeCount, offsetBitsPerValue);
-        long cumulativeOffset = 0L;
-        for (int[] levelLengths : graphLevelNodeLengths) {
-            for (int length : levelLengths) {
-                centroidIndexOffsetsWriter.add(cumulativeOffset);
-                cumulativeOffset += length;
+
+        final int[][] parentChildren = buildChildrenByAssignment(numParents, parentAssignments, numCentroids);
+        for (int parentOrd = 0; parentOrd < numParents; parentOrd++) {
+            final int[] childCentroids = parentChildren[parentOrd];
+            centroidOutput.writeVInt(childCentroids.length);
+            writeQuantizedCentroidGroup(
+                centroidOutput,
+                quantizer,
+                centroidGlobal,
+                dim,
+                childCentroids.length,
+                ord -> centroidSupplier.centroid(childCentroids[ord])
+            );
+            for (int centroidOrd : childCentroids) {
+                centroidOutput.writeVInt(centroidOrd);
             }
         }
-        centroidIndexOffsetsWriter.finish();
-        final long centroidIndexOffsetsDataLength = centroidOutput.getFilePointer() - centroidIndexOffsetsDataOffset;
         final long centroidIndexLength = centroidOutput.getFilePointer() - centroidIndexOffset;
         return meta -> {
             meta.writeLong(centroidIndexLength);
             if (centroidIndexLength > 0) {
                 meta.writeLong(centroidIndexOffset);
             }
-            meta.writeVInt(numLevels);
-            meta.writeVInt(graph.maxConn());
-            for (int level = 0; level < numLevels; level++) {
-                if (level > 0) {
-                    int[] nodesOnLevel = graphNodesByLevel[level].clone();
-                    meta.writeVInt(nodesOnLevel.length); // number of nodes on this level
-                    for (int i = nodesOnLevel.length - 1; i > 0; --i) {
-                        nodesOnLevel[i] -= nodesOnLevel[i - 1];
-                    }
-                    for (int n : nodesOnLevel) {
-                        assert n >= 0 : "delta encoding for nodes failed; expected nodes to be sorted";
-                        meta.writeVInt(n);
-                    }
-                }
-            }
-            meta.writeVLong(finalGraphNodeCount);
-            meta.writeVInt(offsetBitsPerValue);
-            meta.writeVLong(centroidIndexOffsetsDataOffset);
-            meta.writeVLong(centroidIndexOffsetsDataLength);
         };
+    }
+
+    private KMeansResult buildThirdLevelClusters(FieldInfo fieldInfo, KMeansResult parentClusters) throws IOException {
+        final int numParents = parentClusters.centroids().length;
+        if (numParents <= 1) {
+            return KMeansResult.singleCluster(parentClusters.centroids()[0], numParents);
+        }
+        final int targetGrandParents = Math.max(1, Math.min(centroidsPerParentCluster, numParents));
+        final HierarchicalKMeans hierarchicalKMeans;
+        if (mergeExec != null && numMergeWorkers > 1) {
+            hierarchicalKMeans = HierarchicalKMeans.ofConcurrent(
+                fieldInfo.getVectorDimension(),
+                mergeExec,
+                numMergeWorkers,
+                HierarchicalKMeans.MAX_ITERATIONS_DEFAULT,
+                HierarchicalKMeans.SAMPLES_PER_CLUSTER_DEFAULT,
+                HierarchicalKMeans.MAXK,
+                -1
+            );
+        } else {
+            hierarchicalKMeans = HierarchicalKMeans.ofSerial(
+                fieldInfo.getVectorDimension(),
+                HierarchicalKMeans.MAX_ITERATIONS_DEFAULT,
+                HierarchicalKMeans.SAMPLES_PER_CLUSTER_DEFAULT,
+                HierarchicalKMeans.MAXK,
+                -1
+            );
+        }
+        return hierarchicalKMeans.cluster(parentClusters.centroidsSupplier().asKmeansFloatVectorValues(), targetGrandParents);
+    }
+
+    private static int[][] buildChildrenByAssignment(int parentCount, int[] assignments, int childCount) {
+        final int[] counts = new int[parentCount];
+        for (int childOrd = 0; childOrd < childCount; childOrd++) {
+            counts[assignments[childOrd]]++;
+        }
+        final int[][] children = new int[parentCount][];
+        for (int parentOrd = 0; parentOrd < parentCount; parentOrd++) {
+            children[parentOrd] = new int[counts[parentOrd]];
+        }
+        Arrays.fill(counts, 0);
+        for (int childOrd = 0; childOrd < childCount; childOrd++) {
+            final int parentOrd = assignments[childOrd];
+            children[parentOrd][counts[parentOrd]++] = childOrd;
+        }
+        return children;
+    }
+
+    private static float[] approximateGlobalCentroid(CentroidSupplier centroidSupplier, int dimension) throws IOException {
+        final int size = centroidSupplier.size();
+        final float[] global = new float[dimension];
+        for (int i = 0; i < size; i++) {
+            final float[] centroid = centroidSupplier.centroid(i);
+            for (int d = 0; d < dimension; d++) {
+                global[d] += centroid[d];
+            }
+        }
+        for (int d = 0; d < dimension; d++) {
+            global[d] /= size;
+        }
+        return global;
+    }
+
+    private static void writeQuantizedCentroidGroup(
+        IndexOutput output,
+        OptimizedScalarQuantizer quantizer,
+        float[] globalCentroid,
+        int dimension,
+        int count,
+        CentroidVectorSupplier vectorSupplier
+    ) throws IOException {
+        if (count == 0) {
+            return;
+        }
+        final DiskBBQBulkWriter bulkWriter = DiskBBQBulkWriter.fromBitSize(7, CENTROID_BULK_SIZE, output, true, true);
+        bulkWriter.writeVectors(new QuantizedVectorValues() {
+            private final byte[] quantizedVector = new byte[dimension];
+            private final int[] quantizedScratch = new int[dimension];
+            private final float[] centeredScratch = new float[dimension];
+            private int currentOrd = -1;
+            private OptimizedScalarQuantizer.QuantizationResult corrections;
+
+            @Override
+            public int count() {
+                return count;
+            }
+
+            @Override
+            public byte[] next() throws IOException {
+                currentOrd++;
+                final float[] vector = vectorSupplier.vector(currentOrd);
+                corrections = quantizer.scalarQuantize(vector, centeredScratch, quantizedScratch, (byte) 7, globalCentroid);
+                for (int i = 0; i < quantizedScratch.length; i++) {
+                    quantizedVector[i] = (byte) quantizedScratch[i];
+                }
+                return quantizedVector;
+            }
+
+            @Override
+            public OptimizedScalarQuantizer.QuantizationResult getCorrections() {
+                return corrections;
+            }
+        }, null);
+    }
+
+    @FunctionalInterface
+    private interface CentroidVectorSupplier {
+        float[] vector(int ord) throws IOException;
     }
 
     private OnHeapHnswGraph buildCentroidGraph(int numCentroids, RandomVectorScorerSupplier scorerSupplier) throws IOException {

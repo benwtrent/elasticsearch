@@ -67,7 +67,7 @@ import static org.elasticsearch.simdvec.ESNextOSQVectorsScorer.BULK_SIZE;
 public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements VectorPreconditioner {
     private static final Logger logger = LogManager.getLogger(ESNextDiskBBQVectorsReader.class);
     private static final float GRAPH_CENTROID_OVERSAMPLE_MULTIPLIER = 2.5f;
-    private static final int CENTROID_BULK_SIZE = 1;
+    private static final int CENTROID_BULK_SIZE = 16;
 
     public ESNextDiskBBQVectorsReader(SegmentReadState state, GenericFlatVectorReaders.LoadFlatVectorsReader getFormatReader)
         throws IOException {
@@ -214,24 +214,6 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         long centroidGraphOffsetsDataLength = 0L;
         if (centroidIndexLength > 0) {
             centroidIndexOffset = input.readLong();
-            centroidGraphNumLevels = input.readVInt();
-            centroidGraphMaxConn = input.readVInt();
-            centroidGraphNodesByLevel = new int[centroidGraphNumLevels][];
-            centroidGraphNodesByLevel[0] = new int[0];
-            for (int level = 1; level < centroidGraphNumLevels; level++) {
-                final int count = input.readVInt();
-                final int[] nodes = new int[count];
-                int previous = 0;
-                for (int i = 0; i < count; i++) {
-                    previous += input.readVInt();
-                    nodes[i] = previous;
-                }
-                centroidGraphNodesByLevel[level] = nodes;
-            }
-            centroidGraphValueCount = input.readVLong();
-            centroidGraphOffsetsBitsPerValue = input.readVInt();
-            centroidGraphOffsetsDataOffset = input.readVLong();
-            centroidGraphOffsetsDataLength = input.readVLong();
         }
         return new NextFieldEntry(
             rawVectorFormat,
@@ -369,7 +351,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         }
 
         public boolean hasCentroidGraph() {
-            return centroidIndexLength > 0 && centroidGraphValueCount > 0 && centroidGraphOffsetsBitsPerValue > 0;
+            return centroidIndexLength > 0 && centroidIndexOffset >= 0;
         }
     }
 
@@ -386,8 +368,11 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         FixedBitSet acceptCentroids,
         float visitRatio
     ) throws IOException {
-        final OffHeapHnswGraph graph = new OffHeapHnswGraph(fieldEntry, numCentroids, ivfCentroids);
-        if (graph.isEmpty()) {
+        final TwoTierCentroidTree tree = new TwoTierCentroidTree(
+            fieldInfo.getVectorDimension(),
+            ivfCentroids.slice("centroid-tree", fieldEntry.centroidIndexOffset(), fieldEntry.centroidIndexLength())
+        );
+        if (tree.isEmpty()) {
             final ES92Int7VectorsScorer scorer = ESVectorUtil.getES92Int7VectorsScorer(
                 centroids,
                 fieldInfo.getVectorDimension(),
@@ -412,38 +397,82 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             Math.min(numCentroids, (int) Math.ceil(desiredCentroids * GRAPH_CENTROID_OVERSAMPLE_MULTIPLIER))
         );
         final CentroidSearchStats searchStats = logger.isDebugEnabled() ? new CentroidSearchStats() : null;
-        final OffHeapCentroidQueryScorer centroidScorer = new OffHeapCentroidQueryScorer(
+        final IndexInput treeScoringInput = tree.data.clone();
+        final ES92Int7VectorsScorer treeScorer = ESVectorUtil.getES92Int7VectorsScorer(
+            treeScoringInput,
             fieldInfo.getVectorDimension(),
-            numCentroids,
-            centroids.slice(
-                "quantized-centroids",
-                quantizedStart,
-                (long) numCentroids * (fieldInfo.getVectorDimension() + 3L * Float.BYTES + Integer.BYTES)
-            ),
+            CENTROID_BULK_SIZE
+        );
+        final float[] scoreScratch = new float[CENTROID_BULK_SIZE];
+        final NeighborQueue rootQueue = new NeighborQueue(Math.max(1, tree.numGrandParents), true);
+        tree.scoreGrandParents(
+            rootQueue,
+            treeScoringInput,
+            treeScorer,
             quantizeQuery,
             queryParams,
             fieldInfo.getVectorSimilarityFunction(),
             globalCentroidDp,
+            scoreScratch,
             searchStats
         );
-        final TopKnnCollector collector = new TopKnnCollector(gatheredCentroids, Integer.MAX_VALUE);
-        final int filteredDocCount = acceptCentroids == null ? numCentroids : acceptCentroids.cardinality();
-        HnswGraphSearcher.search(centroidScorer, collector, graph, acceptCentroids, filteredDocCount);
-        final ScoreDoc[] scoreDocs = collector.topDocs().scoreDocs;
+        final int beamWidth = Math.max(1, Math.min(desiredCentroids, 32));
+        final NeighborQueue rankedCentroids = new NeighborQueue(gatheredCentroids, true);
+        int expandedRoots = 0;
+        int expandedParents = 0;
+        while (rootQueue.size() > 0 && (expandedRoots < beamWidth || rankedCentroids.size() < gatheredCentroids)) {
+            final int grandParentOrd = rootQueue.pop();
+            expandedRoots++;
+            final NeighborQueue parentQueue = new NeighborQueue(Math.max(1, tree.grandParentChildCount(grandParentOrd)), true);
+            tree.scoreGrandParentChildren(
+                grandParentOrd,
+                parentQueue,
+                treeScoringInput,
+                treeScorer,
+                quantizeQuery,
+                queryParams,
+                fieldInfo.getVectorSimilarityFunction(),
+                globalCentroidDp,
+                scoreScratch,
+                searchStats
+            );
+            int expandedFromGrandParent = 0;
+            while (parentQueue.size() > 0 && (expandedFromGrandParent < beamWidth || rankedCentroids.size() < gatheredCentroids)) {
+                final int parentOrd = parentQueue.pop();
+                expandedFromGrandParent++;
+                expandedParents++;
+                tree.scoreParentChildren(
+                    parentOrd,
+                    rankedCentroids,
+                    treeScoringInput,
+                    treeScorer,
+                    quantizeQuery,
+                    queryParams,
+                    fieldInfo.getVectorSimilarityFunction(),
+                    globalCentroidDp,
+                    scoreScratch,
+                    acceptCentroids,
+                    searchStats
+                );
+            }
+        }
         if (searchStats != null) {
             logger.debug(
-                "graph centroid search stats [field={}, centroids={}, acceptedCentroids={}, desiredCentroids={}, gatheredCentroids={}, returnedCentroids={}, nodesVisited={}, blocksVisited={}]",
+                "two-tier centroid tree stats [field={}, centroids={}, acceptedCentroids={}, desiredCentroids={}, gatheredCentroids={}, returnedCentroids={}, beamWidth={}, expandedRoots={}, expandedParents={}, nodesVisited={}, blocksVisited={}]",
                 fieldInfo.name,
                 numCentroids,
-                filteredDocCount,
+                acceptCentroids == null ? numCentroids : acceptCentroids.cardinality(),
                 desiredCentroids,
                 gatheredCentroids,
-                scoreDocs.length,
+                rankedCentroids.size(),
+                beamWidth,
+                expandedRoots,
+                expandedParents,
                 searchStats.nodesVisited(),
                 searchStats.blocksVisited()
             );
         }
-        if (scoreDocs.length == 0) {
+        if (rankedCentroids.size() == 0) {
             final ES92Int7VectorsScorer scorer = ESVectorUtil.getES92Int7VectorsScorer(
                 centroids,
                 fieldInfo.getVectorDimension(),
@@ -464,18 +493,16 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         }
         final long postingsOffset = quantizedStart + (long) numCentroids * (fieldInfo.getVectorDimension() + 3L * Float.BYTES + Integer.BYTES);
         return new CentroidIterator() {
-            private int scoreDocIdx = 0;
-
             @Override
             public boolean hasNext() {
-                return scoreDocIdx < scoreDocs.length;
+                return rankedCentroids.size() > 0;
             }
 
             @Override
             public PostingMetadata nextPosting() throws IOException {
-                ScoreDoc scoreDoc = scoreDocs[scoreDocIdx++];
-                int centroidOrd = scoreDoc.doc;
-                float score = scoreDoc.score;
+                long centroidOrdinalAndScore = rankedCentroids.popRaw();
+                int centroidOrd = rankedCentroids.decodeNodeId(centroidOrdinalAndScore);
+                float score = rankedCentroids.decodeScore(centroidOrdinalAndScore);
                 centroids.seek(postingsOffset + (Long.BYTES * 2L + Integer.BYTES) * centroidOrd);
                 long postingListOffset = centroids.readLong();
                 long postingListLength = centroids.readLong();
@@ -483,6 +510,241 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 return new PostingMetadata(postingListOffset, postingListLength, parentOrd, score);
             }
         };
+    }
+
+    private static class TwoTierCentroidTree {
+        private final int dimension;
+        private final int quantizedRecordSize;
+        private final IndexInput data;
+        private final int numGrandParents;
+        private final int numParents;
+        private final long grandParentVectorsOffset;
+        private final long[] grandParentChildOffsets;
+        private final int[] grandParentChildCounts;
+        private final long[] parentChildOffsets;
+        private final int[] parentChildCounts;
+
+        TwoTierCentroidTree(int dimension, IndexInput data) throws IOException {
+            this.dimension = dimension;
+            this.quantizedRecordSize = dimension + 3 * Float.BYTES + Integer.BYTES;
+            this.data = data;
+            this.numGrandParents = data.readVInt();
+            this.numParents = data.readVInt();
+            data.readVInt(); // numCentroids, retained for structural validation only.
+            this.grandParentVectorsOffset = data.getFilePointer();
+            data.skipBytes((long) numGrandParents * quantizedRecordSize);
+            this.grandParentChildOffsets = new long[numGrandParents];
+            this.grandParentChildCounts = new int[numGrandParents];
+            for (int i = 0; i < numGrandParents; i++) {
+                final int childCount = data.readVInt();
+                grandParentChildCounts[i] = childCount;
+                grandParentChildOffsets[i] = data.getFilePointer();
+                data.skipBytes((long) childCount * quantizedRecordSize);
+                for (int c = 0; c < childCount; c++) {
+                    data.readVInt();
+                }
+            }
+            this.parentChildOffsets = new long[numParents];
+            this.parentChildCounts = new int[numParents];
+            for (int i = 0; i < numParents; i++) {
+                final int childCount = data.readVInt();
+                parentChildCounts[i] = childCount;
+                parentChildOffsets[i] = data.getFilePointer();
+                data.skipBytes((long) childCount * quantizedRecordSize);
+                for (int c = 0; c < childCount; c++) {
+                    data.readVInt();
+                }
+            }
+        }
+
+        boolean isEmpty() {
+            return numGrandParents <= 0 || numParents <= 0;
+        }
+
+        int grandParentChildCount(int grandParentOrd) {
+            return grandParentChildCounts[grandParentOrd];
+        }
+
+        void scoreGrandParents(
+            NeighborQueue resultQueue,
+            IndexInput scoringInput,
+            ES92Int7VectorsScorer scorer,
+            byte[] quantizedQuery,
+            OptimizedScalarQuantizer.QuantizationResult queryParams,
+            VectorSimilarityFunction similarityFunction,
+            float globalCentroidDp,
+            float[] scoreScratch,
+            CentroidSearchStats searchStats
+        ) throws IOException {
+            scoringInput.seek(grandParentVectorsOffset);
+            int limit = numGrandParents - CENTROID_BULK_SIZE + 1;
+            int i = 0;
+            for (; i < limit; i += CENTROID_BULK_SIZE) {
+                if (searchStats != null) {
+                    searchStats.recordScoredBlock(CENTROID_BULK_SIZE);
+                }
+                scorer.scoreBulk(
+                    quantizedQuery,
+                    queryParams.lowerInterval(),
+                    queryParams.upperInterval(),
+                    queryParams.quantizedComponentSum(),
+                    queryParams.additionalCorrection(),
+                    similarityFunction,
+                    globalCentroidDp,
+                    scoreScratch,
+                    CENTROID_BULK_SIZE
+                );
+                for (int j = 0; j < CENTROID_BULK_SIZE; j++) {
+                    resultQueue.add(i + j, scoreScratch[j]);
+                }
+            }
+            final int tail = numGrandParents - i;
+            if (tail > 0) {
+                if (searchStats != null) {
+                    searchStats.recordScoredBlock(tail);
+                }
+                scorer.scoreBulk(
+                    quantizedQuery,
+                    queryParams.lowerInterval(),
+                    queryParams.upperInterval(),
+                    queryParams.quantizedComponentSum(),
+                    queryParams.additionalCorrection(),
+                    similarityFunction,
+                    globalCentroidDp,
+                    scoreScratch,
+                    tail
+                );
+                for (int j = 0; j < tail; j++) {
+                    resultQueue.add(i + j, scoreScratch[j]);
+                }
+            }
+        }
+
+        void scoreGrandParentChildren(
+            int grandParentOrd,
+            NeighborQueue resultQueue,
+            IndexInput scoringInput,
+            ES92Int7VectorsScorer scorer,
+            byte[] quantizedQuery,
+            OptimizedScalarQuantizer.QuantizationResult queryParams,
+            VectorSimilarityFunction similarityFunction,
+            float globalCentroidDp,
+            float[] scoreScratch,
+            CentroidSearchStats searchStats
+        ) throws IOException {
+            scoreChildren(
+                grandParentChildOffsets[grandParentOrd],
+                grandParentChildCounts[grandParentOrd],
+                resultQueue,
+                scoringInput,
+                scorer,
+                quantizedQuery,
+                queryParams,
+                similarityFunction,
+                globalCentroidDp,
+                scoreScratch,
+                null,
+                searchStats
+            );
+        }
+
+        void scoreParentChildren(
+            int parentOrd,
+            NeighborQueue resultQueue,
+            IndexInput scoringInput,
+            ES92Int7VectorsScorer scorer,
+            byte[] quantizedQuery,
+            OptimizedScalarQuantizer.QuantizationResult queryParams,
+            VectorSimilarityFunction similarityFunction,
+            float globalCentroidDp,
+            float[] scoreScratch,
+            FixedBitSet acceptCentroids,
+            CentroidSearchStats searchStats
+        ) throws IOException {
+            scoreChildren(
+                parentChildOffsets[parentOrd],
+                parentChildCounts[parentOrd],
+                resultQueue,
+                scoringInput,
+                scorer,
+                quantizedQuery,
+                queryParams,
+                similarityFunction,
+                globalCentroidDp,
+                scoreScratch,
+                acceptCentroids,
+                searchStats
+            );
+        }
+
+        private void scoreChildren(
+            long childrenOffset,
+            int childrenCount,
+            NeighborQueue resultQueue,
+            IndexInput scoringInput,
+            ES92Int7VectorsScorer scorer,
+            byte[] quantizedQuery,
+            OptimizedScalarQuantizer.QuantizationResult queryParams,
+            VectorSimilarityFunction similarityFunction,
+            float globalCentroidDp,
+            float[] scoreScratch,
+            FixedBitSet acceptCentroids,
+            CentroidSearchStats searchStats
+        ) throws IOException {
+            if (childrenCount == 0) {
+                return;
+            }
+            final float[] childScores = new float[childrenCount];
+            scoringInput.seek(childrenOffset);
+            final int limit = childrenCount - CENTROID_BULK_SIZE + 1;
+            int i = 0;
+            for (; i < limit; i += CENTROID_BULK_SIZE) {
+                if (searchStats != null) {
+                    searchStats.recordScoredBlock(CENTROID_BULK_SIZE);
+                }
+                scorer.scoreBulk(
+                    quantizedQuery,
+                    queryParams.lowerInterval(),
+                    queryParams.upperInterval(),
+                    queryParams.quantizedComponentSum(),
+                    queryParams.additionalCorrection(),
+                    similarityFunction,
+                    globalCentroidDp,
+                    scoreScratch,
+                    CENTROID_BULK_SIZE
+                );
+                for (int j = 0; j < CENTROID_BULK_SIZE; j++) {
+                    childScores[i + j] = scoreScratch[j];
+                }
+            }
+            final int tail = childrenCount - i;
+            if (tail > 0) {
+                if (searchStats != null) {
+                    searchStats.recordScoredBlock(tail);
+                }
+                scorer.scoreBulk(
+                    quantizedQuery,
+                    queryParams.lowerInterval(),
+                    queryParams.upperInterval(),
+                    queryParams.quantizedComponentSum(),
+                    queryParams.additionalCorrection(),
+                    similarityFunction,
+                    globalCentroidDp,
+                    scoreScratch,
+                    tail
+                );
+                for (int j = 0; j < tail; j++) {
+                    childScores[i + j] = scoreScratch[j];
+                }
+            }
+            scoringInput.seek(childrenOffset + (long) childrenCount * quantizedRecordSize);
+            for (int childIdx = 0; childIdx < childrenCount; childIdx++) {
+                final int childOrd = scoringInput.readVInt();
+                if (acceptCentroids == null || acceptCentroids.get(childOrd)) {
+                    resultQueue.add(childOrd, childScores[childIdx]);
+                }
+            }
+        }
     }
 
     private static CentroidIterator getCentroidIteratorFlat(
