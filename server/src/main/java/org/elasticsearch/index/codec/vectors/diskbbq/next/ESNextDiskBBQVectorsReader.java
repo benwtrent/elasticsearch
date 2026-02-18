@@ -518,6 +518,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         private final IndexInput data;
         private final int numGrandParents;
         private final int numParents;
+        private final int numCentroids;
         private final long grandParentVectorsOffset;
         private final long[] grandParentChildOffsets;
         private final int[] grandParentChildCounts;
@@ -530,7 +531,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             this.data = data;
             this.numGrandParents = data.readVInt();
             this.numParents = data.readVInt();
-            data.readVInt(); // numCentroids, retained for structural validation only.
+            this.numCentroids = data.readVInt();
             this.grandParentVectorsOffset = data.getFilePointer();
             data.skipBytes((long) numGrandParents * quantizedRecordSize);
             this.grandParentChildOffsets = new long[numGrandParents];

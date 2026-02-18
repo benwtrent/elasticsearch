@@ -472,6 +472,8 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
     }
 
     private static void printClusterQualityStatistics(int[][] clusters, float[][] centroids) {
+        if(true)
+            return;
         float min = Float.MAX_VALUE;
         float max = Float.MIN_VALUE;
         float mean = 0;
@@ -503,7 +505,8 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
     }
 
     private static void printCentroidOrdinalQuality(float[][] centroids) {
-        if (centroids == null || centroids.length < 2) {
+        return;
+       /* if (centroids == null || centroids.length < 2) {
             return;
         }
         try {
@@ -555,7 +558,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             );
         } catch (IOException e) {
             logger.debug("Unable to compute centroid ordinal locality stats", e);
-        }
+        }*/
     }
 
     private static float[][] loadCentroids(CentroidSupplier centroidSupplier, int dimension) throws IOException {

@@ -258,7 +258,7 @@ public class KnnIndexTester {
     private static ParsedArgs parseArgs(String[] args) {
         boolean help = false;
         String configFile = null;
-        int warmUpIterations = 1;
+        int warmUpIterations = 5;
 
         if (args.length > 2) {
             return null; // invalid options
