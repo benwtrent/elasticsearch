@@ -951,18 +951,18 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         }
         int[] assignments = kMeansResult.assignments();
         int[] soarAssignments = kMeansResult.soarAssignments();
-        CentroidOrdering.Result reordered = CentroidOrdering.reorder(
-            fieldInfo.getVectorDimension(),
-            centroids,
-            assignments,
-            soarAssignments,
-            kMeansResult.neighborhoods()
-        );
+        //CentroidOrdering.Result reordered = CentroidOrdering.reorder(
+        //    fieldInfo.getVectorDimension(),
+        //    centroids,
+        //    assignments,
+        //    soarAssignments,
+        //    kMeansResult.neighborhoods()
+        //);
         return new CentroidAssignments(
             fieldInfo.getVectorDimension(),
-            reordered.centroids(),
-            reordered.assignments(),
-            reordered.overspillAssignments()
+            kMeansResult.centroids(),
+            assignments,
+            soarAssignments
         );
     }
 
