@@ -11,12 +11,17 @@ package org.elasticsearch.index.codec.vectors.diskbbq.next;
 
 import org.apache.lucene.codecs.KnnVectorsReader;
 import org.apache.lucene.codecs.hnsw.FlatVectorsWriter;
+import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorScorer;
+import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorsFormat;
+import org.apache.lucene.codecs.lucene104.QuantizedByteVectorValues;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FloatVectorValues;
+import org.apache.lucene.index.KnnVectorValues;
 import org.apache.lucene.index.MergeState;
 import org.apache.lucene.index.SegmentWriteState;
 import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.search.TaskExecutor;
+import org.apache.lucene.search.VectorScorer;
 import org.apache.lucene.store.ByteBuffersDataOutput;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
@@ -28,7 +33,6 @@ import org.apache.lucene.util.hnsw.IntToIntFunction;
 import org.apache.lucene.util.hnsw.NeighborArray;
 import org.apache.lucene.util.hnsw.OnHeapHnswGraph;
 import org.apache.lucene.util.hnsw.RandomVectorScorerSupplier;
-import org.apache.lucene.util.hnsw.UpdateableRandomVectorScorer;
 import org.apache.lucene.util.packed.DirectWriter;
 import org.apache.lucene.util.packed.PackedInts;
 import org.apache.lucene.util.packed.PackedLongValues;
@@ -51,12 +55,12 @@ import org.elasticsearch.index.codec.vectors.diskbbq.QuantizedVectorValues;
 import org.elasticsearch.index.codec.vectors.diskbbq.VectorPreconditioner;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
-import org.elasticsearch.simdvec.ES92Int7VectorsScorer;
 import org.elasticsearch.simdvec.ESNextOSQVectorsScorer;
 import org.elasticsearch.simdvec.ESVectorUtil;
+import org.elasticsearch.simdvec.VectorScorerFactory;
+import org.elasticsearch.simdvec.VectorSimilarityType;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Arrays;
@@ -646,7 +650,10 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         final int[][] graphNodesByLevel = new int[numLevels][];
         long graphNodeCount = 0L;
         for (int level = 0; level < numLevels; level++) {
-            final int[] sortedNodes = HnswGraph.NodesIterator.getSortedNodes(graph.getNodesOnLevel(level));
+            final HnswGraph.NodesIterator nodesOnLevel = graph.getNodesOnLevel(level);
+            final int[] sortedNodes = new int[nodesOnLevel.size()];
+            nodesOnLevel.consume(sortedNodes);
+            Arrays.sort(sortedNodes);
             graphNodesByLevel[level] = sortedNodes;
             graphNodeCount += sortedNodes.length;
         }
@@ -732,8 +739,10 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         int[][] offsets = new int[graph.numLevels()][];
         int[] scratch = new int[graph.maxConn() * 2];
         for (int level = 0; level < graph.numLevels(); level++) {
-            //TODO use graph.getSortedNodes(level);
-            int[] sortedNodes = HnswGraph.NodesIterator.getSortedNodes(graph.getNodesOnLevel(level));
+            HnswGraph.NodesIterator nodesOnLevel = graph.getNodesOnLevel(level);
+            int[] sortedNodes = new int[nodesOnLevel.size()];
+            nodesOnLevel.consume(sortedNodes);
+            Arrays.sort(sortedNodes);
             offsets[level] = new int[sortedNodes.length];
             int nodeOffsetId = 0;
             for (int node : sortedNodes) {
@@ -787,12 +796,57 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         final long recordByteSize = (long) dim + 3L * Float.BYTES + Integer.BYTES;
         final long quantizedStart = centroidsInput.getFilePointer();
         final IndexInput quantizedSlice = centroidsInput.slice("quantized-centroids", quantizedStart, recordByteSize * numCentroids);
-        return new OffHeapQuantizedCentroidScorerSupplier(
-            quantizedSlice,
-            numCentroids,
+        final float[] centroid = weightedGlobalCentroid(centroidSupplier, dim, centroidAssignments);
+        final DenseOffHeapCentroidQuantizedValues quantizedValues = new DenseOffHeapCentroidQuantizedValues(
             dim,
-            fieldInfo.getVectorSimilarityFunction()
+            numCentroids,
+            fieldInfo.getVectorSimilarityFunction(),
+            quantizedSlice,
+            centroid,
+            ESVectorUtil.dotProduct(centroid, centroid)
         );
+        final VectorScorerFactory factory = VectorScorerFactory.instance().orElse(null);
+        if (factory != null) {
+            final var scorerSupplier = factory.getInt7uOSQVectorScorerSupplier(
+                VectorSimilarityType.of(fieldInfo.getVectorSimilarityFunction()),
+                quantizedSlice,
+                quantizedValues
+            );
+            if (scorerSupplier.isPresent()) {
+                return scorerSupplier.get();
+            }
+        }
+        return new Lucene104ScalarQuantizedVectorScorer(null).getRandomVectorScorerSupplier(
+            fieldInfo.getVectorSimilarityFunction(),
+            quantizedValues
+        );
+    }
+
+    private static float[] weightedGlobalCentroid(CentroidSupplier centroidSupplier, int dimension, int[] centroidAssignments) throws IOException {
+        final int[] centroidDocCounts = new int[centroidSupplier.size()];
+        for (int centroidOrd : centroidAssignments) {
+            centroidDocCounts[centroidOrd]++;
+        }
+        final float[] global = new float[dimension];
+        long totalWeight = 0L;
+        for (int ord = 0; ord < centroidSupplier.size(); ord++) {
+            final int weight = centroidDocCounts[ord];
+            if (weight == 0) {
+                continue;
+            }
+            final float[] centroid = centroidSupplier.centroid(ord);
+            for (int d = 0; d < dimension; d++) {
+                global[d] += centroid[d] * weight;
+            }
+            totalWeight += weight;
+        }
+        if (totalWeight > 0) {
+            final float inv = 1f / totalWeight;
+            for (int d = 0; d < dimension; d++) {
+                global[d] *= inv;
+            }
+        }
+        return global;
     }
 
     @Override
@@ -864,14 +918,11 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             }
         }
 
-        QuantizedCentroids quantizedCentroids = new QuantizedCentroids(
-            centroidSupplier,
-            fieldInfo.getVectorDimension(),
-            osq,
-            globalCentroid
-        );
-        DiskBBQBulkWriter bulkWriter = DiskBBQBulkWriter.fromBitSize(7, CENTROID_BULK_SIZE, centroidOutput, true, true);
-        bulkWriter.writeVectors(quantizedCentroids, null);
+        QuantizedCentroids quantizedCentroids = new QuantizedCentroids(centroidSupplier, fieldInfo.getVectorDimension(), osq, globalCentroid);
+        for (int i = 0; i < quantizedCentroids.count(); i++) {
+            byte[] quantizedVector = quantizedCentroids.next();
+            writeQuantizedValue(centroidOutput, quantizedVector, quantizedCentroids.getCorrections());
+        }
         // Write posting list offsets/lengths for each centroid, plus parent ordinal for query quantization.
         for (int i = 0; i < centroidSupplier.size(); i++) {
             centroidOutput.writeLong(centroidOffsetAndLength.offsets().get(i));
@@ -1206,138 +1257,114 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         }
     }
 
-    private static class OffHeapQuantizedCentroidScorerSupplier implements RandomVectorScorerSupplier {
-        private final IndexInput quantizedCentroids;
-        private final int size;
+    private static class DenseOffHeapCentroidQuantizedValues extends QuantizedByteVectorValues {
         private final int dimension;
+        private final int size;
         private final VectorSimilarityFunction similarityFunction;
-        private final int fullBlockCount;
-        private final int tailBlockCount;
-        private final long fullBlockByteSize;
+        private final IndexInput slice;
+        private final byte[] vectorValue;
+        private final float[] correctiveValues = new float[3];
+        private final float[] centroid;
+        private final float centroidDp;
+        private int quantizedComponentSum;
+        private int lastOrd = -1;
 
-        private OffHeapQuantizedCentroidScorerSupplier(
-            IndexInput quantizedCentroids,
-            int size,
+        DenseOffHeapCentroidQuantizedValues(
             int dimension,
-            VectorSimilarityFunction similarityFunction
+            int size,
+            VectorSimilarityFunction similarityFunction,
+            IndexInput slice,
+            float[] centroid,
+            float centroidDp
         ) {
-            this.quantizedCentroids = quantizedCentroids;
-            this.size = size;
             this.dimension = dimension;
+            this.size = size;
             this.similarityFunction = similarityFunction;
-            this.fullBlockCount = size / CENTROID_BULK_SIZE;
-            this.tailBlockCount = size % CENTROID_BULK_SIZE;
-            this.fullBlockByteSize = (long) CENTROID_BULK_SIZE * (dimension + 4L * Integer.BYTES);
+            this.slice = slice;
+            this.centroid = centroid;
+            this.centroidDp = centroidDp;
+            this.vectorValue = new byte[dimension];
         }
 
         @Override
-        public UpdateableRandomVectorScorer scorer() {
-            final IndexInput scorerInput = quantizedCentroids.clone();
-            final ES92Int7VectorsScorer scorer;
-            try {
-                scorer = ESVectorUtil.getES92Int7VectorsScorer(scorerInput, dimension, CENTROID_BULK_SIZE);
-            } catch (IOException e) {
-                throw new UncheckedIOException("failed to initialize centroid scorer", e);
+        public IndexInput getSlice() {
+            return slice;
+        }
+
+        @Override
+        public org.apache.lucene.util.quantization.OptimizedScalarQuantizer.QuantizationResult getCorrectiveTerms(int vectorOrd)
+            throws IOException {
+            if (lastOrd != vectorOrd) {
+                readOrd(vectorOrd);
             }
-            return new UpdateableRandomVectorScorer() {
-                private final byte[] queryVector = new byte[dimension];
-                private final float[] blockScores = new float[CENTROID_BULK_SIZE];
-                private float queryLowerInterval;
-                private float queryUpperInterval;
-                private int queryComponentSum;
-                private float queryAdditionalCorrection;
-                private int cachedBlock = -1;
-                private int cachedBlockSize = 0;
-
-                @Override
-                public float score(int node) throws IOException {
-                    assert node >= 0 && node < size;
-                    final int block = node / CENTROID_BULK_SIZE;
-                    if (block != cachedBlock) {
-                        cachedBlock = block;
-                        cachedBlockSize = blockVectorCount(block);
-                        scorerInput.seek(blockStartOffset(block));
-                        scorer.scoreBulk(
-                            queryVector,
-                            queryLowerInterval,
-                            queryUpperInterval,
-                            queryComponentSum,
-                            queryAdditionalCorrection,
-                            similarityFunction,
-                            0f,
-                            blockScores,
-                            cachedBlockSize
-                        );
-                    }
-                    final int inBlock = node % CENTROID_BULK_SIZE;
-                    assert inBlock < cachedBlockSize;
-                    return blockScores[inBlock];
-                }
-
-                @Override
-                public void bulkScore(int[] nodes, float[] scores, int numNodes) throws IOException {
-                    for (int i = 0; i < numNodes; i++) {
-                        scores[i] = score(nodes[i]);
-                    }
-                }
-
-                @Override
-                public int maxOrd() {
-                    return size;
-                }
-
-                @Override
-                public void setScoringOrdinal(int node) throws IOException {
-                    assert node >= 0 && node < size;
-                    final int block = node / CENTROID_BULK_SIZE;
-                    final int inBlock = node % CENTROID_BULK_SIZE;
-                    final int blockSize = blockVectorCount(block);
-                    final long blockBase = blockStartOffset(block);
-                    final long vectorsBase = blockBase;
-                    final long lowerBase = vectorsBase + (long) blockSize * dimension;
-                    final long upperBase = lowerBase + (long) blockSize * Integer.BYTES;
-                    final long sumBase = upperBase + (long) blockSize * Integer.BYTES;
-                    final long addBase = sumBase + (long) blockSize * Integer.BYTES;
-
-                    scorerInput.seek(vectorsBase + (long) inBlock * dimension);
-                    scorerInput.readBytes(queryVector, 0, queryVector.length);
-
-                    scorerInput.seek(lowerBase + (long) inBlock * Integer.BYTES);
-                    queryLowerInterval = Float.intBitsToFloat(scorerInput.readInt());
-                    scorerInput.seek(upperBase + (long) inBlock * Integer.BYTES);
-                    queryUpperInterval = Float.intBitsToFloat(scorerInput.readInt());
-                    scorerInput.seek(addBase + (long) inBlock * Integer.BYTES);
-                    queryAdditionalCorrection = Float.intBitsToFloat(scorerInput.readInt());
-                    scorerInput.seek(sumBase + (long) inBlock * Integer.BYTES);
-                    queryComponentSum = scorerInput.readInt();
-                    cachedBlock = -1;
-                    cachedBlockSize = 0;
-                }
-            };
-        }
-
-        @Override
-        public RandomVectorScorerSupplier copy() {
-            return new OffHeapQuantizedCentroidScorerSupplier(
-                quantizedCentroids.clone(),
-                size,
-                dimension,
-                similarityFunction
+            return new org.apache.lucene.util.quantization.OptimizedScalarQuantizer.QuantizationResult(
+                correctiveValues[0],
+                correctiveValues[1],
+                correctiveValues[2],
+                quantizedComponentSum
             );
         }
 
-        private int blockVectorCount(int block) {
-            if (block < fullBlockCount) {
-                return CENTROID_BULK_SIZE;
-            }
-            return tailBlockCount;
+        @Override
+        public org.apache.lucene.util.quantization.OptimizedScalarQuantizer getQuantizer() {
+            return new org.apache.lucene.util.quantization.OptimizedScalarQuantizer(similarityFunction);
         }
 
-        private long blockStartOffset(int block) {
-            if (block < fullBlockCount) {
-                return block * fullBlockByteSize;
+        @Override
+        public Lucene104ScalarQuantizedVectorsFormat.ScalarEncoding getScalarEncoding() {
+            return Lucene104ScalarQuantizedVectorsFormat.ScalarEncoding.SEVEN_BIT;
+        }
+
+        @Override
+        public float[] getCentroid() {
+            return centroid;
+        }
+
+        @Override
+        public float getCentroidDP() {
+            return centroidDp;
+        }
+
+        @Override
+        public KnnVectorValues.DocIndexIterator iterator() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public VectorScorer scorer(float[] query) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public byte[] vectorValue(int ord) throws IOException {
+            if (lastOrd != ord) {
+                readOrd(ord);
             }
-            return (long) fullBlockCount * fullBlockByteSize;
+            return vectorValue;
+        }
+
+        @Override
+        public int dimension() {
+            return dimension;
+        }
+
+        @Override
+        public int size() {
+            return size;
+        }
+
+        @Override
+        public QuantizedByteVectorValues copy() throws IOException {
+            return new DenseOffHeapCentroidQuantizedValues(dimension, size, similarityFunction, slice.clone(), centroid, centroidDp);
+        }
+
+        private void readOrd(int ord) throws IOException {
+            final long byteSize = (long) dimension + 3L * Float.BYTES + Integer.BYTES;
+            slice.seek(ord * byteSize);
+            slice.readBytes(vectorValue, 0, vectorValue.length);
+            slice.readFloats(correctiveValues, 0, 3);
+            quantizedComponentSum = slice.readInt();
+            lastOrd = ord;
         }
     }
 }
