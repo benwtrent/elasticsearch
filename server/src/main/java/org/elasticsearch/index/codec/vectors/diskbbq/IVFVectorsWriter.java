@@ -214,6 +214,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
         int[] centroidAssignments,
+        float[] globalCentroid,
         IndexInput centroidsInput,
         IndexOutput centroidOutput
     ) throws IOException {
@@ -275,6 +276,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
                 fieldWriter.fieldInfo,
                 centroidSupplier,
                 centroidAssignments.assignments(),
+                globalCentroid,
                 output -> writeCentroids(
                     fieldWriter.fieldInfo,
                     centroidSupplier,
@@ -308,6 +310,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
         int[] centroidAssignments,
+        float[] globalCentroid,
         CentroidWriter centroidWriter
     ) throws IOException {
         final long centroidOffset = ivfCentroids.alignFilePointer(Float.BYTES);
@@ -328,7 +331,14 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
             }
             try (IndexInput centroidDataInput = directory.openInput(centroidDataTempName, IOContext.DEFAULT)) {
                 ivfCentroids.copyBytes(centroidDataInput, centroidDataLength);
-                centroidIndexMetaWriter = indexCentroids(fieldInfo, centroidSupplier, centroidAssignments, centroidDataInput, ivfCentroids);
+                centroidIndexMetaWriter = indexCentroids(
+                    fieldInfo,
+                    centroidSupplier,
+                    centroidAssignments,
+                    globalCentroid,
+                    centroidDataInput,
+                    ivfCentroids
+                );
             } finally {
                 org.apache.lucene.util.IOUtils.deleteFilesIgnoringExceptions(directory, centroidDataTempName);
             }
@@ -545,6 +555,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
                         fieldInfo,
                         centroidSupplier,
                         assignments,
+                        calculatedGlobalCentroid,
                         output -> writeCentroids(
                             fieldInfo,
                             centroidSupplier,

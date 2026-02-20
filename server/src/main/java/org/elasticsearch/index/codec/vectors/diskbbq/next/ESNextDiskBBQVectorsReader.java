@@ -9,14 +9,14 @@
 
 package org.elasticsearch.index.codec.vectors.diskbbq.next;
 
+import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorsFormat;
+import org.apache.lucene.codecs.lucene104.QuantizedByteVectorValues;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FloatVectorValues;
 import org.apache.lucene.index.KnnVectorValues;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.VectorEncoding;
 import org.apache.lucene.index.VectorSimilarityFunction;
-import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorsFormat;
-import org.apache.lucene.codecs.lucene104.QuantizedByteVectorValues;
 import org.apache.lucene.search.AcceptDocs;
 import org.apache.lucene.search.ConjunctionUtils;
 import org.apache.lucene.search.DocIdSetIterator;
@@ -36,8 +36,6 @@ import org.apache.lucene.util.packed.DirectReader;
 import org.apache.lucene.util.packed.DirectWriter;
 import org.elasticsearch.common.cache.Cache;
 import org.elasticsearch.common.cache.CacheBuilder;
-import org.elasticsearch.logging.LogManager;
-import org.elasticsearch.logging.Logger;
 import org.elasticsearch.index.codec.vectors.GenericFlatVectorReaders;
 import org.elasticsearch.index.codec.vectors.OptimizedScalarQuantizer;
 import org.elasticsearch.index.codec.vectors.cluster.NeighborQueue;
@@ -48,6 +46,8 @@ import org.elasticsearch.index.codec.vectors.diskbbq.PostingMetadata;
 import org.elasticsearch.index.codec.vectors.diskbbq.Preconditioner;
 import org.elasticsearch.index.codec.vectors.diskbbq.PrefetchingCentroidIterator;
 import org.elasticsearch.index.codec.vectors.diskbbq.VectorPreconditioner;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.simdvec.ESNextOSQVectorsScorer;
 import org.elasticsearch.simdvec.ESVectorUtil;
 import org.elasticsearch.simdvec.VectorScorerFactory;
@@ -58,9 +58,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import static org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS;
 import static org.elasticsearch.index.codec.vectors.OptimizedScalarQuantizer.DEFAULT_LAMBDA;
 import static org.elasticsearch.index.codec.vectors.diskbbq.PostingMetadata.NO_ORDINAL;
-import static org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS;
 import static org.elasticsearch.simdvec.ESNextOSQVectorsScorer.BULK_SIZE;
 
 /**
@@ -69,7 +69,7 @@ import static org.elasticsearch.simdvec.ESNextOSQVectorsScorer.BULK_SIZE;
  */
 public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements VectorPreconditioner {
     private static final Logger logger = LogManager.getLogger(ESNextDiskBBQVectorsReader.class);
-    private static final float GRAPH_CENTROID_OVERSAMPLE_MULTIPLIER = 2.5f;
+    private static final float GRAPH_CENTROID_OVERSAMPLE_MULTIPLIER = 1.5f;
 
     public ESNextDiskBBQVectorsReader(SegmentReadState state, GenericFlatVectorReaders.LoadFlatVectorsReader getFormatReader)
         throws IOException {
@@ -394,7 +394,6 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         float[] globalCentroid
     ) throws IOException {
         final OffHeapHnswGraph graph = new OffHeapHnswGraph(fieldEntry, numCentroids, ivfCentroids);
-        final CentroidSearchStats searchStats = logger.isDebugEnabled() ? new CentroidSearchStats() : null;
         final RandomVectorScorer centroidScorer = createInt7uCentroidScorer(
             fieldInfo,
             centroids,
@@ -405,27 +404,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             globalCentroid,
             globalCentroidDp
         );
-        final RandomVectorScorer graphSearchScorer = searchStats == null ? centroidScorer : new RandomVectorScorer() {
-            @Override
-            public float score(int node) throws IOException {
-                searchStats.recordScoredBlock(1);
-                return centroidScorer.score(node);
-            }
-
-            @Override
-            public int maxOrd() {
-                return centroidScorer.maxOrd();
-            }
-        };
         if (graph.isEmpty()) {
-            return getCentroidIteratorFlat(
-                fieldInfo,
-                centroids,
-                numParents,
-                numCentroids,
-                acceptCentroids,
-                centroidScorer
-            );
+            return getCentroidIteratorFlat(fieldInfo, centroids, numParents, numCentroids, acceptCentroids, centroidScorer);
         }
         final int desiredCentroids = Math.max(1, Math.min(numCentroids, (int) Math.ceil(numCentroids * visitRatio)));
         final int gatheredCentroids = Math.max(
@@ -434,32 +414,22 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         );
         final TopKnnCollector collector = new TopKnnCollector(gatheredCentroids, Integer.MAX_VALUE);
         final int filteredDocCount = acceptCentroids == null ? numCentroids : acceptCentroids.cardinality();
-        HnswGraphSearcher.search(graphSearchScorer, collector, graph, acceptCentroids, filteredDocCount);
+        HnswGraphSearcher.search(centroidScorer, collector, graph, acceptCentroids, filteredDocCount);
         final ScoreDoc[] scoreDocs = collector.topDocs().scoreDocs;
-        if (searchStats != null) {
-            logger.debug(
-                "graph centroid search stats [field={}, centroids={}, acceptedCentroids={}, desiredCentroids={}, gatheredCentroids={}, returnedCentroids={}, nodesVisited={}, blocksVisited={}]",
-                fieldInfo.name,
-                numCentroids,
-                filteredDocCount,
-                desiredCentroids,
-                gatheredCentroids,
-                scoreDocs.length,
-                searchStats.nodesVisited(),
-                searchStats.blocksVisited()
-            );
-        }
+        logger.debug(
+            "graph centroid search stats [field={}, centroids={}, acceptedCentroids={}, desiredCentroids={}, gatheredCentroids={}, returnedCentroids={}]",
+            fieldInfo.name,
+            numCentroids,
+            filteredDocCount,
+            desiredCentroids,
+            gatheredCentroids,
+            scoreDocs.length
+        );
         if (scoreDocs.length == 0) {
-            return getCentroidIteratorFlat(
-                fieldInfo,
-                centroids,
-                numParents,
-                numCentroids,
-                acceptCentroids,
-                centroidScorer
-            );
+            return getCentroidIteratorFlat(fieldInfo, centroids, numParents, numCentroids, acceptCentroids, centroidScorer);
         }
-        final long postingsOffset = quantizedStart + (long) numCentroids * (fieldInfo.getVectorDimension() + 3L * Float.BYTES + Integer.BYTES);
+        final long postingsOffset = quantizedStart + (long) numCentroids * (fieldInfo.getVectorDimension() + 3L * Float.BYTES
+            + Integer.BYTES);
         return new CentroidIterator() {
             private int scoreDocIdx = 0;
 
@@ -495,25 +465,17 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             centroids.skipBytes((long) numParents * fieldInfo.getVectorDimension() * Float.BYTES);
         }
         final NeighborQueue neighborQueue = new NeighborQueue(numCentroids, true);
-        final CentroidSearchStats searchStats = logger.isDebugEnabled() ? new CentroidSearchStats() : null;
         for (int ord = 0; ord < numCentroids; ord++) {
             if (acceptCentroids == null || acceptCentroids.get(ord)) {
-                if (searchStats != null) {
-                    searchStats.recordScoredBlock(1);
-                }
                 neighborQueue.add(ord, centroidScorer.score(ord));
             }
         }
-        if (searchStats != null) {
-            logger.debug(
-                "flat centroid search stats [field={}, centroids={}, acceptedCentroids={}, nodesVisited={}, blocksVisited={}]",
-                fieldInfo.name,
-                numCentroids,
-                acceptCentroids == null ? numCentroids : acceptCentroids.cardinality(),
-                searchStats.nodesVisited(),
-                searchStats.blocksVisited()
-            );
-        }
+        logger.debug(
+            "flat centroid search stats [field={}, centroids={}, acceptedCentroids={}]",
+            fieldInfo.name,
+            numCentroids,
+            acceptCentroids == null ? numCentroids : acceptCentroids.cardinality()
+        );
         long offset = centroids.getFilePointer();
         return new CentroidIterator() {
             @Override
@@ -665,24 +627,6 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             queryParams.additionalCorrection(),
             queryParams.quantizedComponentSum()
         ).orElseThrow(() -> new IOException("No int7u centroid scorer available for " + fieldInfo.getVectorSimilarityFunction()));
-    }
-
-    private static class CentroidSearchStats {
-        private long nodesVisited;
-        private long blocksVisited;
-
-        void recordScoredBlock(int blockSize) {
-            blocksVisited++;
-            nodesVisited += blockSize;
-        }
-
-        long nodesVisited() {
-            return nodesVisited;
-        }
-
-        long blocksVisited() {
-            return blocksVisited;
-        }
     }
 
     private static class DenseOffHeapCentroidQuantizedValues extends QuantizedByteVectorValues {
