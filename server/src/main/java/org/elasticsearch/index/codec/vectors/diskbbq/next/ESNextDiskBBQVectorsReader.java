@@ -134,8 +134,10 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             final LongValues longValues = DirectReader.getInstance(centroids.randomAccessSlice(fp, sizeLookup), bitsRequired);
             int doc = iterator.nextDoc();
             for (; doc != DocIdSetIterator.NO_MORE_DOCS; doc = iterator.nextDoc()) {
-                acceptCentroids.set((int) longValues.get(docIndexIterator.index()));
-                filteredCentroidCount++;
+                final int centroidOrd = (int) longValues.get(docIndexIterator.index());
+                if (acceptCentroids.getAndSet(centroidOrd) == false) {
+                    filteredCentroidCount++;
+                }
             }
         }
         final OptimizedScalarQuantizer scalarQuantizer = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction());
