@@ -121,10 +121,12 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         final long sizeLookup = directWriterSizeOnDisk(values.size(), bitsRequired);
         final long fp = centroids.getFilePointer();
         final FixedBitSet acceptCentroids;
+        int filteredCentroidCount = 0;
         if (approximateDocsPerCentroid > 1.25 || numCentroids == 1) {
             // only apply centroid filtering when we expect some / many centroids will not have
             // any matching document.
             acceptCentroids = null;
+            filteredCentroidCount = numCentroids;
         } else {
             acceptCentroids = new FixedBitSet(numCentroids);
             final KnnVectorValues.DocIndexIterator docIndexIterator = values.iterator();
@@ -133,6 +135,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             int doc = iterator.nextDoc();
             for (; doc != DocIdSetIterator.NO_MORE_DOCS; doc = iterator.nextDoc()) {
                 acceptCentroids.set((int) longValues.get(docIndexIterator.index()));
+                filteredCentroidCount++;
             }
         }
         final OptimizedScalarQuantizer scalarQuantizer = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction());
@@ -164,6 +167,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 queryParams,
                 fieldEntry.globalCentroidDp(),
                 acceptCentroids,
+                filteredCentroidCount,
                 visitRatio,
                 fieldEntry.globalCentroid()
             )
@@ -173,6 +177,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 numParents,
                 numCentroids,
                 acceptCentroids,
+                filteredCentroidCount,
                 createInt7uCentroidScorer(
                     fieldInfo,
                     centroids,
@@ -390,6 +395,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         OptimizedScalarQuantizer.QuantizationResult queryParams,
         float globalCentroidDp,
         FixedBitSet acceptCentroids,
+        int filteredCentroidCount,
         float visitRatio,
         float[] globalCentroid
     ) throws IOException {
@@ -404,29 +410,28 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             globalCentroid,
             globalCentroidDp
         );
-        if (graph.isEmpty()) {
-            return getCentroidIteratorFlat(fieldInfo, centroids, numParents, numCentroids, acceptCentroids, centroidScorer);
-        }
         final int desiredCentroids = Math.max(1, Math.min(numCentroids, (int) Math.ceil(numCentroids * visitRatio)));
         final int gatheredCentroids = Math.max(
             desiredCentroids,
             Math.min(numCentroids, (int) Math.ceil(desiredCentroids * GRAPH_CENTROID_OVERSAMPLE_MULTIPLIER))
         );
+        if (graph.isEmpty() || filteredCentroidCount <= gatheredCentroids) {
+            return getCentroidIteratorFlat(fieldInfo, centroids, numParents, numCentroids, acceptCentroids, filteredCentroidCount, centroidScorer);
+        }
         final TopKnnCollector collector = new TopKnnCollector(gatheredCentroids, Integer.MAX_VALUE);
-        final int filteredDocCount = acceptCentroids == null ? numCentroids : acceptCentroids.cardinality();
-        HnswGraphSearcher.search(centroidScorer, collector, graph, acceptCentroids, filteredDocCount);
+        HnswGraphSearcher.search(centroidScorer, collector, graph, acceptCentroids, filteredCentroidCount);
         final ScoreDoc[] scoreDocs = collector.topDocs().scoreDocs;
         logger.debug(
             "graph centroid search stats [field={}, centroids={}, acceptedCentroids={}, desiredCentroids={}, gatheredCentroids={}, returnedCentroids={}]",
             fieldInfo.name,
             numCentroids,
-            filteredDocCount,
+            filteredCentroidCount,
             desiredCentroids,
             gatheredCentroids,
             scoreDocs.length
         );
         if (scoreDocs.length == 0) {
-            return getCentroidIteratorFlat(fieldInfo, centroids, numParents, numCentroids, acceptCentroids, centroidScorer);
+            return getCentroidIteratorFlat(fieldInfo, centroids, numParents, numCentroids, acceptCentroids, filteredCentroidCount, centroidScorer);
         }
         final long postingsOffset = quantizedStart + (long) numCentroids * (fieldInfo.getVectorDimension() + 3L * Float.BYTES
             + Integer.BYTES);
@@ -458,6 +463,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         int numParents,
         int numCentroids,
         FixedBitSet acceptCentroids,
+        int filteredCentroidCount,
         RandomVectorScorer centroidScorer
     ) throws IOException {
         if (numParents > 0) {
@@ -474,7 +480,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             "flat centroid search stats [field={}, centroids={}, acceptedCentroids={}]",
             fieldInfo.name,
             numCentroids,
-            acceptCentroids == null ? numCentroids : acceptCentroids.cardinality()
+            filteredCentroidCount
         );
         long offset = centroids.getFilePointer();
         return new CentroidIterator() {
