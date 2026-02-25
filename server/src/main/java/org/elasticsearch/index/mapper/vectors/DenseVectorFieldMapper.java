@@ -39,7 +39,6 @@ import org.apache.lucene.search.join.BitSetProducer;
 import org.apache.lucene.search.knn.KnnSearchStrategy;
 import org.apache.lucene.util.BitUtil;
 import org.apache.lucene.util.BytesRef;
-import org.elasticsearch.Build;
 import org.elasticsearch.ElasticsearchSecurityException;
 import org.elasticsearch.common.ParsingException;
 import org.elasticsearch.common.settings.Setting;
@@ -66,7 +65,6 @@ import org.elasticsearch.index.mapper.DocumentParserContext;
 import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.IndexType;
 import org.elasticsearch.index.mapper.MappedFieldType;
-import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperBuilderContext;
 import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.MappingParser;
@@ -266,16 +264,19 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
         final IndexVersion indexVersionCreated;
         final boolean isExcludeSourceVectors;
+        final boolean experimentalFeaturesEnabled;
         private final List<VectorsFormatProvider> vectorsFormatProviders;
 
         public Builder(
             String name,
             IndexVersion indexVersionCreated,
             boolean isExcludeSourceVectors,
+            boolean experimentalFeaturesEnabled,
             List<VectorsFormatProvider> vectorsFormatProviders
         ) {
             super(name);
             this.indexVersionCreated = indexVersionCreated;
+            this.experimentalFeaturesEnabled = experimentalFeaturesEnabled;
             this.vectorsFormatProviders = vectorsFormatProviders;
             // This is defined as updatable because it can be updated once, from [null] to a valid dim size,
             // by a dynamic mapping update. Once it has been set, however, the value cannot be changed.
@@ -340,7 +341,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 "index_options",
                 true,
                 () -> defaultIndexOptions(defaultInt8Hnsw, defaultBBQHnsw),
-                (n, c, o) -> o == null ? null : parseIndexOptions(n, o, indexVersionCreated),
+                (n, c, o) -> o == null ? null : parseIndexOptions(n, o, indexVersionCreated, experimentalFeaturesEnabled),
                 m -> toType(m).indexOptions,
                 (b, n, v) -> {
                     if (v != null) {
@@ -406,7 +407,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                     Lucene99HnswVectorsFormat.DEFAULT_MAX_CONN,
                     Lucene99HnswVectorsFormat.DEFAULT_BEAM_WIDTH,
                     false,
-                    new RescoreVector(DEFAULT_OVERSAMPLE)
+                    new RescoreVector(DEFAULT_OVERSAMPLE),
+                    -1
                 );
             } else if (defaultInt8Hnsw) {
                 return new Int8HnswIndexOptions(
@@ -414,7 +416,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                     Lucene99HnswVectorsFormat.DEFAULT_BEAM_WIDTH,
                     null,
                     false,
-                    null
+                    null,
+                    -1
                 );
             }
             return null;
@@ -446,6 +449,11 @@ public class DenseVectorFieldMapper extends FieldMapper {
         }
 
         @Override
+        public String contentType() {
+            return CONTENT_TYPE;
+        }
+
+        @Override
         public DenseVectorFieldMapper build(MapperBuilderContext context) {
             // Validate again here because the dimensions or element type could have been set programmatically,
             // which affects index option validity
@@ -468,6 +476,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 indexOptions.getValue(),
                 indexVersionCreated,
                 isExcludeSourceVectorsFinal,
+                experimentalFeaturesEnabled,
                 vectorsFormatProviders
             );
         }
@@ -1486,20 +1495,27 @@ public class DenseVectorFieldMapper extends FieldMapper {
     public enum VectorIndexType {
         HNSW("hnsw", false) {
             @Override
-            public DenseVectorIndexOptions parseIndexOptions(String fieldName, Map<String, ?> indexOptionsMap, IndexVersion indexVersion) {
+            public DenseVectorIndexOptions parseIndexOptions(
+                String fieldName,
+                Map<String, ?> indexOptionsMap,
+                IndexVersion indexVersion,
+                boolean experimentalFeaturesEnabled
+            ) {
                 Object mNode = indexOptionsMap.remove("m");
                 Object efConstructionNode = indexOptionsMap.remove("ef_construction");
+                Object flatIndexThresholdNode = indexOptionsMap.remove("flat_index_threshold");
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
 
                 int m = XContentMapValues.nodeIntegerValue(mNode, Lucene99HnswVectorsFormat.DEFAULT_MAX_CONN);
                 int efConstruction = XContentMapValues.nodeIntegerValue(efConstructionNode, Lucene99HnswVectorsFormat.DEFAULT_BEAM_WIDTH);
+                int flatIndexThreshold = XContentMapValues.nodeIntegerValue(flatIndexThresholdNode, -1);
                 boolean onDiskRescore = XContentMapValues.nodeBooleanValue(onDiskRescoreNode, false);
                 if (onDiskRescore) {
                     throw new IllegalArgumentException("on_disk_rescore is only supported for indexed and quantized vector types");
                 }
                 MappingParser.checkNoRemainingFields(fieldName, indexOptionsMap);
 
-                return new HnswIndexOptions(m, efConstruction);
+                return new HnswIndexOptions(m, efConstruction, flatIndexThreshold);
             }
 
             @Override
@@ -1514,15 +1530,22 @@ public class DenseVectorFieldMapper extends FieldMapper {
         },
         INT8_HNSW("int8_hnsw", true) {
             @Override
-            public DenseVectorIndexOptions parseIndexOptions(String fieldName, Map<String, ?> indexOptionsMap, IndexVersion indexVersion) {
+            public DenseVectorIndexOptions parseIndexOptions(
+                String fieldName,
+                Map<String, ?> indexOptionsMap,
+                IndexVersion indexVersion,
+                boolean experimentalFeaturesEnabled
+            ) {
                 Object mNode = indexOptionsMap.remove("m");
                 Object efConstructionNode = indexOptionsMap.remove("ef_construction");
                 Object confidenceIntervalNode = indexOptionsMap.remove("confidence_interval");
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
+                Object flatIndexThresholdNode = indexOptionsMap.remove("flat_index_threshold");
 
                 int m = XContentMapValues.nodeIntegerValue(mNode, Lucene99HnswVectorsFormat.DEFAULT_MAX_CONN);
                 int efConstruction = XContentMapValues.nodeIntegerValue(efConstructionNode, Lucene99HnswVectorsFormat.DEFAULT_BEAM_WIDTH);
                 boolean onDiskRescore = XContentMapValues.nodeBooleanValue(onDiskRescoreNode, false);
+                int flatIndexThreshold = XContentMapValues.nodeIntegerValue(flatIndexThresholdNode, -1);
 
                 Float confidenceInterval = null;
                 if (confidenceIntervalNode != null) {
@@ -1533,7 +1556,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                     rescoreVector = RescoreVector.fromIndexOptions(indexOptionsMap, indexVersion);
                 }
                 MappingParser.checkNoRemainingFields(fieldName, indexOptionsMap);
-                return new Int8HnswIndexOptions(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector);
+                return new Int8HnswIndexOptions(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector, flatIndexThreshold);
             }
 
             @Override
@@ -1547,15 +1570,22 @@ public class DenseVectorFieldMapper extends FieldMapper {
             }
         },
         INT4_HNSW("int4_hnsw", true) {
-            public DenseVectorIndexOptions parseIndexOptions(String fieldName, Map<String, ?> indexOptionsMap, IndexVersion indexVersion) {
+            public DenseVectorIndexOptions parseIndexOptions(
+                String fieldName,
+                Map<String, ?> indexOptionsMap,
+                IndexVersion indexVersion,
+                boolean experimentalFeaturesEnabled
+            ) {
                 Object mNode = indexOptionsMap.remove("m");
                 Object efConstructionNode = indexOptionsMap.remove("ef_construction");
                 Object confidenceIntervalNode = indexOptionsMap.remove("confidence_interval");
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
+                Object flatIndexThresholdNode = indexOptionsMap.remove("flat_index_threshold");
 
                 int m = XContentMapValues.nodeIntegerValue(mNode, Lucene99HnswVectorsFormat.DEFAULT_MAX_CONN);
                 int efConstruction = XContentMapValues.nodeIntegerValue(efConstructionNode, Lucene99HnswVectorsFormat.DEFAULT_BEAM_WIDTH);
                 boolean onDiskRescore = XContentMapValues.nodeBooleanValue(onDiskRescoreNode, false);
+                int flatIndexThreshold = XContentMapValues.nodeIntegerValue(flatIndexThresholdNode, -1);
 
                 Float confidenceInterval = null;
                 if (confidenceIntervalNode != null) {
@@ -1567,7 +1597,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 }
                 MappingParser.checkNoRemainingFields(fieldName, indexOptionsMap);
 
-                return new Int4HnswIndexOptions(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector);
+                return new Int4HnswIndexOptions(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector, flatIndexThreshold);
             }
 
             @Override
@@ -1582,7 +1612,12 @@ public class DenseVectorFieldMapper extends FieldMapper {
         },
         FLAT("flat", false) {
             @Override
-            public DenseVectorIndexOptions parseIndexOptions(String fieldName, Map<String, ?> indexOptionsMap, IndexVersion indexVersion) {
+            public DenseVectorIndexOptions parseIndexOptions(
+                String fieldName,
+                Map<String, ?> indexOptionsMap,
+                IndexVersion indexVersion,
+                boolean experimentalFeaturesEnabled
+            ) {
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
                 boolean onDiskRescore = XContentMapValues.nodeBooleanValue(onDiskRescoreNode, false);
                 if (onDiskRescore) {
@@ -1604,7 +1639,12 @@ public class DenseVectorFieldMapper extends FieldMapper {
         },
         INT8_FLAT("int8_flat", true) {
             @Override
-            public DenseVectorIndexOptions parseIndexOptions(String fieldName, Map<String, ?> indexOptionsMap, IndexVersion indexVersion) {
+            public DenseVectorIndexOptions parseIndexOptions(
+                String fieldName,
+                Map<String, ?> indexOptionsMap,
+                IndexVersion indexVersion,
+                boolean experimentalFeaturesEnabled
+            ) {
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
                 Object confidenceIntervalNode = indexOptionsMap.remove("confidence_interval");
                 Float confidenceInterval = null;
@@ -1635,7 +1675,12 @@ public class DenseVectorFieldMapper extends FieldMapper {
         },
         INT4_FLAT("int4_flat", true) {
             @Override
-            public DenseVectorIndexOptions parseIndexOptions(String fieldName, Map<String, ?> indexOptionsMap, IndexVersion indexVersion) {
+            public DenseVectorIndexOptions parseIndexOptions(
+                String fieldName,
+                Map<String, ?> indexOptionsMap,
+                IndexVersion indexVersion,
+                boolean experimentalFeaturesEnabled
+            ) {
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
                 Object confidenceIntervalNode = indexOptionsMap.remove("confidence_interval");
                 Float confidenceInterval = null;
@@ -1666,14 +1711,21 @@ public class DenseVectorFieldMapper extends FieldMapper {
         },
         BBQ_HNSW("bbq_hnsw", true) {
             @Override
-            public DenseVectorIndexOptions parseIndexOptions(String fieldName, Map<String, ?> indexOptionsMap, IndexVersion indexVersion) {
+            public DenseVectorIndexOptions parseIndexOptions(
+                String fieldName,
+                Map<String, ?> indexOptionsMap,
+                IndexVersion indexVersion,
+                boolean experimentalFeaturesEnabled
+            ) {
                 Object mNode = indexOptionsMap.remove("m");
                 Object efConstructionNode = indexOptionsMap.remove("ef_construction");
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
+                Object flatIndexThresholdNode = indexOptionsMap.remove("flat_index_threshold");
 
                 int m = XContentMapValues.nodeIntegerValue(mNode, Lucene99HnswVectorsFormat.DEFAULT_MAX_CONN);
                 int efConstruction = XContentMapValues.nodeIntegerValue(efConstructionNode, Lucene99HnswVectorsFormat.DEFAULT_BEAM_WIDTH);
                 boolean onDiskRescore = XContentMapValues.nodeBooleanValue(onDiskRescoreNode, false);
+                int flatIndexThreshold = XContentMapValues.nodeIntegerValue(flatIndexThresholdNode, -1);
 
                 RescoreVector rescoreVector = null;
                 if (hasRescoreIndexVersion(indexVersion)) {
@@ -1684,7 +1736,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 }
 
                 MappingParser.checkNoRemainingFields(fieldName, indexOptionsMap);
-                return new BBQHnswIndexOptions(m, efConstruction, onDiskRescore, rescoreVector);
+                return new BBQHnswIndexOptions(m, efConstruction, onDiskRescore, rescoreVector, flatIndexThreshold);
             }
 
             @Override
@@ -1699,7 +1751,12 @@ public class DenseVectorFieldMapper extends FieldMapper {
         },
         BBQ_FLAT("bbq_flat", true) {
             @Override
-            public DenseVectorIndexOptions parseIndexOptions(String fieldName, Map<String, ?> indexOptionsMap, IndexVersion indexVersion) {
+            public DenseVectorIndexOptions parseIndexOptions(
+                String fieldName,
+                Map<String, ?> indexOptionsMap,
+                IndexVersion indexVersion,
+                boolean experimentalFeaturesEnabled
+            ) {
                 RescoreVector rescoreVector = null;
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
                 if (hasRescoreIndexVersion(indexVersion)) {
@@ -1728,7 +1785,12 @@ public class DenseVectorFieldMapper extends FieldMapper {
         },
         BBQ_DISK("bbq_disk", true) {
             @Override
-            public DenseVectorIndexOptions parseIndexOptions(String fieldName, Map<String, ?> indexOptionsMap, IndexVersion indexVersion) {
+            public DenseVectorIndexOptions parseIndexOptions(
+                String fieldName,
+                Map<String, ?> indexOptionsMap,
+                IndexVersion indexVersion,
+                boolean experimentalFeaturesEnabled
+            ) {
                 Object clusterSizeNode = indexOptionsMap.remove("cluster_size");
                 int clusterSize = ES920DiskBBQVectorsFormat.DEFAULT_VECTORS_PER_CLUSTER;
                 if (clusterSizeNode != null) {
@@ -1766,7 +1828,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 boolean onDiskRescore = XContentMapValues.nodeBooleanValue(onDiskRescoreNode, false);
 
                 int quantizeBits;
-                if (indexVersion.onOrAfter(DISK_BBQ_QUANTIZE_BITS) && Build.current().isSnapshot()) {
+                if (indexVersion.onOrAfter(DISK_BBQ_QUANTIZE_BITS) && experimentalFeaturesEnabled) {
                     Object quantizeBitsNode = indexOptionsMap.remove("bits");
                     quantizeBits = XContentMapValues.nodeIntegerValue(quantizeBitsNode, DEFAULT_BBQ_IVF_QUANTIZE_BITS);
                     if ((quantizeBits == 1 || quantizeBits == 2 || quantizeBits == 4) == false) {
@@ -1788,7 +1850,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 }
 
                 boolean doPrecondition = false;
-                if (Build.current().isSnapshot()) {
+                if (experimentalFeaturesEnabled) {
                     doPrecondition = XContentMapValues.nodeBooleanValue(indexOptionsMap.remove("precondition"), false);
                 }
 
@@ -1800,7 +1862,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                     rescoreVector,
                     indexVersion,
                     doPrecondition,
-                    quantizeBits
+                    quantizeBits,
+                    experimentalFeaturesEnabled
                 );
             }
 
@@ -1830,7 +1893,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
         public abstract DenseVectorIndexOptions parseIndexOptions(
             String fieldName,
             Map<String, ?> indexOptionsMap,
-            IndexVersion indexVersion
+            IndexVersion indexVersion,
+            boolean experimentalFeaturesEnabled
         );
 
         public abstract boolean supportsElementType(ElementType elementType);
@@ -1952,13 +2016,15 @@ public class DenseVectorFieldMapper extends FieldMapper {
         private final int efConstruction;
         private final float confidenceInterval;
         private final boolean onDiskRescore;
+        private final int flatIndexThreshold;
 
         public Int4HnswIndexOptions(
             int m,
             int efConstruction,
             Float confidenceInterval,
             boolean onDiskRescore,
-            RescoreVector rescoreVector
+            RescoreVector rescoreVector,
+            int flatIndexThreshold
         ) {
             super(VectorIndexType.INT4_HNSW, rescoreVector);
             this.m = m;
@@ -1967,6 +2033,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             // effectively required for int4 to behave well across a wide range of data.
             this.confidenceInterval = confidenceInterval == null ? 0f : confidenceInterval;
             this.onDiskRescore = onDiskRescore;
+            this.flatIndexThreshold = flatIndexThreshold;
         }
 
         @Override
@@ -1981,7 +2048,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 true,
                 onDiskRescore,
                 numMergeWorkers,
-                mergingExecutorService
+                mergingExecutorService,
+                flatIndexThreshold
             );
         }
 
@@ -1998,6 +2066,9 @@ public class DenseVectorFieldMapper extends FieldMapper {
             if (rescoreVector != null) {
                 rescoreVector.toXContent(builder, params);
             }
+            if (flatIndexThreshold >= 0) {
+                builder.field("flat_index_threshold", flatIndexThreshold);
+            }
             builder.endObject();
             return builder;
         }
@@ -2009,17 +2080,22 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 && efConstruction == that.efConstruction
                 && Objects.equals(confidenceInterval, that.confidenceInterval)
                 && onDiskRescore == that.onDiskRescore
-                && Objects.equals(rescoreVector, that.rescoreVector);
+                && Objects.equals(rescoreVector, that.rescoreVector)
+                && flatIndexThreshold == that.flatIndexThreshold;
         }
 
         @Override
         public int doHashCode() {
-            return Objects.hash(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector);
+            return Objects.hash(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector, flatIndexThreshold);
         }
 
         @Override
         public boolean isFlat() {
             return false;
+        }
+
+        public int flatIndexThreshold() {
+            return flatIndexThreshold;
         }
 
         @Override
@@ -2036,6 +2112,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 + onDiskRescore
                 + ", rescore_vector="
                 + (rescoreVector == null ? "none" : rescoreVector)
+                + ", flat_index_threshold="
+                + flatIndexThreshold
                 + "}";
         }
 
@@ -2122,19 +2200,22 @@ public class DenseVectorFieldMapper extends FieldMapper {
         private final int efConstruction;
         private final Float confidenceInterval;
         private final boolean onDiskRescore;
+        private final int flatIndexThreshold;
 
         public Int8HnswIndexOptions(
             int m,
             int efConstruction,
             Float confidenceInterval,
             boolean onDiskRescore,
-            RescoreVector rescoreVector
+            RescoreVector rescoreVector,
+            int flatIndexThreshold
         ) {
             super(VectorIndexType.INT8_HNSW, rescoreVector);
             this.m = m;
             this.efConstruction = efConstruction;
             this.confidenceInterval = confidenceInterval;
             this.onDiskRescore = onDiskRescore;
+            this.flatIndexThreshold = flatIndexThreshold;
         }
 
         @Override
@@ -2149,7 +2230,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 false,
                 onDiskRescore,
                 numMergeWorkers,
-                mergingExecutorService
+                mergingExecutorService,
+                flatIndexThreshold
             );
         }
 
@@ -2168,6 +2250,9 @@ public class DenseVectorFieldMapper extends FieldMapper {
             if (rescoreVector != null) {
                 rescoreVector.toXContent(builder, params);
             }
+            if (flatIndexThreshold >= 0) {
+                builder.field("flat_index_threshold", flatIndexThreshold);
+            }
             builder.endObject();
             return builder;
         }
@@ -2181,12 +2266,13 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 && efConstruction == that.efConstruction
                 && Objects.equals(confidenceInterval, that.confidenceInterval)
                 && onDiskRescore == that.onDiskRescore
-                && Objects.equals(rescoreVector, that.rescoreVector);
+                && Objects.equals(rescoreVector, that.rescoreVector)
+                && flatIndexThreshold == that.flatIndexThreshold;
         }
 
         @Override
         public int doHashCode() {
-            return Objects.hash(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector);
+            return Objects.hash(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector, flatIndexThreshold);
         }
 
         @Override
@@ -2206,6 +2292,10 @@ public class DenseVectorFieldMapper extends FieldMapper {
             return confidenceInterval;
         }
 
+        public int flatIndexThreshold() {
+            return flatIndexThreshold;
+        }
+
         @Override
         public String toString() {
             return "{type="
@@ -2220,6 +2310,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 + onDiskRescore
                 + ", rescore_vector="
                 + (rescoreVector == null ? "none" : rescoreVector)
+                + ", flat_index_threshold="
+                + flatIndexThreshold
                 + "}";
         }
 
@@ -2245,16 +2337,18 @@ public class DenseVectorFieldMapper extends FieldMapper {
     public static class HnswIndexOptions extends DenseVectorIndexOptions {
         private final int m;
         private final int efConstruction;
+        private final int flatIndexThreshold;
 
-        HnswIndexOptions(int m, int efConstruction) {
+        HnswIndexOptions(int m, int efConstruction, int flatIndexThreshold) {
             super(VectorIndexType.HNSW);
             this.m = m;
             this.efConstruction = efConstruction;
+            this.flatIndexThreshold = flatIndexThreshold;
         }
 
         @Override
         public KnnVectorsFormat getVectorsFormat(ElementType elementType, ExecutorService mergingExecutorService, int numMergeWorkers) {
-            return new ES93HnswVectorsFormat(m, efConstruction, elementType, numMergeWorkers, mergingExecutorService);
+            return new ES93HnswVectorsFormat(m, efConstruction, elementType, numMergeWorkers, mergingExecutorService, flatIndexThreshold);
         }
 
         @Override
@@ -2277,6 +2371,9 @@ public class DenseVectorFieldMapper extends FieldMapper {
             builder.field("type", type);
             builder.field("m", m);
             builder.field("ef_construction", efConstruction);
+            if (flatIndexThreshold >= 0) {
+                builder.field("flat_index_threshold", flatIndexThreshold);
+            }
             builder.endObject();
             return builder;
         }
@@ -2286,12 +2383,12 @@ public class DenseVectorFieldMapper extends FieldMapper {
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
             HnswIndexOptions that = (HnswIndexOptions) o;
-            return m == that.m && efConstruction == that.efConstruction;
+            return m == that.m && efConstruction == that.efConstruction && flatIndexThreshold == that.flatIndexThreshold;
         }
 
         @Override
         public int doHashCode() {
-            return Objects.hash(m, efConstruction);
+            return Objects.hash(m, efConstruction, flatIndexThreshold);
         }
 
         @Override
@@ -2307,9 +2404,21 @@ public class DenseVectorFieldMapper extends FieldMapper {
             return efConstruction;
         }
 
+        public int flatIndexThreshold() {
+            return flatIndexThreshold;
+        }
+
         @Override
         public String toString() {
-            return "{type=" + type + ", m=" + m + ", ef_construction=" + efConstruction + "}";
+            return "{type="
+                + type
+                + ", m="
+                + m
+                + ", ef_construction="
+                + efConstruction
+                + ", flat_index_threshold="
+                + flatIndexThreshold
+                + "}";
         }
     }
 
@@ -2317,12 +2426,14 @@ public class DenseVectorFieldMapper extends FieldMapper {
         private final int m;
         private final int efConstruction;
         private final boolean onDiskRescore;
+        private final int flatIndexThreshold;
 
-        public BBQHnswIndexOptions(int m, int efConstruction, boolean onDiskRescore, RescoreVector rescoreVector) {
+        public BBQHnswIndexOptions(int m, int efConstruction, boolean onDiskRescore, RescoreVector rescoreVector, int flatIndexThreshold) {
             super(VectorIndexType.BBQ_HNSW, rescoreVector);
             this.m = m;
             this.efConstruction = efConstruction;
             this.onDiskRescore = onDiskRescore;
+            this.flatIndexThreshold = flatIndexThreshold;
         }
 
         @Override
@@ -2334,7 +2445,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 elementType,
                 onDiskRescore,
                 numMergeWorkers,
-                mergingExecutorService
+                mergingExecutorService,
+                flatIndexThreshold
             );
         }
 
@@ -2349,17 +2461,22 @@ public class DenseVectorFieldMapper extends FieldMapper {
             return m == that.m
                 && efConstruction == that.efConstruction
                 && onDiskRescore == that.onDiskRescore
-                && Objects.equals(rescoreVector, that.rescoreVector);
+                && Objects.equals(rescoreVector, that.rescoreVector)
+                && flatIndexThreshold == that.flatIndexThreshold;
         }
 
         @Override
         int doHashCode() {
-            return Objects.hash(m, efConstruction, onDiskRescore, rescoreVector);
+            return Objects.hash(m, efConstruction, onDiskRescore, rescoreVector, flatIndexThreshold);
         }
 
         @Override
         public boolean isFlat() {
             return false;
+        }
+
+        public int flatIndexThreshold() {
+            return flatIndexThreshold;
         }
 
         @Override
@@ -2373,6 +2490,9 @@ public class DenseVectorFieldMapper extends FieldMapper {
             }
             if (rescoreVector != null) {
                 rescoreVector.toXContent(builder, params);
+            }
+            if (flatIndexThreshold >= 0) {
+                builder.field("flat_index_threshold", flatIndexThreshold);
             }
             builder.endObject();
             return builder;
@@ -2454,6 +2574,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
         final IndexVersion indexVersionCreated;
         final int bits;
         final boolean doPrecondition;
+        final boolean experimentalFeaturesEnabled;
 
         BBQIVFIndexOptions(
             int clusterSize,
@@ -2462,7 +2583,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
             RescoreVector rescoreVector,
             IndexVersion indexVersionCreated,
             boolean doPrecondition,
-            int bits
+            int bits,
+            boolean experimentalFeaturesEnabled
         ) {
             super(VectorIndexType.BBQ_DISK, rescoreVector);
             this.clusterSize = clusterSize;
@@ -2471,6 +2593,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             this.indexVersionCreated = indexVersionCreated;
             this.bits = bits;
             this.doPrecondition = doPrecondition;
+            this.experimentalFeaturesEnabled = experimentalFeaturesEnabled;
         }
 
         @Override
@@ -2484,7 +2607,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                     VectorIndexType.BBQ_DISK.name
                 );
             }
-            if (Build.current().isSnapshot()) {
+            if (experimentalFeaturesEnabled) {
                 return new ESNextDiskBBQVectorsFormat(
                     ESNextDiskBBQVectorsFormat.QuantEncoding.fromId(bits >> 1),
                     clusterSize,
@@ -2544,7 +2667,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             if (rescoreVector != null) {
                 rescoreVector.toXContent(builder, params);
             }
-            if (indexVersionCreated.onOrAfter(DISK_BBQ_QUANTIZE_BITS) && Build.current().isSnapshot()) {
+            if (indexVersionCreated.onOrAfter(DISK_BBQ_QUANTIZE_BITS) && experimentalFeaturesEnabled) {
                 builder.field("bits", bits);
             }
             if (doPrecondition) {
@@ -2611,6 +2734,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             n,
             c.getIndexSettings().getIndexVersionCreated(),
             INDEX_MAPPING_EXCLUDE_SOURCE_VECTORS_SETTING.get(c.getIndexSettings().getSettings()),
+            IndexSettings.DENSE_VECTOR_EXPERIMENTAL_FEATURES_SETTING.get(c.getIndexSettings().getSettings()),
             c.getVectorsFormatProviders()
         ),
         notInMultiFields(CONTENT_TYPE)
@@ -3225,6 +3349,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
     private final DenseVectorIndexOptions indexOptions;
     private final IndexVersion indexCreatedVersion;
     private final boolean isExcludeSourceVectors;
+    private final boolean experimentalFeaturesEnabled;
     private final List<VectorsFormatProvider> extraVectorsFormatProviders;
 
     private DenseVectorFieldMapper(
@@ -3234,12 +3359,14 @@ public class DenseVectorFieldMapper extends FieldMapper {
         DenseVectorIndexOptions indexOptions,
         IndexVersion indexCreatedVersion,
         boolean isExcludeSourceVectorsFinal,
+        boolean experimentalFeaturesEnabled,
         List<VectorsFormatProvider> vectorsFormatProviders
     ) {
         super(simpleName, mappedFieldType, params);
         this.indexOptions = indexOptions;
         this.indexCreatedVersion = indexCreatedVersion;
         this.isExcludeSourceVectors = isExcludeSourceVectorsFinal;
+        this.experimentalFeaturesEnabled = experimentalFeaturesEnabled;
         this.extraVectorsFormatProviders = vectorsFormatProviders;
     }
 
@@ -3271,8 +3398,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             int dims = fieldType().element.parseDimensionCount(context);
             DenseVectorFieldMapper.Builder builder = (Builder) getMergeBuilder();
             builder.dimensions(dims);
-            Mapper update = builder.build(context.createDynamicMapperBuilderContext());
-            context.addDynamicMapper(update);
+            context.addDynamicMapper(builder, fullPath());
             return;
         }
         if (fieldType().indexed) {
@@ -3362,10 +3488,21 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
     @Override
     public FieldMapper.Builder getMergeBuilder() {
-        return new Builder(leafName(), indexCreatedVersion, isExcludeSourceVectors, extraVectorsFormatProviders).init(this);
+        return new Builder(
+            leafName(),
+            indexCreatedVersion,
+            isExcludeSourceVectors,
+            experimentalFeaturesEnabled,
+            extraVectorsFormatProviders
+        ).init(this);
     }
 
-    private static DenseVectorIndexOptions parseIndexOptions(String fieldName, Object propNode, IndexVersion indexVersion) {
+    private static DenseVectorIndexOptions parseIndexOptions(
+        String fieldName,
+        Object propNode,
+        IndexVersion indexVersion,
+        boolean experimentalFeaturesEnabled
+    ) {
         @SuppressWarnings("unchecked")
         Map<String, ?> indexOptionsMap = (Map<String, ?>) propNode;
         Object typeNode = indexOptionsMap.remove("type");
@@ -3378,7 +3515,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             throw new MapperParsingException("Unknown vector index options type [" + type + "] for field [" + fieldName + "]");
         }
         VectorIndexType parsedType = vectorIndexType.get();
-        return parsedType.parseIndexOptions(fieldName, indexOptionsMap, indexVersion);
+        return parsedType.parseIndexOptions(fieldName, indexOptionsMap, indexVersion, experimentalFeaturesEnabled);
     }
 
     /**
@@ -3411,7 +3548,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                     DEFAULT_MAX_CONN,
                     elementType,
                     maxMergingWorkers,
-                    mergingExecutorService
+                    mergingExecutorService,
+                    -1
                 );
             };
         } else {
