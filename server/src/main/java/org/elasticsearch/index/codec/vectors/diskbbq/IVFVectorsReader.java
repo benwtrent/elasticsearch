@@ -31,7 +31,6 @@ import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.util.Bits;
 import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.index.codec.vectors.GenericFlatVectorReaders;
-import org.elasticsearch.index.codec.vectors.diskbbq.next.ESNextDiskBBQVectorsReader;
 import org.elasticsearch.search.vectors.ESAcceptDocs;
 import org.elasticsearch.search.vectors.IVFKnnSearchStrategy;
 
@@ -343,22 +342,6 @@ public abstract class IVFVectorsReader extends KnnVectorsReader {
                 actualDocs += scorer.visit(knnCollector);
                 if (knnCollector.getSearchStrategy() != null) {
                     knnCollector.getSearchStrategy().nextVectorsBlock();
-                }
-            }
-            // Exceptional continuation: if the initial beam didn't produce enough results,
-            // try expanding the beam search by exploring additional parents.
-            if (actualDocs < knnCollector.k()
-                && centroidPrefetchingIterator instanceof PrefetchingCentroidIterator prefetching
-                && prefetching.delegate() instanceof ESNextDiskBBQVectorsReader.BeamSearchCentroidIterator beamSearch) {
-                while (beamSearch.continueSearch() && actualDocs < knnCollector.k()) {
-                    while (beamSearch.hasNext() && actualDocs < knnCollector.k()) {
-                        PostingMetadata postingMetadata = beamSearch.nextPosting();
-                        scorer.resetPostingsScorer(postingMetadata);
-                        actualDocs += scorer.visit(knnCollector);
-                        if (knnCollector.getSearchStrategy() != null) {
-                            knnCollector.getSearchStrategy().nextVectorsBlock();
-                        }
-                    }
                 }
             }
         }
