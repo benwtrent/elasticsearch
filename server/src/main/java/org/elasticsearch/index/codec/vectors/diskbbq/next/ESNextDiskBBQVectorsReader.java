@@ -9,7 +9,9 @@
 
 package org.elasticsearch.index.codec.vectors.diskbbq.next;
 
+import org.apache.lucene.codecs.hnsw.FlatVectorsScorer;
 import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorsFormat;
+import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorScorer;
 import org.apache.lucene.codecs.lucene104.QuantizedByteVectorValues;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FloatVectorValues;
@@ -33,6 +35,7 @@ import org.apache.lucene.util.LongValues;
 import org.apache.lucene.util.hnsw.HnswGraph;
 import org.apache.lucene.util.hnsw.HnswGraphSearcher;
 import org.apache.lucene.util.hnsw.RandomVectorScorer;
+import org.apache.lucene.util.hnsw.RandomVectorScorerSupplier;
 import org.apache.lucene.util.packed.DirectReader;
 import org.apache.lucene.util.packed.DirectWriter;
 import org.elasticsearch.common.cache.Cache;
@@ -166,6 +169,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 nextFieldEntry,
                 quantizedStart,
                 numCentroids,
+                targetQuery,
                 quantized,
                 queryParams,
                 fieldEntry.globalCentroidDp(),
@@ -186,6 +190,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                     centroids,
                     quantizedStart,
                     numCentroids,
+                    targetQuery,
                     quantized,
                     queryParams,
                     fieldEntry.globalCentroid(),
@@ -393,6 +398,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         NextFieldEntry fieldEntry,
         long quantizedStart,
         int numCentroids,
+        float[] targetQuery,
         byte[] quantizeQuery,
         OptimizedScalarQuantizer.QuantizationResult queryParams,
         float globalCentroidDp,
@@ -407,6 +413,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             centroids,
             quantizedStart,
             numCentroids,
+            targetQuery,
             quantizeQuery,
             queryParams,
             globalCentroid,
@@ -670,6 +677,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         IndexInput centroids,
         long quantizedStart,
         int numCentroids,
+        float[] targetQuery,
         byte[] quantizedQuery,
         OptimizedScalarQuantizer.QuantizationResult queryParams,
         float[] globalCentroid,
@@ -687,19 +695,43 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             globalCentroidDp
         );
         final VectorScorerFactory factory = VectorScorerFactory.instance().orElse(null);
-        if (factory == null) {
-            throw new IOException("VectorScorerFactory unavailable for int7u centroid scoring");
+        if (factory != null) {
+            final var scorer = factory.getInt7uOSQVectorScorer(
+                fieldInfo.getVectorSimilarityFunction(),
+                quantizedValues,
+                quantizedQuery,
+                queryParams.lowerInterval(),
+                queryParams.upperInterval(),
+                queryParams.additionalCorrection(),
+                queryParams.quantizedComponentSum()
+            );
+            if (scorer.isPresent()) {
+                return scorer.get();
+            }
         }
-        // TODO add scalar fallback scorer
-        return factory.getInt7uOSQVectorScorer(
+        return new Lucene104ScalarQuantizedVectorScorer(new EmptyFlatVectorsScorer())
+            .getRandomVectorScorer(
             fieldInfo.getVectorSimilarityFunction(),
             quantizedValues,
-            quantizedQuery,
-            queryParams.lowerInterval(),
-            queryParams.upperInterval(),
-            queryParams.additionalCorrection(),
-            queryParams.quantizedComponentSum()
-        ).orElseThrow(() -> new IOException("No int7u centroid scorer available for " + fieldInfo.getVectorSimilarityFunction()));
+            targetQuery
+        );
+    }
+
+    private static final class EmptyFlatVectorsScorer implements FlatVectorsScorer {
+        @Override
+        public RandomVectorScorerSupplier getRandomVectorScorerSupplier(VectorSimilarityFunction sim, KnnVectorValues values) {
+            throw new IllegalStateException("Unexpected call for quantized centroid values");
+        }
+
+        @Override
+        public RandomVectorScorer getRandomVectorScorer(VectorSimilarityFunction sim, KnnVectorValues values, float[] query) {
+            throw new IllegalStateException("Unexpected call for quantized centroid values");
+        }
+
+        @Override
+        public RandomVectorScorer getRandomVectorScorer(VectorSimilarityFunction sim, KnnVectorValues values, byte[] query) {
+            throw new IllegalStateException("Unexpected call for quantized centroid values");
+        }
     }
 
     private static class DenseOffHeapCentroidQuantizedValues extends QuantizedByteVectorValues {

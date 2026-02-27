@@ -10,6 +10,7 @@
 package org.elasticsearch.index.codec.vectors.diskbbq.next;
 
 import org.apache.lucene.codecs.KnnVectorsReader;
+import org.apache.lucene.codecs.hnsw.FlatVectorsScorer;
 import org.apache.lucene.codecs.hnsw.FlatVectorsWriter;
 import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorScorer;
 import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorsFormat;
@@ -32,6 +33,7 @@ import org.apache.lucene.util.hnsw.HnswGraphBuilder;
 import org.apache.lucene.util.hnsw.IntToIntFunction;
 import org.apache.lucene.util.hnsw.NeighborArray;
 import org.apache.lucene.util.hnsw.OnHeapHnswGraph;
+import org.apache.lucene.util.hnsw.RandomVectorScorer;
 import org.apache.lucene.util.hnsw.RandomVectorScorerSupplier;
 import org.apache.lucene.util.packed.DirectWriter;
 import org.apache.lucene.util.packed.PackedInts;
@@ -805,10 +807,28 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
                 return scorerSupplier.get();
             }
         }
-        return new Lucene104ScalarQuantizedVectorScorer(null).getRandomVectorScorerSupplier(
+        return new Lucene104ScalarQuantizedVectorScorer(new EmptyFlatVectorsScorer())
+            .getRandomVectorScorerSupplier(
             fieldInfo.getVectorSimilarityFunction(),
             quantizedValues
         );
+    }
+
+    private static final class EmptyFlatVectorsScorer implements FlatVectorsScorer {
+        @Override
+        public RandomVectorScorerSupplier getRandomVectorScorerSupplier(VectorSimilarityFunction sim, KnnVectorValues values) {
+            throw new IllegalStateException("Unexpected call for quantized centroid values");
+        }
+
+        @Override
+        public RandomVectorScorer getRandomVectorScorer(VectorSimilarityFunction sim, KnnVectorValues values, float[] query) {
+            throw new IllegalStateException("Unexpected call for quantized centroid values");
+        }
+
+        @Override
+        public RandomVectorScorer getRandomVectorScorer(VectorSimilarityFunction sim, KnnVectorValues values, byte[] query) {
+            throw new IllegalStateException("Unexpected call for quantized centroid values");
+        }
     }
 
     @Override
