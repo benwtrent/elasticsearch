@@ -10,8 +10,8 @@
 package org.elasticsearch.index.codec.vectors.diskbbq.next;
 
 import org.apache.lucene.codecs.hnsw.FlatVectorsScorer;
-import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorsFormat;
 import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorScorer;
+import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorsFormat;
 import org.apache.lucene.codecs.lucene104.QuantizedByteVectorValues;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FloatVectorValues;
@@ -709,8 +709,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 return scorer.get();
             }
         }
-        return new Lucene104ScalarQuantizedVectorScorer(new EmptyFlatVectorsScorer())
-            .getRandomVectorScorer(
+        return new Lucene104ScalarQuantizedVectorScorer(new EmptyFlatVectorsScorer()).getRandomVectorScorer(
             fieldInfo.getVectorSimilarityFunction(),
             quantizedValues,
             targetQuery

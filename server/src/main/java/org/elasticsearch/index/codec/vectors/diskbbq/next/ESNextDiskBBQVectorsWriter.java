@@ -807,8 +807,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
                 return scorerSupplier.get();
             }
         }
-        return new Lucene104ScalarQuantizedVectorScorer(new EmptyFlatVectorsScorer())
-            .getRandomVectorScorerSupplier(
+        return new Lucene104ScalarQuantizedVectorScorer(new EmptyFlatVectorsScorer()).getRandomVectorScorerSupplier(
             fieldInfo.getVectorSimilarityFunction(),
             quantizedValues
         );
