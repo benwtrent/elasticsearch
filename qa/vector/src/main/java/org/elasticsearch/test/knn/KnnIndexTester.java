@@ -101,6 +101,11 @@ public class KnnIndexTester {
         GPU_HNSW
     }
 
+    enum FlatFormat {
+        ES93,
+        ES94
+    }
+
     enum VectorEncoding {
         BYTE(org.apache.lucene.index.VectorEncoding.BYTE, DenseVectorFieldMapper.ElementType.BYTE),
         FLOAT32(org.apache.lucene.index.VectorEncoding.FLOAT32, DenseVectorFieldMapper.ElementType.FLOAT),
@@ -167,7 +172,14 @@ public class KnnIndexTester {
     private static String formatIndexPath(TestConfiguration args) {
         List<String> suffix = new ArrayList<>();
         switch (args.indexType()) {
-            case FLAT -> suffix.add("flat");
+            case FLAT -> {
+                suffix.add("flat");
+                FlatFormat flatFormat = effectiveFlatFormat(args);
+                suffix.add(flatFormat.name().toLowerCase(Locale.ROOT));
+                if (flatFormat == FlatFormat.ES94) {
+                    suffix.add(args.flatCompression() ? "compressed" : "uncompressed");
+                }
+            }
             case GPU_HNSW -> suffix.add("gpu_hnsw");
             case IVF -> {
                 suffix.add("ivf");
@@ -189,11 +201,16 @@ public class KnnIndexTester {
                 }
             }
         }
-        if (args.indexType() == IndexType.FLAT && args.flatCompression()) {
-            suffix.add("compressed");
-        }
 
         return INDEX_DIR + "/" + args.docVectors().getFirst().getFileName() + "-" + String.join("-", suffix) + ".index";
+    }
+
+    private static FlatFormat effectiveFlatFormat(TestConfiguration args) {
+        if (args.flatFormat() == FlatFormat.ES93 && args.flatCompression()) {
+            // Backward compatibility: legacy configs used flat_compression=true to select ES94.
+            return FlatFormat.ES94;
+        }
+        return args.flatFormat();
     }
 
     static Codec createCodec(TestConfiguration args, @Nullable ExecutorService exec) {
@@ -252,9 +269,10 @@ public class KnnIndexTester {
                 );
             };
             case FLAT -> switch (quantizeBits) {
-                case null -> args.flatCompression()
-                    ? new ES94CompressedFlatVectorsFormat(elementType, true)
-                    : new ES93FlatVectorFormat(elementType);
+                case null -> switch (effectiveFlatFormat(args)) {
+                    case ES93 -> new ES93FlatVectorFormat(elementType);
+                    case ES94 -> new ES94CompressedFlatVectorsFormat(elementType, args.flatCompression());
+                };
                 case 1 -> new ES93BinaryQuantizedVectorsFormat(elementType, false);
                 default -> new ES93ScalarQuantizedVectorsFormat(elementType, null, quantizeBits, true, false);
             };

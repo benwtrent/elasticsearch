@@ -12,7 +12,6 @@ package org.elasticsearch.index.codec.vectors.es94;
 import org.apache.lucene.codecs.KnnVectorsFormat;
 import org.apache.lucene.codecs.KnnVectorsReader;
 import org.apache.lucene.codecs.KnnVectorsWriter;
-import org.apache.lucene.codecs.hnsw.FlatVectorsReader;
 import org.apache.lucene.index.ByteVectorValues;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FloatVectorValues;
@@ -20,8 +19,6 @@ import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.SegmentWriteState;
 import org.apache.lucene.search.AcceptDocs;
 import org.apache.lucene.search.KnnCollector;
-import org.elasticsearch.index.codec.vectors.es93.DirectIOCapableLucene99FlatVectorsFormat;
-import org.elasticsearch.index.codec.vectors.es93.ES93FlatVectorScorer;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 
 import java.io.IOException;
@@ -39,8 +36,8 @@ public class ES94CompressedFlatVectorsFormat extends KnnVectorsFormat {
     static final int VERSION_START = 0;
     static final int VERSION_CURRENT = VERSION_START;
 
-    private final DirectIOCapableLucene99FlatVectorsFormat rawFormat;
     private final boolean compressionEnabled;
+    private final DenseVectorFieldMapper.ElementType elementType;
 
     public ES94CompressedFlatVectorsFormat() {
         this(DenseVectorFieldMapper.ElementType.FLOAT, true);
@@ -48,20 +45,18 @@ public class ES94CompressedFlatVectorsFormat extends KnnVectorsFormat {
 
     public ES94CompressedFlatVectorsFormat(DenseVectorFieldMapper.ElementType elementType, boolean compressionEnabled) {
         super(NAME);
-        this.rawFormat = switch (elementType) {
-            case FLOAT, BYTE, BFLOAT16, BIT -> new DirectIOCapableLucene99FlatVectorsFormat(ES93FlatVectorScorer.INSTANCE);
-        };
+        this.elementType = elementType;
         this.compressionEnabled = compressionEnabled;
     }
 
     @Override
     public KnnVectorsWriter fieldsWriter(SegmentWriteState state) throws IOException {
-        return new ES94CompressedFlatVectorsWriter(state, rawFormat.fieldsWriter(state), compressionEnabled);
+        return new ES94CompressedFlatVectorsWriter(state, compressionEnabled, elementType);
     }
 
     @Override
     public KnnVectorsReader fieldsReader(SegmentReadState state) throws IOException {
-        return new Reader(new ES94CompressedFlatVectorsReader(state, rawFormat.fieldsReader(state)));
+        return new Reader(new ES94CompressedFlatVectorsReader(state));
     }
 
     @Override
@@ -70,9 +65,9 @@ public class ES94CompressedFlatVectorsFormat extends KnnVectorsFormat {
     }
 
     private static class Reader extends KnnVectorsReader {
-        private final FlatVectorsReader delegate;
+        private final ES94CompressedFlatVectorsReader delegate;
 
-        Reader(FlatVectorsReader delegate) {
+        Reader(ES94CompressedFlatVectorsReader delegate) {
             this.delegate = delegate;
         }
 

@@ -38,7 +38,6 @@ final class ES94JinaCompressionUtils {
         final int vectorCount = vectors.size();
         final int angleDims = dimension - 1;
         final int transformedFloats = Math.multiplyExact(vectorCount, angleDims);
-        final int transformedBytes = Math.multiplyExact(transformedFloats, Float.BYTES);
         final int originalBytes = Math.multiplyExact(Math.multiplyExact(vectorCount, dimension), Float.BYTES);
 
         float[] spherical = new float[transformedFloats];
