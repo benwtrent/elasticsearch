@@ -33,7 +33,8 @@ public class TestConfigurationTests extends ESTestCase {
               "filter_selectivity": [0.8],
               "filter_cache": [true],
               "early_termination": [false],
-              "seed": [123]
+              "seed": [123],
+              "flat_compression": true
             }
             """;
 
@@ -43,6 +44,7 @@ public class TestConfigurationTests extends ESTestCase {
             assertEquals(1, config.docVectors().size());
             assertTrue(config.docVectors().get(0).equals(PathUtils.get("/path/to/docs")));
             assertTrue(config.queryVectors().equals(PathUtils.get("/path/to/queries")));
+            assertTrue(config.flatCompression());
 
             List<SearchParameters> params = config.searchParams();
             assertEquals(4, params.size());
@@ -67,6 +69,19 @@ public class TestConfigurationTests extends ESTestCase {
 
     public void testHelp() throws Exception {
         KnnIndexTester.main(new String[] { "--help" });
+    }
+
+    public void testFlatCompressionDefaultsToFalse() throws Exception {
+        String json = """
+            {
+              "doc_vectors": ["/path/to/docs"],
+              "dimensions": 16
+            }
+            """;
+        try (XContentParser parser = createParser(XContentType.JSON.xContent(), json)) {
+            TestConfiguration config = TestConfiguration.fromXContent(parser);
+            assertFalse(config.flatCompression());
+        }
     }
 
 }

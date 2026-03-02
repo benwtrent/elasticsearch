@@ -23,6 +23,7 @@ import org.apache.lucene.index.LogDocMergePolicy;
 import org.apache.lucene.index.MergePolicy;
 import org.apache.lucene.index.NoMergePolicy;
 import org.apache.lucene.index.SegmentReadState;
+import org.apache.lucene.index.SegmentInfos;
 import org.apache.lucene.index.SegmentWriteState;
 import org.apache.lucene.index.TieredMergePolicy;
 import org.apache.lucene.store.Directory;
@@ -43,6 +44,7 @@ import org.elasticsearch.index.codec.vectors.es93.ES93HnswBinaryQuantizedVectors
 import org.elasticsearch.index.codec.vectors.es93.ES93HnswScalarQuantizedVectorsFormat;
 import org.elasticsearch.index.codec.vectors.es93.ES93HnswVectorsFormat;
 import org.elasticsearch.index.codec.vectors.es93.ES93ScalarQuantizedVectorsFormat;
+import org.elasticsearch.index.codec.vectors.es94.ES94CompressedFlatVectorsFormat;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.logging.Level;
 import org.elasticsearch.logging.LogManager;
@@ -62,6 +64,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -186,6 +189,9 @@ public class KnnIndexTester {
                 }
             }
         }
+        if (args.indexType() == IndexType.FLAT && args.flatCompression()) {
+            suffix.add("compressed");
+        }
 
         return INDEX_DIR + "/" + args.docVectors().getFirst().getFileName() + "-" + String.join("-", suffix) + ".index";
     }
@@ -246,7 +252,9 @@ public class KnnIndexTester {
                 );
             };
             case FLAT -> switch (quantizeBits) {
-                case null -> new ES93FlatVectorFormat(elementType);
+                case null -> args.flatCompression()
+                    ? new ES94CompressedFlatVectorsFormat(elementType, true)
+                    : new ES93FlatVectorFormat(elementType);
                 case 1 -> new ES93BinaryQuantizedVectorsFormat(elementType, false);
                 default -> new ES93ScalarQuantizedVectorsFormat(elementType, null, quantizeBits, true, false);
             };
@@ -455,6 +463,7 @@ public class KnnIndexTester {
                 }
             }
             numSegments(indexPath, indexResults, sharedDir);
+            indexSizeBytes(indexPath, indexResults, sharedDir);
             if (testConfiguration.queryVectors() != null && testConfiguration.numQueries() > 0) {
                 Directory readDir = sharedDir != null ? sharedDir : dirConfig.factory().create(indexPath);
                 try {
@@ -497,6 +506,14 @@ public class KnnIndexTester {
             numSegments(sharedDir, indexResults);
         } else {
             numSegments(indexPath, indexResults);
+        }
+    }
+
+    static void indexSizeBytes(Path indexPath, Results indexResults, Directory sharedDir) throws IOException {
+        if (sharedDir != null) {
+            indexSizeBytes(sharedDir, indexResults);
+        } else {
+            indexSizeBytes(indexPath, indexResults);
         }
     }
 
@@ -570,6 +587,31 @@ public class KnnIndexTester {
         }
     }
 
+    static void indexSizeBytes(Path indexPath, Results result) throws IOException {
+        try (Directory dir = KnnIndexer.getDirectory(indexPath)) {
+            indexSizeBytes(dir, result);
+        } catch (IOException e) {
+            throw new IOException("Failed to get index size for index at " + indexPath, e);
+        }
+    }
+
+    static void indexSizeBytes(Directory dir, Results result) throws IOException {
+        try {
+            SegmentInfos segmentInfos = SegmentInfos.readLatestCommit(dir);
+            Set<String> segmentFiles = new HashSet<>();
+            for (var segmentInfo : segmentInfos) {
+                segmentFiles.addAll(segmentInfo.files());
+            }
+            long totalBytes = 0L;
+            for (String segmentFile : segmentFiles) {
+                totalBytes += dir.fileLength(segmentFile);
+            }
+            result.indexSizeBytes = totalBytes;
+        } catch (IOException e) {
+            throw new IOException("Failed to get on-disk size for dir: " + dir, e);
+        }
+    }
+
     static class FormattedResults {
         List<Results> indexResults = new ArrayList<>();
         List<Results> queryResults = new ArrayList<>();
@@ -587,7 +629,8 @@ public class KnnIndexTester {
                 "doc_add_time(ms)",
                 "total_index_time(ms)",
                 "force_merge_time(ms)",
-                "num_segments" };
+                "num_segments",
+                "index_size(bytes)" };
 
             // Define column headers
             String[] searchHeaders = {
@@ -620,7 +663,8 @@ public class KnnIndexTester {
                     Long.toString(indexResult.docAddTimeMS),
                     Long.toString(indexResult.indexTimeMS),
                     Long.toString(indexResult.forceMergeTimeMS),
-                    Integer.toString(indexResult.numSegments) };
+                    Integer.toString(indexResult.numSegments),
+                    Long.toString(indexResult.indexSizeBytes) };
             }
             printBlock(sb, indexingHeaders, indexResultsArray);
             String[][] queryResultsArray = new String[queryResults.size()][];
@@ -710,6 +754,7 @@ public class KnnIndexTester {
         long indexTimeMS;
         long forceMergeTimeMS;
         int numSegments;
+        long indexSizeBytes;
         double visitPercentage;
         double avgLatency;
         double qps;
