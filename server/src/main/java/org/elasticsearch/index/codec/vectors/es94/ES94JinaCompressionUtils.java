@@ -12,6 +12,7 @@ package org.elasticsearch.index.codec.vectors.es94;
 import org.elasticsearch.nativeaccess.CloseableByteBuffer;
 import org.elasticsearch.nativeaccess.NativeAccess;
 import org.elasticsearch.nativeaccess.Zstd;
+import org.elasticsearch.simdvec.ESVectorUtil;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -20,8 +21,15 @@ import java.util.List;
 
 final class ES94JinaCompressionUtils {
 
-    static final byte MODE_NONE = 0;
-    static final byte MODE_JZIP_ZSTD = 1;
+    enum CompressionMode {
+        JINA,
+        ZSTD_ONLY
+    }
+
+    static final byte MODE_JINA_NO_ZSTD = 0;
+    static final byte MODE_JINA_ZSTD = 1;
+    static final byte MODE_RAW_NO_ZSTD = 2;
+    static final byte MODE_RAW_ZSTD = 3;
     static final int DEFAULT_ZSTD_LEVEL = 1;
 
     private static final byte[] EMPTY = new byte[0];
@@ -30,11 +38,18 @@ final class ES94JinaCompressionUtils {
 
     private ES94JinaCompressionUtils() {}
 
-    static CompressedPayload compress(List<float[]> vectors, int dimension, boolean useZstd) throws IOException {
+    static CompressedPayload compress(List<float[]> vectors, int dimension, boolean useZstd, CompressionMode compressionMode)
+        throws IOException {
         if (vectors.isEmpty() || dimension < 2) {
-            return new CompressedPayload(MODE_NONE, 0, EMPTY);
+            return new CompressedPayload(MODE_RAW_NO_ZSTD, 0, EMPTY);
         }
+        return switch (compressionMode) {
+            case JINA -> compressWithJina(vectors, dimension, useZstd);
+            case ZSTD_ONLY -> compressRaw(vectors, dimension, useZstd);
+        };
+    }
 
+    private static CompressedPayload compressWithJina(List<float[]> vectors, int dimension, boolean useZstd) throws IOException {
         final int vectorCount = vectors.size();
         final int angleDims = dimension - 1;
         final int transformedFloats = Math.multiplyExact(vectorCount, angleDims);
@@ -43,91 +58,158 @@ final class ES94JinaCompressionUtils {
         float[] spherical = new float[transformedFloats];
         int sphericalOffset = 0;
         for (float[] vector : vectors) {
-            cartesianToSpherical(vector, spherical, sphericalOffset, dimension);
+            ESVectorUtil.jinaCartesianToSpherical(vector, spherical, sphericalOffset, dimension);
             sphericalOffset += angleDims;
         }
 
-        float[] transposed = transpose(spherical, vectorCount, angleDims);
+        float[] transposed = new float[spherical.length];
+        ESVectorUtil.jinaTranspose(spherical, vectorCount, angleDims, transposed);
         byte[] transposedBytes = floatsToBytesLE(transposed);
         byte[] shuffled = byteShuffle(transposedBytes, transformedFloats);
         if (useZstd == false) {
-            return new CompressedPayload(MODE_NONE, originalBytes, shuffled);
+            return new CompressedPayload(MODE_JINA_NO_ZSTD, originalBytes, shuffled);
         }
 
         Zstd zstd = NativeAccess.instance().getZstd();
         if (zstd == null) {
-            return new CompressedPayload(MODE_NONE, originalBytes, shuffled);
+            return new CompressedPayload(MODE_JINA_NO_ZSTD, originalBytes, shuffled);
         }
 
-        return new CompressedPayload(MODE_JZIP_ZSTD, originalBytes, zstdCompress(shuffled, zstd, DEFAULT_ZSTD_LEVEL));
+        return new CompressedPayload(MODE_JINA_ZSTD, originalBytes, zstdCompress(shuffled, zstd, DEFAULT_ZSTD_LEVEL));
+    }
+
+    private static CompressedPayload compressRaw(List<float[]> vectors, int dimension, boolean useZstd) throws IOException {
+        final int vectorCount = vectors.size();
+        final int originalBytes = Math.multiplyExact(Math.multiplyExact(vectorCount, dimension), Float.BYTES);
+        byte[] raw = floatsToBytesLE(vectors, dimension);
+        if (useZstd == false) {
+            return new CompressedPayload(MODE_RAW_NO_ZSTD, originalBytes, raw);
+        }
+        Zstd zstd = NativeAccess.instance().getZstd();
+        if (zstd == null) {
+            return new CompressedPayload(MODE_RAW_NO_ZSTD, originalBytes, raw);
+        }
+        return new CompressedPayload(MODE_RAW_ZSTD, originalBytes, zstdCompress(raw, zstd, DEFAULT_ZSTD_LEVEL));
     }
 
     static float[][] decompress(CompressedPayload payload, int vectorCount, int dimension) throws IOException {
         if (vectorCount == 0) {
             return new float[0][dimension];
         }
+        return switch (payload.mode()) {
+            case MODE_JINA_NO_ZSTD, MODE_JINA_ZSTD -> decompressJina(payload, vectorCount, dimension);
+            case MODE_RAW_NO_ZSTD, MODE_RAW_ZSTD -> decompressRaw(payload, vectorCount, dimension);
+            default -> throw new IOException("Unknown compression mode [" + payload.mode() + "]");
+        };
+    }
+
+    private static float[][] decompressJina(CompressedPayload payload, int vectorCount, int dimension) throws IOException {
         final int angleDims = dimension - 1;
         final int transformedFloats = Math.multiplyExact(vectorCount, angleDims);
         final int transformedBytes = Math.multiplyExact(transformedFloats, Float.BYTES);
         byte[] shuffled = switch (payload.mode()) {
-            case MODE_NONE -> payload.payload();
-            case MODE_JZIP_ZSTD -> {
+            case MODE_JINA_NO_ZSTD -> payload.payload();
+            case MODE_JINA_ZSTD -> {
                 Zstd zstd = NativeAccess.instance().getZstd();
                 if (zstd == null) {
                     throw new IOException("zstd is not available for decompression");
                 }
                 yield zstdDecompress(payload.payload(), transformedBytes, zstd);
             }
-            default -> throw new IOException("Unknown compression mode [" + payload.mode() + "]");
+            default -> throw new IOException("Unsupported jina payload mode [" + payload.mode() + "]");
         };
 
         byte[] unshuffled = byteUnshuffle(shuffled, transformedFloats);
         float[] transposed = bytesToFloatsLE(unshuffled);
-        float[] spherical = transpose(transposed, angleDims, vectorCount);
+        float[] spherical = new float[transposed.length];
+        ESVectorUtil.jinaTranspose(transposed, angleDims, vectorCount, spherical);
         float[][] vectors = new float[vectorCount][dimension];
         for (int i = 0; i < vectorCount; i++) {
-            sphericalToCartesian(spherical, i * angleDims, vectors[i], dimension);
+            ESVectorUtil.jinaSphericalToCartesian(spherical, i * angleDims, vectors[i], dimension);
         }
         return vectors;
     }
 
-    private static void cartesianToSpherical(float[] input, float[] output, int outputOffset, int dimension) {
-        double[] r2 = new double[dimension];
-        int last = dimension - 1;
-        r2[last] = (double) input[last] * input[last];
-        for (int i = last - 1; i >= 0; i--) {
-            double v = input[i];
-            r2[i] = r2[i + 1] + v * v;
-        }
-        for (int i = 0; i < dimension - 2; i++) {
-            double r = Math.sqrt(r2[i]);
-            double value = r == 0d ? 1d : input[i] / r;
-            value = Math.max(-1d, Math.min(1d, value));
-            output[outputOffset + i] = (float) Math.acos(value);
-        }
-        output[outputOffset + dimension - 2] = (float) Math.atan2(input[dimension - 1], input[dimension - 2]);
-    }
-
-    private static void sphericalToCartesian(float[] spherical, int sphericalOffset, float[] output, int dimension) {
-        double scale = 1d;
-        for (int i = 0; i < dimension - 2; i++) {
-            double angle = spherical[sphericalOffset + i];
-            output[i] = (float) (scale * Math.cos(angle));
-            scale *= Math.sin(angle);
-        }
-        double lastAngle = spherical[sphericalOffset + dimension - 2];
-        output[dimension - 2] = (float) (scale * Math.cos(lastAngle));
-        output[dimension - 1] = (float) (scale * Math.sin(lastAngle));
-    }
-
-    private static float[] transpose(float[] src, int rows, int cols) {
-        float[] dst = new float[src.length];
-        for (int row = 0; row < rows; row++) {
-            for (int col = 0; col < cols; col++) {
-                dst[col * rows + row] = src[row * cols + col];
+    private static float[][] decompressRaw(CompressedPayload payload, int vectorCount, int dimension) throws IOException {
+        final int rawBytes = Math.multiplyExact(Math.multiplyExact(vectorCount, dimension), Float.BYTES);
+        byte[] raw = switch (payload.mode()) {
+            case MODE_RAW_NO_ZSTD -> payload.payload();
+            case MODE_RAW_ZSTD -> {
+                Zstd zstd = NativeAccess.instance().getZstd();
+                if (zstd == null) {
+                    throw new IOException("zstd is not available for decompression");
+                }
+                yield zstdDecompress(payload.payload(), rawBytes, zstd);
             }
+            default -> throw new IOException("Unsupported raw payload mode [" + payload.mode() + "]");
+        };
+        float[] flattened = bytesToFloatsLE(raw);
+        float[][] vectors = new float[vectorCount][dimension];
+        int offset = 0;
+        for (int i = 0; i < vectorCount; i++) {
+            System.arraycopy(flattened, offset, vectors[i], 0, dimension);
+            offset += dimension;
         }
-        return dst;
+        return vectors;
+    }
+
+    private static byte[] zstdCompress(byte[] input, Zstd zstd, int level) throws IOException {
+        int bound = zstd.compressBound(input.length);
+        try (
+            CloseableByteBuffer src = NativeAccess.instance().newConfinedBuffer(input.length);
+            CloseableByteBuffer dst = NativeAccess.instance().newConfinedBuffer(bound)
+        ) {
+            src.buffer().put(input);
+            src.buffer().flip();
+            int compressedLength = zstd.compress(dst, src, level);
+            byte[] output = new byte[compressedLength];
+            dst.buffer().get(output, 0, compressedLength);
+            return output;
+        }
+    }
+
+    private static byte[] zstdDecompress(byte[] input, int decompressedLength, Zstd zstd) throws IOException {
+        try (
+            CloseableByteBuffer src = NativeAccess.instance().newConfinedBuffer(input.length);
+            CloseableByteBuffer dst = NativeAccess.instance().newConfinedBuffer(decompressedLength)
+        ) {
+            src.buffer().put(input);
+            src.buffer().flip();
+            int actualLength = zstd.decompress(dst, src);
+            if (actualLength != decompressedLength) {
+                throw new IOException("Expected " + decompressedLength + " decompressed bytes but got " + actualLength);
+            }
+            byte[] output = new byte[actualLength];
+            dst.buffer().get(output, 0, actualLength);
+            return output;
+        }
+    }
+
+    private static byte[] floatsToBytesLE(float[] values) {
+        ByteBuffer buffer = ByteBuffer.allocate(values.length * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+        for (float value : values) {
+            buffer.putFloat(value);
+        }
+        return buffer.array();
+    }
+
+    private static byte[] floatsToBytesLE(List<float[]> vectors, int dimension) {
+        float[] flattened = new float[vectors.size() * dimension];
+        int offset = 0;
+        for (float[] vector : vectors) {
+            System.arraycopy(vector, 0, flattened, offset, dimension);
+            offset += dimension;
+        }
+        return floatsToBytesLE(flattened);
+    }
+
+    private static float[] bytesToFloatsLE(byte[] bytes) {
+        ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        float[] values = new float[bytes.length / Float.BYTES];
+        for (int i = 0; i < values.length; i++) {
+            values[i] = buffer.getFloat();
+        }
+        return values;
     }
 
     private static byte[] byteShuffle(byte[] src, int floatCount) {
@@ -160,50 +242,5 @@ final class ES94JinaCompressionUtils {
             dst[offset + 3] = src[b3 + i];
         }
         return dst;
-    }
-
-    private static byte[] zstdCompress(byte[] input, Zstd zstd, int level) throws IOException {
-        int bound = zstd.compressBound(input.length);
-        try (CloseableByteBuffer src = NativeAccess.instance().newConfinedBuffer(input.length);
-            CloseableByteBuffer dst = NativeAccess.instance().newConfinedBuffer(bound)) {
-            src.buffer().put(input);
-            src.buffer().flip();
-            int compressedLength = zstd.compress(dst, src, level);
-            byte[] output = new byte[compressedLength];
-            dst.buffer().get(output, 0, compressedLength);
-            return output;
-        }
-    }
-
-    private static byte[] zstdDecompress(byte[] input, int decompressedLength, Zstd zstd) throws IOException {
-        try (CloseableByteBuffer src = NativeAccess.instance().newConfinedBuffer(input.length);
-            CloseableByteBuffer dst = NativeAccess.instance().newConfinedBuffer(decompressedLength)) {
-            src.buffer().put(input);
-            src.buffer().flip();
-            int actualLength = zstd.decompress(dst, src);
-            if (actualLength != decompressedLength) {
-                throw new IOException("Expected " + decompressedLength + " decompressed bytes but got " + actualLength);
-            }
-            byte[] output = new byte[actualLength];
-            dst.buffer().get(output, 0, actualLength);
-            return output;
-        }
-    }
-
-    private static byte[] floatsToBytesLE(float[] values) {
-        ByteBuffer buffer = ByteBuffer.allocate(values.length * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-        for (float value : values) {
-            buffer.putFloat(value);
-        }
-        return buffer.array();
-    }
-
-    private static float[] bytesToFloatsLE(byte[] bytes) {
-        ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
-        float[] values = new float[bytes.length / Float.BYTES];
-        for (int i = 0; i < values.length; i++) {
-            values[i] = buffer.getFloat();
-        }
-        return values;
     }
 }

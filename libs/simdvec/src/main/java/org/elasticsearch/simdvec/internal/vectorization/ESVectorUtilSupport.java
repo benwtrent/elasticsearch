@@ -90,4 +90,10 @@ public interface ESVectorUtilSupport {
     int indexOf(byte[] bytes, int offset, int length, byte marker);
 
     int codePointCount(BytesRef bytesRef);
+
+    void jinaCartesianToSpherical(float[] input, float[] output, int outputOffset, int dimension);
+
+    void jinaSphericalToCartesian(float[] spherical, int sphericalOffset, float[] output, int dimension);
+
+    void jinaTranspose(float[] src, int rows, int cols, float[] dst);
 }

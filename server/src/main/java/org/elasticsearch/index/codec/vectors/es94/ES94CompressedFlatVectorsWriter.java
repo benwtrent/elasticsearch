@@ -37,20 +37,34 @@ class ES94CompressedFlatVectorsWriter extends FlatVectorsWriter {
 
     private final SegmentWriteState state;
     private final boolean compressionEnabled;
+    private final ES94JinaCompressionUtils.CompressionMode compressionMode;
     private final DenseVectorFieldMapper.ElementType elementType;
     private final IndexOutput metaOut;
     private final IndexOutput dataOut;
     private final List<FieldWriter> fields = new ArrayList<>();
 
     @SuppressWarnings("this-escape")
-    ES94CompressedFlatVectorsWriter(SegmentWriteState state, boolean compressionEnabled, DenseVectorFieldMapper.ElementType elementType)
-        throws IOException {
+    ES94CompressedFlatVectorsWriter(
+        SegmentWriteState state,
+        boolean compressionEnabled,
+        ES94JinaCompressionUtils.CompressionMode compressionMode,
+        DenseVectorFieldMapper.ElementType elementType
+    ) throws IOException {
         super(ES94CompressedFlatVectorScorer.INSTANCE);
         this.state = state;
         this.compressionEnabled = compressionEnabled;
+        this.compressionMode = compressionMode;
         this.elementType = elementType;
-        final String metaFile = IndexFileNames.segmentFileName(state.segmentInfo.name, state.segmentSuffix, ES94CompressedFlatVectorsFormat.META_EXT);
-        final String dataFile = IndexFileNames.segmentFileName(state.segmentInfo.name, state.segmentSuffix, ES94CompressedFlatVectorsFormat.DATA_EXT);
+        final String metaFile = IndexFileNames.segmentFileName(
+            state.segmentInfo.name,
+            state.segmentSuffix,
+            ES94CompressedFlatVectorsFormat.META_EXT
+        );
+        final String dataFile = IndexFileNames.segmentFileName(
+            state.segmentInfo.name,
+            state.segmentSuffix,
+            ES94CompressedFlatVectorsFormat.DATA_EXT
+        );
         try {
             this.metaOut = state.directory.createOutput(metaFile, state.context);
             this.dataOut = state.directory.createOutput(dataFile, state.context);
@@ -133,7 +147,8 @@ class ES94CompressedFlatVectorsWriter extends FlatVectorsWriter {
             ES94JinaCompressionUtils.CompressedPayload payload = ES94JinaCompressionUtils.compress(
                 vectors.subList(start, end),
                 fieldInfo.getVectorDimension(),
-                compressionEnabled
+                compressionEnabled,
+                compressionMode
             );
             long payloadOffset = dataOut.getFilePointer();
             dataOut.writeBytes(payload.payload(), payload.payload().length);

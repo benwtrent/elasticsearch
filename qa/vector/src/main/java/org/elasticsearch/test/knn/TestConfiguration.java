@@ -71,6 +71,7 @@ record TestConfiguration(
     int flatVectorThreshold,
     int secondaryClusterSize,
     KnnIndexTester.FlatFormat flatFormat,
+    KnnIndexTester.FlatCompressionMode flatCompressionMode,
     boolean flatCompression,
     String directoryType
 ) {
@@ -114,6 +115,7 @@ record TestConfiguration(
     static final ParseField SEARCH_PARAMS = new ParseField("search_params");
     static final ParseField FLAT_VECTOR_THRESHOLD = new ParseField("flat_vector_threshold");
     static final ParseField FLAT_FORMAT = new ParseField("flat_format");
+    static final ParseField FLAT_COMPRESSION_MODE = new ParseField("flat_compression_mode");
     static final ParseField FLAT_COMPRESSION = new ParseField("flat_compression");
     static final ParseField DIRECTORY_TYPE_FIELD = new ParseField("directory_type");
 
@@ -181,6 +183,7 @@ record TestConfiguration(
         PARSER.declareInt(Builder::setFlatVectorThreshold, FLAT_VECTOR_THRESHOLD);
         PARSER.declareInt(Builder::setSecondaryClusterSize, SECONDARY_CLUSTER_SIZE);
         PARSER.declareString(Builder::setFlatFormat, FLAT_FORMAT);
+        PARSER.declareString(Builder::setFlatCompressionMode, FLAT_COMPRESSION_MODE);
         PARSER.declareBoolean(Builder::setFlatCompression, FLAT_COMPRESSION);
         PARSER.declareString(Builder::setDirectoryType, DIRECTORY_TYPE_FIELD);
     }
@@ -226,6 +229,7 @@ record TestConfiguration(
             new ParameterHelp("precondition", "boolean", "IVF: apply preconditioning prior to indexing."),
             new ParameterHelp("preconditioning_block_dims", "int", "IVF: block dimensions used for preconditioning."),
             new ParameterHelp("flat_format", "string", "FLAT: flat vector format: es93 or es94."),
+            new ParameterHelp("flat_compression_mode", "string", "FLAT+ES94: compression mode: jina or zstd_only."),
             new ParameterHelp("flat_compression", "boolean", "FLAT+ES94: enable Jina+zstd compression."),
             new ParameterHelp("num_candidates", "array[int]", "HNSW: number of candidates (efSearch) to consider per query."),
             new ParameterHelp("k", "array[int]", "Search: top K results to return."),
@@ -320,6 +324,7 @@ record TestConfiguration(
         private int flatVectorThreshold = -1; // -1 mean use default (vectorPerCluster * 3)
         private int secondaryClusterSize = -1;
         private KnnIndexTester.FlatFormat flatFormat = KnnIndexTester.FlatFormat.ES93;
+        private KnnIndexTester.FlatCompressionMode flatCompressionMode = KnnIndexTester.FlatCompressionMode.JINA;
         private boolean flatCompression = false;
         private String directoryType = "default";
 
@@ -525,6 +530,11 @@ record TestConfiguration(
 
         public Builder setFlatFormat(String flatFormat) {
             this.flatFormat = KnnIndexTester.FlatFormat.valueOf(flatFormat.toUpperCase(Locale.ROOT));
+            return this;
+        }
+
+        public Builder setFlatCompressionMode(String flatCompressionMode) {
+            this.flatCompressionMode = KnnIndexTester.FlatCompressionMode.valueOf(flatCompressionMode.toUpperCase(Locale.ROOT));
             return this;
         }
 
@@ -757,6 +767,7 @@ record TestConfiguration(
                 flatVectorThreshold,
                 secondaryClusterSize,
                 flatFormat,
+                flatCompressionMode,
                 flatCompression,
                 directoryType
             );
@@ -817,6 +828,7 @@ record TestConfiguration(
             }
             builder.field(FLAT_VECTOR_THRESHOLD.getPreferredName(), flatVectorThreshold);
             builder.field(FLAT_FORMAT.getPreferredName(), flatFormat.name().toLowerCase(Locale.ROOT));
+            builder.field(FLAT_COMPRESSION_MODE.getPreferredName(), flatCompressionMode.name().toLowerCase(Locale.ROOT));
             builder.field(FLAT_COMPRESSION.getPreferredName(), flatCompression);
             builder.field(DIRECTORY_TYPE_FIELD.getPreferredName(), directoryType);
             return builder.endObject();

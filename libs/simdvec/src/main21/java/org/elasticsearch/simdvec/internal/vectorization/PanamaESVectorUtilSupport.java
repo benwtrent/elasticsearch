@@ -1212,4 +1212,46 @@ public final class PanamaESVectorUtilSupport implements ESVectorUtilSupport {
 
         return bytesRef.length - continuations;
     }
+
+    @Override
+    public void jinaCartesianToSpherical(float[] input, float[] output, int outputOffset, int dimension) {
+        // TODO actually write this
+        float[] r2 = new float[dimension];
+        int last = dimension - 1;
+        r2[last] = input[last] * input[last];
+        for (int i = last - 1; i >= 0; i--) {
+            float v = input[i];
+            r2[i] = r2[i + 1] + v * v;
+            if (i < dimension - 2) {
+                float r = (float) Math.sqrt(r2[i]);
+                float value = r == 0f ? 1f : v / r;
+                value = Math.max(-1f, Math.min(1f, value));
+                output[outputOffset + i] = (float) Math.acos(value);
+            }
+        }
+        output[outputOffset + dimension - 2] = (float) Math.atan2(input[dimension - 1], input[dimension - 2]);
+    }
+
+    @Override
+    public void jinaSphericalToCartesian(float[] spherical, int sphericalOffset, float[] output, int dimension) {
+        // TODO actually write this
+        float scale = 1f;
+        for (int i = 0; i < dimension - 2; i++) {
+            float angle = spherical[sphericalOffset + i];
+            output[i] = scale * (float) Math.cos(angle);
+            scale *= (float) Math.sin(angle);
+        }
+        float lastAngle = spherical[sphericalOffset + dimension - 2];
+        output[dimension - 2] = scale * (float) Math.cos(lastAngle);
+        output[dimension - 1] = scale * (float) Math.sin(lastAngle);
+    }
+
+    @Override
+    public void jinaTranspose(float[] src, int rows, int cols, float[] dst) {
+        for (int row = 0; row < rows; row++) {
+            for (int col = 0; col < cols; col++) {
+                dst[col * rows + row] = src[row * cols + col];
+            }
+        }
+    }
 }

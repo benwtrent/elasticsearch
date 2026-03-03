@@ -484,4 +484,44 @@ final class DefaultESVectorUtilSupport implements ESVectorUtilSupport {
     public int codePointCount(BytesRef bytesRef) {
         return ByteArrayUtils.codePointCount(bytesRef.bytes, bytesRef.offset, bytesRef.length);
     }
+
+    @Override
+    public void jinaCartesianToSpherical(float[] input, float[] output, int outputOffset, int dimension) {
+        float[] r2 = new float[dimension];
+        int last = dimension - 1;
+        r2[last] = input[last] * input[last];
+        for (int i = last - 1; i >= 0; i--) {
+            float v = input[i];
+            r2[i] = r2[i + 1] + v * v;
+        }
+        for (int i = 0; i < dimension - 2; i++) {
+            float r = (float) Math.sqrt(r2[i]);
+            float value = r == 0f ? 1f : input[i] / r;
+            value = Math.max(-1f, Math.min(1f, value));
+            output[outputOffset + i] = (float) Math.acos(value);
+        }
+        output[outputOffset + dimension - 2] = (float) Math.atan2(input[dimension - 1], input[dimension - 2]);
+    }
+
+    @Override
+    public void jinaSphericalToCartesian(float[] spherical, int sphericalOffset, float[] output, int dimension) {
+        float scale = 1f;
+        for (int i = 0; i < dimension - 2; i++) {
+            float angle = spherical[sphericalOffset + i];
+            output[i] = scale * (float) Math.cos(angle);
+            scale *= (float) Math.sin(angle);
+        }
+        float lastAngle = spherical[sphericalOffset + dimension - 2];
+        output[dimension - 2] = scale * (float) Math.cos(lastAngle);
+        output[dimension - 1] = scale * (float) Math.sin(lastAngle);
+    }
+
+    @Override
+    public void jinaTranspose(float[] src, int rows, int cols, float[] dst) {
+        for (int row = 0; row < rows; row++) {
+            for (int col = 0; col < cols; col++) {
+                dst[col * rows + row] = src[row * cols + col];
+            }
+        }
+    }
 }

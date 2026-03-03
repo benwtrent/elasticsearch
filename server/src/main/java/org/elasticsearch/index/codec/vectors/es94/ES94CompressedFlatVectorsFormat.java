@@ -36,22 +36,44 @@ public class ES94CompressedFlatVectorsFormat extends KnnVectorsFormat {
     static final int VERSION_START = 0;
     static final int VERSION_CURRENT = VERSION_START;
 
+    public enum CompressionMode {
+        JINA,
+        ZSTD_ONLY
+    }
+
     private final boolean compressionEnabled;
+    private final CompressionMode compressionMode;
     private final DenseVectorFieldMapper.ElementType elementType;
 
     public ES94CompressedFlatVectorsFormat() {
-        this(DenseVectorFieldMapper.ElementType.FLOAT, true);
+        this(DenseVectorFieldMapper.ElementType.FLOAT, true, CompressionMode.JINA);
     }
 
     public ES94CompressedFlatVectorsFormat(DenseVectorFieldMapper.ElementType elementType, boolean compressionEnabled) {
+        this(elementType, compressionEnabled, CompressionMode.JINA);
+    }
+
+    public ES94CompressedFlatVectorsFormat(
+        DenseVectorFieldMapper.ElementType elementType,
+        boolean compressionEnabled,
+        CompressionMode compressionMode
+    ) {
         super(NAME);
         this.elementType = elementType;
         this.compressionEnabled = compressionEnabled;
+        this.compressionMode = compressionMode;
     }
 
     @Override
     public KnnVectorsWriter fieldsWriter(SegmentWriteState state) throws IOException {
-        return new ES94CompressedFlatVectorsWriter(state, compressionEnabled, elementType);
+        return new ES94CompressedFlatVectorsWriter(
+            state,
+            compressionEnabled,
+            compressionMode == CompressionMode.ZSTD_ONLY
+                ? ES94JinaCompressionUtils.CompressionMode.ZSTD_ONLY
+                : ES94JinaCompressionUtils.CompressionMode.JINA,
+            elementType
+        );
     }
 
     @Override

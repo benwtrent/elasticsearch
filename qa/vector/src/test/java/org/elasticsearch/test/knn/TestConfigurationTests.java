@@ -35,6 +35,7 @@ public class TestConfigurationTests extends ESTestCase {
               "early_termination": [false],
               "seed": [123],
               "flat_format": "es94",
+              "flat_compression_mode": "zstd_only",
               "flat_compression": true
             }
             """;
@@ -47,6 +48,7 @@ public class TestConfigurationTests extends ESTestCase {
             assertTrue(config.queryVectors().equals(PathUtils.get("/path/to/queries")));
             assertTrue(config.flatCompression());
             assertEquals(KnnIndexTester.FlatFormat.ES94, config.flatFormat());
+            assertEquals(KnnIndexTester.FlatCompressionMode.ZSTD_ONLY, config.flatCompressionMode());
 
             List<SearchParameters> params = config.searchParams();
             assertEquals(4, params.size());
@@ -84,6 +86,7 @@ public class TestConfigurationTests extends ESTestCase {
             TestConfiguration config = TestConfiguration.fromXContent(parser);
             assertFalse(config.flatCompression());
             assertEquals(KnnIndexTester.FlatFormat.ES93, config.flatFormat());
+            assertEquals(KnnIndexTester.FlatCompressionMode.JINA, config.flatCompressionMode());
         }
     }
 

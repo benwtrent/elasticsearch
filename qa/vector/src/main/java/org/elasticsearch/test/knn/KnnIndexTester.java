@@ -22,8 +22,8 @@ import org.apache.lucene.index.LogByteSizeMergePolicy;
 import org.apache.lucene.index.LogDocMergePolicy;
 import org.apache.lucene.index.MergePolicy;
 import org.apache.lucene.index.NoMergePolicy;
-import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.SegmentInfos;
+import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.SegmentWriteState;
 import org.apache.lucene.index.TieredMergePolicy;
 import org.apache.lucene.store.Directory;
@@ -61,10 +61,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -104,6 +104,21 @@ public class KnnIndexTester {
     enum FlatFormat {
         ES93,
         ES94
+    }
+
+    enum FlatCompressionMode {
+        JINA(ES94CompressedFlatVectorsFormat.CompressionMode.JINA),
+        ZSTD_ONLY(ES94CompressedFlatVectorsFormat.CompressionMode.ZSTD_ONLY);
+
+        private final ES94CompressedFlatVectorsFormat.CompressionMode wireMode;
+
+        FlatCompressionMode(ES94CompressedFlatVectorsFormat.CompressionMode wireMode) {
+            this.wireMode = wireMode;
+        }
+
+        ES94CompressedFlatVectorsFormat.CompressionMode wireMode() {
+            return wireMode;
+        }
     }
 
     enum VectorEncoding {
@@ -178,6 +193,9 @@ public class KnnIndexTester {
                 suffix.add(flatFormat.name().toLowerCase(Locale.ROOT));
                 if (flatFormat == FlatFormat.ES94) {
                     suffix.add(args.flatCompression() ? "compressed" : "uncompressed");
+                    if (args.flatCompression()) {
+                        suffix.add(args.flatCompressionMode().name().toLowerCase(Locale.ROOT));
+                    }
                 }
             }
             case GPU_HNSW -> suffix.add("gpu_hnsw");
@@ -271,7 +289,11 @@ public class KnnIndexTester {
             case FLAT -> switch (quantizeBits) {
                 case null -> switch (effectiveFlatFormat(args)) {
                     case ES93 -> new ES93FlatVectorFormat(elementType);
-                    case ES94 -> new ES94CompressedFlatVectorsFormat(elementType, args.flatCompression());
+                    case ES94 -> new ES94CompressedFlatVectorsFormat(
+                        elementType,
+                        args.flatCompression(),
+                        args.flatCompressionMode().wireMode()
+                    );
                 };
                 case 1 -> new ES93BinaryQuantizedVectorsFormat(elementType, false);
                 default -> new ES93ScalarQuantizedVectorsFormat(elementType, null, quantizeBits, true, false);

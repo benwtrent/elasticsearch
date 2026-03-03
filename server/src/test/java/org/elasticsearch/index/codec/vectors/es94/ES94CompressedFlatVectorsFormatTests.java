@@ -38,8 +38,8 @@ import java.util.stream.Stream;
 import static org.apache.lucene.index.VectorSimilarityFunction.DOT_PRODUCT;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasItem;
-import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.notNullValue;
 
 public class ES94CompressedFlatVectorsFormatTests extends BaseKnnVectorsFormatTestCase {
 
@@ -125,11 +125,24 @@ public class ES94CompressedFlatVectorsFormatTests extends BaseKnnVectorsFormatTe
         int dimension = random().nextInt(8, 65);
         int vectorCount = random().nextInt(5, 31);
         List<float[]> vectors = randomUnitVectors(vectorCount, dimension);
-        var payload = ES94JinaCompressionUtils.compress(vectors, dimension, true);
+        var payload = ES94JinaCompressionUtils.compress(vectors, dimension, true, ES94JinaCompressionUtils.CompressionMode.JINA);
         float[][] restored = ES94JinaCompressionUtils.decompress(payload, vectorCount, dimension);
         for (int i = 0; i < vectorCount; i++) {
             for (int j = 0; j < dimension; j++) {
                 assertEquals(vectors.get(i)[j], restored[i][j], 1e-4f);
+            }
+        }
+    }
+
+    public void testZstdOnlyCompressionRoundTrip() throws IOException {
+        int dimension = random().nextInt(8, 65);
+        int vectorCount = random().nextInt(5, 31);
+        List<float[]> vectors = randomUnitVectors(vectorCount, dimension);
+        var payload = ES94JinaCompressionUtils.compress(vectors, dimension, true, ES94JinaCompressionUtils.CompressionMode.ZSTD_ONLY);
+        float[][] restored = ES94JinaCompressionUtils.decompress(payload, vectorCount, dimension);
+        for (int i = 0; i < vectorCount; i++) {
+            for (int j = 0; j < dimension; j++) {
+                assertEquals(vectors.get(i)[j], restored[i][j], 1e-6f);
             }
         }
     }

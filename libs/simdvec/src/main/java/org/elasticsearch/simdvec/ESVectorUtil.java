@@ -487,4 +487,31 @@ public class ESVectorUtil {
         Objects.checkFromIndexSize(bytesRef.offset, bytesRef.length, bytesRef.bytes.length);
         return IMPL.codePointCount(bytesRef);
     }
+
+    public static void jinaCartesianToSpherical(float[] input, float[] output, int outputOffset, int dimension) {
+        if (input.length < dimension) {
+            throw new IllegalArgumentException("input dimensions incompatible: " + input.length + "<" + dimension);
+        }
+        if (outputOffset < 0 || outputOffset + (dimension - 1) > output.length) {
+            throw new IllegalArgumentException("output dimensions incompatible for outputOffset [" + outputOffset + "]");
+        }
+        IMPL.jinaCartesianToSpherical(input, output, outputOffset, dimension);
+    }
+
+    public static void jinaSphericalToCartesian(float[] spherical, int sphericalOffset, float[] output, int dimension) {
+        if (sphericalOffset < 0 || sphericalOffset + (dimension - 1) > spherical.length) {
+            throw new IllegalArgumentException("spherical dimensions incompatible for sphericalOffset [" + sphericalOffset + "]");
+        }
+        if (output.length < dimension) {
+            throw new IllegalArgumentException("output dimensions incompatible: " + output.length + "<" + dimension);
+        }
+        IMPL.jinaSphericalToCartesian(spherical, sphericalOffset, output, dimension);
+    }
+
+    public static void jinaTranspose(float[] src, int rows, int cols, float[] dst) {
+        if (src.length != rows * cols || dst.length != src.length) {
+            throw new IllegalArgumentException("transpose dimensions incompatible: src=" + src.length + ", rows*cols=" + (rows * cols));
+        }
+        IMPL.jinaTranspose(src, rows, cols, dst);
+    }
 }

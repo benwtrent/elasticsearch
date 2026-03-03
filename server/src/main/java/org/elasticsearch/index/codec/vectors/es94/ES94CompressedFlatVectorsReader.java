@@ -42,8 +42,16 @@ class ES94CompressedFlatVectorsReader extends FlatVectorsReader {
     ES94CompressedFlatVectorsReader(SegmentReadState state) throws IOException {
         super(ES94CompressedFlatVectorScorer.INSTANCE);
         this.fields = new HashMap<>();
-        final String metaFile = IndexFileNames.segmentFileName(state.segmentInfo.name, state.segmentSuffix, ES94CompressedFlatVectorsFormat.META_EXT);
-        final String dataFile = IndexFileNames.segmentFileName(state.segmentInfo.name, state.segmentSuffix, ES94CompressedFlatVectorsFormat.DATA_EXT);
+        final String metaFile = IndexFileNames.segmentFileName(
+            state.segmentInfo.name,
+            state.segmentSuffix,
+            ES94CompressedFlatVectorsFormat.META_EXT
+        );
+        final String dataFile = IndexFileNames.segmentFileName(
+            state.segmentInfo.name,
+            state.segmentSuffix,
+            ES94CompressedFlatVectorsFormat.DATA_EXT
+        );
         IndexInput localDataInput = null;
         try (ChecksumIndexInput metaIn = state.directory.openChecksumInput(metaFile)) {
             Throwable prior = null;

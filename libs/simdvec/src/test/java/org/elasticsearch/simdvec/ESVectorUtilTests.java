@@ -456,6 +456,51 @@ public class ESVectorUtilTests extends BaseVectorizationTests {
         assertArrayEquals(packedLegacy, packed);
     }
 
+    public void testJinaTransformPrimitiveHelpers() {
+        int dimension = randomIntBetween(8, 256);
+        int vectorCount = randomIntBetween(8, 256);
+        float[] matrix = new float[vectorCount * (dimension - 1)];
+        for (int i = 0; i < matrix.length; i++) {
+            matrix[i] = randomFloatBetween(-1f, 1f, true);
+        }
+        float[] transposedDefault = new float[matrix.length];
+        float[] transposedPanama = new float[matrix.length];
+        defaultedProvider.getVectorUtilSupport().jinaTranspose(matrix, vectorCount, dimension - 1, transposedDefault);
+        defOrPanamaProvider.getVectorUtilSupport().jinaTranspose(matrix, vectorCount, dimension - 1, transposedPanama);
+        assertArrayEquals(transposedDefault, transposedPanama, 0f);
+    }
+
+    public void testJinaCartesianSphericalAndTransposeHelpers() {
+        int dimension = randomIntBetween(8, 256);
+        int vectorCount = randomIntBetween(8, 256);
+
+        float[] vector = new float[dimension];
+        for (int i = 0; i < dimension; i++) {
+            vector[i] = randomFloatBetween(-1f, 1f, true);
+        }
+        float[] sphericalDefault = new float[dimension - 1];
+        float[] sphericalPanama = new float[dimension - 1];
+        defaultedProvider.getVectorUtilSupport().jinaCartesianToSpherical(vector, sphericalDefault, 0, dimension);
+        defOrPanamaProvider.getVectorUtilSupport().jinaCartesianToSpherical(vector, sphericalPanama, 0, dimension);
+        assertArrayEquals(sphericalDefault, sphericalPanama, 1e-5f);
+
+        float[] restoredDefault = new float[dimension];
+        float[] restoredPanama = new float[dimension];
+        defaultedProvider.getVectorUtilSupport().jinaSphericalToCartesian(sphericalDefault, 0, restoredDefault, dimension);
+        defOrPanamaProvider.getVectorUtilSupport().jinaSphericalToCartesian(sphericalPanama, 0, restoredPanama, dimension);
+        assertArrayEquals(restoredDefault, restoredPanama, 1e-5f);
+
+        float[] matrix = new float[vectorCount * (dimension - 1)];
+        for (int i = 0; i < matrix.length; i++) {
+            matrix[i] = randomFloatBetween(-1f, 1f, true);
+        }
+        float[] transposedDefault = new float[matrix.length];
+        float[] transposedPanama = new float[matrix.length];
+        defaultedProvider.getVectorUtilSupport().jinaTranspose(matrix, vectorCount, dimension - 1, transposedDefault);
+        defOrPanamaProvider.getVectorUtilSupport().jinaTranspose(matrix, vectorCount, dimension - 1, transposedPanama);
+        assertArrayEquals(transposedDefault, transposedPanama, 0f);
+    }
+
     public void testPackDibitCorrectness() {
         // 5 bits
         // binary lower bits 1 1 0 0 1
