@@ -75,6 +75,10 @@ import static org.elasticsearch.simdvec.ESNextOSQVectorsScorer.BULK_SIZE;
 public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements VectorPreconditioner {
     private static final Logger logger = LogManager.getLogger(ESNextDiskBBQVectorsReader.class);
     private static final float GRAPH_CENTROID_OVERSAMPLE_MULTIPLIER = 1.5f;
+    private static final String BYPASS_NATIVE_BULK_PROP = "es.diskbbq.centroid.hnsw.bypass_native_bulk";
+    private static final boolean BYPASS_NATIVE_BULK_CENTROID_SCORING = Boolean.parseBoolean(
+        System.getProperty(BYPASS_NATIVE_BULK_PROP, "true")
+    );
 
     public ESNextDiskBBQVectorsReader(SegmentReadState state, GenericFlatVectorReaders.LoadFlatVectorsReader getFormatReader)
         throws IOException {
@@ -706,6 +710,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 queryParams.quantizedComponentSum()
             );
             if (scorer.isPresent()) {
+                if (BYPASS_NATIVE_BULK_CENTROID_SCORING) {
+                    return new IndividualBulkScoringRandomVectorScorer(quantizedValues, scorer.get());
+                }
                 return scorer.get();
             }
         }
@@ -714,6 +721,34 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             quantizedValues,
             targetQuery
         );
+    }
+
+    /**
+     * Temporary safety wrapper: bypass scorer bulk path and score each node individually.
+     * This is used for centroid graph search while investigating incorrect bulk scoring behavior.
+     */
+    private static final class IndividualBulkScoringRandomVectorScorer extends RandomVectorScorer.AbstractRandomVectorScorer {
+        private final RandomVectorScorer delegate;
+
+        private IndividualBulkScoringRandomVectorScorer(KnnVectorValues values, RandomVectorScorer delegate) {
+            super(values);
+            this.delegate = delegate;
+        }
+
+        @Override
+        public float score(int node) throws IOException {
+            return delegate.score(node);
+        }
+
+        @Override
+        public float bulkScore(int[] nodes, float[] scores, int numNodes) throws IOException {
+            float maxScore = Float.NEGATIVE_INFINITY;
+            for (int i = 0; i < numNodes; i++) {
+                scores[i] = delegate.score(nodes[i]);
+                maxScore = Math.max(maxScore, scores[i]);
+            }
+            return maxScore;
+        }
     }
 
     private static final class EmptyFlatVectorsScorer implements FlatVectorsScorer {
