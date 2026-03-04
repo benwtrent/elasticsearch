@@ -248,4 +248,16 @@ public class KMeansLocalTests extends ESTestCase {
             }
         }
     }
+
+    public void testPrefixAndSuffixDriveAssignment() throws IOException {
+        List<float[]> vectorList = List.of(new float[] { 0f, 0f, 9f, 9f }, new float[] { 0f, 0f, 1f, 1f });
+        KMeansFloatVectorValues vectors = KMeansFloatVectorValues.build(vectorList, null, 4);
+        float[][] centroids = new float[][] { new float[] { 0f, 0f, 0f, 0f }, new float[] { 0f, 0f, 10f, 10f } };
+        int[] assignments = new int[] { -1, -1 };
+        KMeansIntermediate intermediate = new KMeansIntermediate(centroids, assignments, i -> i);
+        KMeansLocal kMeansLocal = new KMeansLocalSerial(2, 0);
+        kMeansLocal.cluster(vectors, intermediate);
+        assertEquals(1, intermediate.assignments()[0]);
+        assertEquals(0, intermediate.assignments()[1]);
+    }
 }

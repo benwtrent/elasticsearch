@@ -29,16 +29,29 @@ class KMeansLocalSerial extends KMeansLocal {
     }
 
     @Override
-    protected boolean stepLloyd(
+    protected ClusteringFloatVectorValues.AssignmentStats stepLloyd(
         ClusteringFloatVectorValues vectors,
         IntToIntFunction ordTranslator,
         float[][] centroids,
         FixedBitSet[] centroidChangedSlices,
         int[] assignments,
-        NeighborHood[] neighborHoods
+        NeighborHood[] neighborHoods,
+        int prefixDivisor,
+        boolean enableThresholdPruning
     ) throws IOException {
         assert centroidChangedSlices.length == 1;
-        return stepLloydSlice(vectors, ordTranslator, centroids, centroidChangedSlices[0], assignments, neighborHoods, 0, vectors.size());
+        return stepLloydSlice(
+            vectors,
+            ordTranslator,
+            centroids,
+            centroidChangedSlices[0],
+            assignments,
+            neighborHoods,
+            prefixDivisor,
+            enableThresholdPruning,
+            0,
+            vectors.size()
+        );
     }
 
     @Override

@@ -77,6 +77,28 @@ public final class PanamaESVectorUtilSupport implements ESVectorUtilSupport {
     }
 
     @Override
+    public float squareDistance(float[] a, int aOffset, float[] b, int bOffset, int length) {
+        if (aOffset == 0 && bOffset == 0 && length == a.length && length == b.length) {
+            return squareDistance(a, b);
+        }
+        FloatVector acc = FloatVector.zero(FLOAT_SPECIES);
+        final int limit = FLOAT_SPECIES.loopBound(length);
+        int i = 0;
+        for (; i < limit; i += FLOAT_SPECIES.length()) {
+            FloatVector av = FloatVector.fromArray(FLOAT_SPECIES, a, aOffset + i);
+            FloatVector bv = FloatVector.fromArray(FLOAT_SPECIES, b, bOffset + i);
+            FloatVector diff = av.sub(bv);
+            acc = fma(diff, diff, acc);
+        }
+        float distance = acc.reduceLanes(VectorOperators.ADD);
+        for (; i < length; i++) {
+            final float diff = a[aOffset + i] - b[bOffset + i];
+            distance = fma(diff, diff, distance);
+        }
+        return distance;
+    }
+
+    @Override
     public float cosine(byte[] a, byte[] b) {
         return SUPPORTS_NATIVE_VECTORS && SUPPORTS_HEAP_SEGMENTS
             ? Similarities.cosineI8(MemorySegment.ofArray(a), MemorySegment.ofArray(b), a.length)
@@ -862,18 +884,36 @@ public final class PanamaESVectorUtilSupport implements ESVectorUtilSupport {
 
     @Override
     public void squareDistanceBulk(float[] query, float[] v0, float[] v1, float[] v2, float[] v3, float[] distances) {
+        squareDistanceBulk(query, 0, v0, 0, v1, 0, v2, 0, v3, 0, query.length, distances);
+    }
+
+    @Override
+    public void squareDistanceBulk(
+        float[] query,
+        int queryOffset,
+        float[] v0,
+        int v0Offset,
+        float[] v1,
+        int v1Offset,
+        float[] v2,
+        int v2Offset,
+        float[] v3,
+        int v3Offset,
+        int length,
+        float[] distances
+    ) {
         FloatVector sv0 = FloatVector.zero(FLOAT_SPECIES);
         FloatVector sv1 = FloatVector.zero(FLOAT_SPECIES);
         FloatVector sv2 = FloatVector.zero(FLOAT_SPECIES);
         FloatVector sv3 = FloatVector.zero(FLOAT_SPECIES);
-        final int limit = FLOAT_SPECIES.loopBound(query.length);
+        final int limit = FLOAT_SPECIES.loopBound(length);
         int i = 0;
         for (; i < limit; i += FLOAT_SPECIES.length()) {
-            FloatVector qv = FloatVector.fromArray(FLOAT_SPECIES, query, i);
-            FloatVector dv0 = FloatVector.fromArray(FLOAT_SPECIES, v0, i);
-            FloatVector dv1 = FloatVector.fromArray(FLOAT_SPECIES, v1, i);
-            FloatVector dv2 = FloatVector.fromArray(FLOAT_SPECIES, v2, i);
-            FloatVector dv3 = FloatVector.fromArray(FLOAT_SPECIES, v3, i);
+            FloatVector qv = FloatVector.fromArray(FLOAT_SPECIES, query, queryOffset + i);
+            FloatVector dv0 = FloatVector.fromArray(FLOAT_SPECIES, v0, v0Offset + i);
+            FloatVector dv1 = FloatVector.fromArray(FLOAT_SPECIES, v1, v1Offset + i);
+            FloatVector dv2 = FloatVector.fromArray(FLOAT_SPECIES, v2, v2Offset + i);
+            FloatVector dv3 = FloatVector.fromArray(FLOAT_SPECIES, v3, v3Offset + i);
             FloatVector diff0 = qv.sub(dv0);
             sv0 = fma(diff0, diff0, sv0);
             FloatVector diff1 = qv.sub(dv1);
@@ -888,12 +928,12 @@ public final class PanamaESVectorUtilSupport implements ESVectorUtilSupport {
         float distance2 = sv2.reduceLanes(VectorOperators.ADD);
         float distance3 = sv3.reduceLanes(VectorOperators.ADD);
 
-        for (; i < query.length; i++) {
-            final float qValue = query[i];
-            final float diff0 = qValue - v0[i];
-            final float diff1 = qValue - v1[i];
-            final float diff2 = qValue - v2[i];
-            final float diff3 = qValue - v3[i];
+        for (; i < length; i++) {
+            final float qValue = query[queryOffset + i];
+            final float diff0 = qValue - v0[v0Offset + i];
+            final float diff1 = qValue - v1[v1Offset + i];
+            final float diff2 = qValue - v2[v2Offset + i];
+            final float diff3 = qValue - v3[v3Offset + i];
             distance0 = fma(diff0, diff0, distance0);
             distance1 = fma(diff1, diff1, distance1);
             distance2 = fma(diff2, diff2, distance2);

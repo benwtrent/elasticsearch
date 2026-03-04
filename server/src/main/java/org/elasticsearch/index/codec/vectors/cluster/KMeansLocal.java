@@ -11,9 +11,12 @@ package org.elasticsearch.index.codec.vectors.cluster;
 
 import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.hnsw.IntToIntFunction;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.Random;
 
 /**
@@ -23,8 +26,16 @@ import java.util.Random;
  */
 abstract class KMeansLocal {
 
+    private static final Logger logger = LogManager.getLogger(KMeansLocal.class);
+    private static final String INSTRUMENTATION_PROPERTY = "es.kmeans.instrumentation.enabled";
     private final int sampleSize;
     private final int maxIterations;
+    private static final int INITIAL_PREFIX_DIVISOR = 4;
+    private static final int MIN_PREFIX_DIVISOR = 2;
+    private static final int MAX_PREFIX_DIVISOR = 16;
+    private static final float MIN_NOT_PRUNED_RATIO = 0.03f;
+    private static final float MAX_NOT_PRUNED_RATIO = 0.05f;
+    private static final float PREFIX_TUNE_ADJUSTMENT = 0.20f;
 
     KMeansLocal(int sampleSize, int maxIterations) {
         this.sampleSize = sampleSize;
@@ -35,13 +46,15 @@ abstract class KMeansLocal {
     protected abstract int numWorkers();
 
     /** assign to each vector the closest centroid **/
-    protected abstract boolean stepLloyd(
+    protected abstract ClusteringFloatVectorValues.AssignmentStats stepLloyd(
         ClusteringFloatVectorValues vectors,
         IntToIntFunction translateOrd,
         float[][] centroids,
         FixedBitSet[] centroidChangedSlices,
         int[] assignments,
-        NeighborHood[] neighborHoods
+        NeighborHood[] neighborHoods,
+        int prefixDivisor,
+        boolean enableThresholdPruning
     ) throws IOException;
 
     /** assign to each vector the soar assignment **/
@@ -83,13 +96,15 @@ abstract class KMeansLocal {
     }
 
     /** Assign vectors from {@code startOrd} to {@code endOrd} to the closest centroid. */
-    protected static boolean stepLloydSlice(
+    protected static ClusteringFloatVectorValues.AssignmentStats stepLloydSlice(
         ClusteringFloatVectorValues vectors,
         IntToIntFunction ordTranslator,
         float[][] centroids,
         FixedBitSet centroidChanged,
         int[] assignments,
         NeighborHood[] neighborhoods,
+        int prefixDivisor,
+        boolean enableThresholdPruning,
         int startOrd,
         int endOrd
     ) throws IOException {
@@ -102,10 +117,21 @@ abstract class KMeansLocal {
                 ordTranslator,
                 centroidChanged,
                 neighborhoods,
-                assignments
+                assignments,
+                prefixDivisor,
+                enableThresholdPruning
             );
         } else {
-            return vectors.bestCentroids(startOrd, endOrd, centroids, ordTranslator, centroidChanged, assignments);
+            return vectors.bestCentroids(
+                startOrd,
+                endOrd,
+                centroids,
+                ordTranslator,
+                centroidChanged,
+                assignments,
+                prefixDivisor,
+                enableThresholdPruning
+            );
         }
     }
 
@@ -212,10 +238,48 @@ abstract class KMeansLocal {
             centroidChangedSlices[i] = new FixedBitSet(centroids.length);
         }
         int[] centroidCounts = new int[centroids.length];
+        int prefixDivisor = INITIAL_PREFIX_DIVISOR;
+        long totalCandidates = 0;
+        long totalFullScores = 0;
+        int iterationsRun = 0;
+        int minScoredDimensions = Integer.MAX_VALUE;
+        long[] scoredDimensionsHistogram = null;
+        if (Boolean.getBoolean(INSTRUMENTATION_PROPERTY)) {
+            scoredDimensionsHistogram = new long[vectors.dimension() + 1];
+        }
         for (int i = 0; i < maxIterations; i++) {
+            boolean enableThresholdPruning = i > 0;
             // This is potentially sampled, so we need to translate ordinals
-            if (stepLloyd(sampledVectors, ordTranslator, centroids, centroidChangedSlices, assignments, neighborhoods)) {
+            ClusteringFloatVectorValues.AssignmentStats stats = stepLloyd(
+                sampledVectors,
+                ordTranslator,
+                centroids,
+                centroidChangedSlices,
+                assignments,
+                neighborhoods,
+                prefixDivisor,
+                enableThresholdPruning
+            );
+            totalCandidates += stats.candidateCount;
+            totalFullScores += stats.refinedCount;
+            iterationsRun++;
+            minScoredDimensions = Math.min(minScoredDimensions, stats.minScoredDimensions);
+            if (scoredDimensionsHistogram != null && stats.scoredDimensionsHistogram != null) {
+                accumulateHistogram(scoredDimensionsHistogram, stats.scoredDimensionsHistogram);
+            }
+            int changedCount = stats.changedCount;
+            if (changedCount > 0) {
                 sampledVectors.updateCentroids(centroids, ordTranslator, centroidChangedSlices, centroidCounts, assignments);
+                if (stats.candidateCount > 0) {
+                    float notPrunedRatio = (float) stats.refinedCount / stats.candidateCount;
+                    if (notPrunedRatio > MAX_NOT_PRUNED_RATIO) {
+                        int decrease = Math.max(1, Math.round(prefixDivisor * PREFIX_TUNE_ADJUSTMENT));
+                        prefixDivisor = Math.max(MIN_PREFIX_DIVISOR, prefixDivisor - decrease);
+                    } else if (notPrunedRatio < MIN_NOT_PRUNED_RATIO) {
+                        int increase = Math.max(1, Math.round(prefixDivisor * PREFIX_TUNE_ADJUSTMENT));
+                        prefixDivisor = Math.min(MAX_PREFIX_DIVISOR, prefixDivisor + increase);
+                    }
+                }
             } else {
                 break;
             }
@@ -223,10 +287,71 @@ abstract class KMeansLocal {
         // If we were sampled, do a once over the full set of vectors to finalize the centroids
         if (sampleSize < n || maxIterations == 0) {
             // No ordinal translation needed here, we are using the full set of vectors
-            if (stepLloyd(vectors, i -> i, centroids, centroidChangedSlices, assignments, neighborhoods)) {
+            ClusteringFloatVectorValues.AssignmentStats stats = stepLloyd(
+                vectors,
+                i -> i,
+                centroids,
+                centroidChangedSlices,
+                assignments,
+                neighborhoods,
+                prefixDivisor,
+                true
+            );
+            totalCandidates += stats.candidateCount;
+            totalFullScores += stats.refinedCount;
+            iterationsRun++;
+            minScoredDimensions = Math.min(minScoredDimensions, stats.minScoredDimensions);
+            if (scoredDimensionsHistogram != null && stats.scoredDimensionsHistogram != null) {
+                accumulateHistogram(scoredDimensionsHistogram, stats.scoredDimensionsHistogram);
+            }
+            int changedCount = stats.changedCount;
+            if (changedCount > 0) {
                 sampledVectors.updateCentroids(centroids, ordTranslator, centroidChangedSlices, centroidCounts, assignments);
             }
         }
+        if (Boolean.getBoolean(INSTRUMENTATION_PROPERTY)) {
+            long pruned = Math.max(0, totalCandidates - totalFullScores);
+            double pruneRatio = totalCandidates == 0 ? 0d : (double) pruned / totalCandidates;
+            long totalScoredCandidates = scoredDimensionsHistogram == null ? 0 : Arrays.stream(scoredDimensionsHistogram).sum();
+            int medianScoredDimensions = scoredDimensionsHistogram == null
+                ? 0
+                : histogramMedian(scoredDimensionsHistogram, totalScoredCandidates);
+            int minDims = minScoredDimensions == Integer.MAX_VALUE ? 0 : minScoredDimensions;
+            logger.info(
+                "kmeans_pruning_stats vectors={} centroids={} iterations={} candidates={} full_scores={} pruned={} prune_ratio={} min_scored_dims={} median_scored_dims={} final_prefix_divisor={}",
+                vectors.size(),
+                centroids.length,
+                iterationsRun,
+                totalCandidates,
+                totalFullScores,
+                pruned,
+                String.format(Locale.ROOT, "%.4f", pruneRatio),
+                minDims,
+                medianScoredDimensions,
+                prefixDivisor
+            );
+        }
+    }
+
+    private static void accumulateHistogram(long[] target, long[] source) {
+        for (int i = 0; i < target.length && i < source.length; i++) {
+            target[i] += source[i];
+        }
+    }
+
+    private static int histogramMedian(long[] histogram, long totalCount) {
+        if (totalCount <= 0) {
+            return 0;
+        }
+        long half = (totalCount + 1) / 2;
+        long cumulative = 0;
+        for (int dims = 0; dims < histogram.length; dims++) {
+            cumulative += histogram[dims];
+            if (cumulative >= half) {
+                return dims;
+            }
+        }
+        return histogram.length - 1;
     }
 
     /**

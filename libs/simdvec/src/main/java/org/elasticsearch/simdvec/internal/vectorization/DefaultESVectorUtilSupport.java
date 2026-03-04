@@ -35,6 +35,16 @@ final class DefaultESVectorUtilSupport implements ESVectorUtilSupport {
     }
 
     @Override
+    public float squareDistance(float[] a, int aOffset, float[] b, int bOffset, int length) {
+        float distance = 0f;
+        for (int i = 0; i < length; i++) {
+            float diff = a[aOffset + i] - b[bOffset + i];
+            distance = fma(diff, diff, distance);
+        }
+        return distance;
+    }
+
+    @Override
     public float cosine(byte[] a, byte[] b) {
         return VectorUtil.cosine(a, b);
     }
@@ -321,10 +331,43 @@ final class DefaultESVectorUtilSupport implements ESVectorUtilSupport {
 
     @Override
     public void squareDistanceBulk(float[] query, float[] v0, float[] v1, float[] v2, float[] v3, float[] distances) {
-        distances[0] = VectorUtil.squareDistance(query, v0);
-        distances[1] = VectorUtil.squareDistance(query, v1);
-        distances[2] = VectorUtil.squareDistance(query, v2);
-        distances[3] = VectorUtil.squareDistance(query, v3);
+        squareDistanceBulk(query, 0, v0, 0, v1, 0, v2, 0, v3, 0, query.length, distances);
+    }
+
+    @Override
+    public void squareDistanceBulk(
+        float[] query,
+        int queryOffset,
+        float[] v0,
+        int v0Offset,
+        float[] v1,
+        int v1Offset,
+        float[] v2,
+        int v2Offset,
+        float[] v3,
+        int v3Offset,
+        int length,
+        float[] distances
+    ) {
+        float distance0 = 0f;
+        float distance1 = 0f;
+        float distance2 = 0f;
+        float distance3 = 0f;
+        for (int i = 0; i < length; i++) {
+            final float qValue = query[queryOffset + i];
+            final float diff0 = qValue - v0[v0Offset + i];
+            final float diff1 = qValue - v1[v1Offset + i];
+            final float diff2 = qValue - v2[v2Offset + i];
+            final float diff3 = qValue - v3[v3Offset + i];
+            distance0 = fma(diff0, diff0, distance0);
+            distance1 = fma(diff1, diff1, distance1);
+            distance2 = fma(diff2, diff2, distance2);
+            distance3 = fma(diff3, diff3, distance3);
+        }
+        distances[0] = distance0;
+        distances[1] = distance1;
+        distances[2] = distance2;
+        distances[3] = distance3;
     }
 
     @Override

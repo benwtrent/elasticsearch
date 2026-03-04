@@ -80,6 +80,15 @@ public class ESVectorUtil {
         return IMPL.squareDistance(a, b);
     }
 
+    /**
+     * Returns the sum of squared differences between ranges in the two vectors.
+     */
+    public static float squareDistance(float[] a, int aOffset, float[] b, int bOffset, int length) {
+        Objects.checkFromIndexSize(aOffset, length, a.length);
+        Objects.checkFromIndexSize(bOffset, length, b.length);
+        return IMPL.squareDistance(a, aOffset, b, bOffset, length);
+    }
+
     public static float cosine(byte[] a, byte[] b) {
         if (a.length != b.length) {
             throw new IllegalArgumentException("vector dimensions incompatible: " + a.length + "!= " + b.length);
@@ -368,7 +377,36 @@ public class ESVectorUtil {
         if (distances.length != 4) {
             throw new IllegalArgumentException("distances array must have length 4, but was: " + distances.length);
         }
-        IMPL.squareDistanceBulk(q, v0, v1, v2, v3, distances);
+        IMPL.squareDistanceBulk(q, 0, v0, 0, v1, 0, v2, 0, v3, 0, q.length, distances);
+    }
+
+    /**
+     * Bulk computation of square distances between ranges in a query vector and four vectors.
+     * Result is stored in the provided distances array.
+     */
+    public static void squareDistanceBulk(
+        float[] q,
+        int qOffset,
+        float[] v0,
+        int v0Offset,
+        float[] v1,
+        int v1Offset,
+        float[] v2,
+        int v2Offset,
+        float[] v3,
+        int v3Offset,
+        int length,
+        float[] distances
+    ) {
+        Objects.checkFromIndexSize(qOffset, length, q.length);
+        Objects.checkFromIndexSize(v0Offset, length, v0.length);
+        Objects.checkFromIndexSize(v1Offset, length, v1.length);
+        Objects.checkFromIndexSize(v2Offset, length, v2.length);
+        Objects.checkFromIndexSize(v3Offset, length, v3.length);
+        if (distances.length != 4) {
+            throw new IllegalArgumentException("distances array must have length 4, but was: " + distances.length);
+        }
+        IMPL.squareDistanceBulk(q, qOffset, v0, v0Offset, v1, v1Offset, v2, v2Offset, v3, v3Offset, length, distances);
     }
 
     /**

@@ -30,6 +30,43 @@ public abstract sealed class ClusteringFloatVectorValues extends FloatVectorValu
     // by the centroid itself. In many cases, it indicates a degenerated distribution, e.g the cluster is composed of the
     // many equal vectors.
     private static final float SOAR_MIN_DISTANCE = 1e-16f;
+    /**
+     * Minimum number of dimensions used for the prefix score.
+     */
+    private static final int PREFIX_MIN_DIMENSIONS = 16;
+    /**
+     * Prefix split is only beneficial when there are enough candidate centroids to prune.
+     */
+    private static final int PREFIX_SHORTLIST_MIN_CANDIDATES = 32;
+    private static final String PREFIX_REFINEMENT_CAP_RATIO_PROPERTY = "es.kmeans.prefix_refinement_cap_ratio";
+    private static final float PREFIX_REFINEMENT_CAP_RATIO = loadPrefixRefinementCapRatio();
+    private static final int PREFIX_REFINEMENT_CAP_MIN = 16;
+    /**
+     * PDX-style pruning granularity: score candidates in 64-dim chunks.
+     */
+    private static final int PREFIX_PRUNING_BATCH_DIMS = 64;
+
+    static final class AssignmentStats {
+        final int changedCount;
+        final long candidateCount;
+        final long refinedCount;
+        final int minScoredDimensions;
+        final long[] scoredDimensionsHistogram;
+
+        AssignmentStats(
+            int changedCount,
+            long candidateCount,
+            long refinedCount,
+            int minScoredDimensions,
+            long[] scoredDimensionsHistogram
+        ) {
+            this.changedCount = changedCount;
+            this.candidateCount = candidateCount;
+            this.refinedCount = refinedCount;
+            this.minScoredDimensions = minScoredDimensions;
+            this.scoredDimensionsHistogram = scoredDimensionsHistogram;
+        }
+    }
 
     @Override
     public abstract ClusteringFloatVectorValues copy() throws IOException;
@@ -48,31 +85,62 @@ public abstract sealed class ClusteringFloatVectorValues extends FloatVectorValu
      *                        on exit holds the updated assignments
      * @return {@code true} if any assignment changed, {@code false} if all assignments remained the same
      */
-    final boolean bestCentroids(
+    final AssignmentStats bestCentroids(
         int startOrd,
         int endOrd,
         float[][] centroids,
         IntToIntFunction ordTranslator,
         FixedBitSet centroidChanged,
-        int[] results
+        int[] results,
+        int prefixDivisor,
+        boolean enableThresholdPruning
     ) throws IOException {
+        final boolean collectDimensionStats = Boolean.getBoolean("es.kmeans.instrumentation.enabled");
         final float[] distances = new float[4];
-        boolean changed = false;
+        final float[] candidateScoresScratch = new float[centroids.length];
+        final int[] candidateScratch = new int[centroids.length];
+        final int[] candidateDimsScratch = new int[centroids.length];
+        final long[] scoredDimensionsHistogram = collectDimensionStats ? new long[dimension() + 1] : null;
+        int minScoredDimensions = Integer.MAX_VALUE;
+        int changedCount = 0;
+        long candidateCount = 0;
+        long refinedCount = 0;
+        final long[] pruningStats = new long[2];
+        final int[] minDimensionsStats = new int[] { Integer.MAX_VALUE };
         for (int i = startOrd; i < endOrd; i++) {
             float[] vector = vectorValue(i);
             final int translatedOrd = ordTranslator.apply(i);
             final int assignment = results[translatedOrd];
-            final int bestCentroid = computeBestCentroid(vector, centroids, distances);
+            pruningStats[0] = 0;
+            pruningStats[1] = 0;
+            minDimensionsStats[0] = Integer.MAX_VALUE;
+            final int bestCentroid = computeBestCentroid(
+                vector,
+                centroids,
+                assignment,
+                distances,
+                candidateScoresScratch,
+                candidateScratch,
+                candidateDimsScratch,
+                prefixDivisor,
+                enableThresholdPruning,
+                pruningStats,
+                scoredDimensionsHistogram,
+                minDimensionsStats
+            );
             if (bestCentroid != assignment) {
                 if (assignment != -1) {
                     centroidChanged.set(assignment);
                 }
                 centroidChanged.set(bestCentroid);
-                changed = true;
+                changedCount++;
                 results[translatedOrd] = bestCentroid;
             }
+            candidateCount += pruningStats[0];
+            refinedCount += pruningStats[1];
+            minScoredDimensions = Math.min(minScoredDimensions, minDimensionsStats[0]);
         }
-        return changed;
+        return new AssignmentStats(changedCount, candidateCount, refinedCount, minScoredDimensions, scoredDimensionsHistogram);
     }
 
     /**
@@ -91,31 +159,63 @@ public abstract sealed class ClusteringFloatVectorValues extends FloatVectorValu
      *                        current centroid assignments, on exit holds the updated assignments
      * @return {@code true} if any assignment changed, {@code false} if all assignments remained the same
      */
-    final boolean bestCentroidsFromNeighbours(
+    final AssignmentStats bestCentroidsFromNeighbours(
         int startOrd,
         int endOrd,
         float[][] centroids,
         IntToIntFunction ordTranslator,
         FixedBitSet centroidChanged,
         NeighborHood[] neighborhoods,
-        int[] results
+        int[] results,
+        int prefixDivisor,
+        boolean enableThresholdPruning
     ) throws IOException {
+        final boolean collectDimensionStats = Boolean.getBoolean("es.kmeans.instrumentation.enabled");
         final float[] distances = new float[4];
-        boolean changed = false;
+        final float[] candidateScoresScratch = new float[centroids.length];
+        final int[] candidateScratch = new int[centroids.length];
+        final int[] candidateDimsScratch = new int[centroids.length];
+        final long[] scoredDimensionsHistogram = collectDimensionStats ? new long[dimension() + 1] : null;
+        int minScoredDimensions = Integer.MAX_VALUE;
+        int changedCount = 0;
+        long candidateCount = 0;
+        long refinedCount = 0;
+        final long[] pruningStats = new long[2];
+        final int[] minDimensionsStats = new int[] { Integer.MAX_VALUE };
         for (int i = startOrd; i < endOrd; i++) {
             float[] vector = vectorValue(i);
             final int translatedOrd = ordTranslator.apply(i);
             final int assignment = results[translatedOrd];
             assert assignment != -1 : "vector is not assigned to any cluster: ord=" + translatedOrd;
-            final int bestCentroid = computeBestCentroidFromNeighbours(vector, centroids, assignment, neighborhoods[assignment], distances);
+            pruningStats[0] = 0;
+            pruningStats[1] = 0;
+            minDimensionsStats[0] = Integer.MAX_VALUE;
+            final int bestCentroid = computeBestCentroidFromNeighbours(
+                vector,
+                centroids,
+                assignment,
+                neighborhoods[assignment],
+                distances,
+                candidateScoresScratch,
+                candidateScratch,
+                candidateDimsScratch,
+                prefixDivisor,
+                enableThresholdPruning,
+                pruningStats,
+                scoredDimensionsHistogram,
+                minDimensionsStats
+            );
             if (bestCentroid != assignment) {
                 centroidChanged.set(assignment);
                 centroidChanged.set(bestCentroid);
-                changed = true;
+                changedCount++;
                 results[translatedOrd] = bestCentroid;
             }
+            candidateCount += pruningStats[0];
+            refinedCount += pruningStats[1];
+            minScoredDimensions = Math.min(minScoredDimensions, minDimensionsStats[0]);
         }
-        return changed;
+        return new AssignmentStats(changedCount, candidateCount, refinedCount, minScoredDimensions, scoredDimensionsHistogram);
     }
 
     /**
@@ -253,7 +353,572 @@ public abstract sealed class ClusteringFloatVectorValues extends FloatVectorValu
      * @param distances scratch array of length 4 used for bulk distance results
      * @return the index into {@code centroids} of the nearest centroid
      */
-    private static int computeBestCentroid(float[] vector, float[][] centroids, float[] distances) {
+    private static int computeBestCentroid(
+        float[] vector,
+        float[][] centroids,
+        int assignedCentroidIdx,
+        float[] distances,
+        float[] candidateScoresScratch,
+        int[] candidateScratch,
+        int[] candidateDimsScratch,
+        int prefixDivisor,
+        boolean enableThresholdPruning,
+        long[] pruningStats,
+        long[] scoredDimensionsHistogram,
+        int[] minDimensionsStats
+    ) {
+        final int prefixLength = computePrefixLength(vector.length, prefixDivisor);
+        final int suffixOffset = prefixLength;
+        final int suffixLength = vector.length - prefixLength;
+        if (usePrefixThresholdPruning(centroids.length, suffixLength, enableThresholdPruning) == false) {
+            pruningStats[0] += centroids.length;
+            pruningStats[1] += centroids.length;
+            if (scoredDimensionsHistogram != null) {
+                scoredDimensionsHistogram[vector.length] += centroids.length;
+                updateMinDimensions(minDimensionsStats, vector.length);
+            }
+            return computeBestCentroidFull(vector, centroids, distances);
+        }
+        pruningStats[0] += centroids.length;
+        int bestCentroidOffset = 0;
+        float minDsq = Float.MAX_VALUE;
+        if (assignedCentroidIdx >= 0 && assignedCentroidIdx < centroids.length) {
+            minDsq = ESVectorUtil.squareDistance(vector, centroids[assignedCentroidIdx]);
+            bestCentroidOffset = assignedCentroidIdx;
+        }
+        int activeCount = centroids.length;
+        for (int i = 0; i < centroids.length; i++) {
+            candidateScratch[i] = i;
+            candidateScoresScratch[i] = 0f;
+            candidateDimsScratch[i] = 0;
+        }
+
+        for (int prefixOffset = 0; prefixOffset < prefixLength && activeCount > 0; prefixOffset += PREFIX_PRUNING_BATCH_DIMS) {
+            final int batchLength = Math.min(PREFIX_PRUNING_BATCH_DIMS, prefixLength - prefixOffset);
+            int kept = 0;
+            int i = 0;
+            int bulkLimit = activeCount - 3;
+            for (; i < bulkLimit; i += 4) {
+                int c0 = candidateScratch[i];
+                int c1 = candidateScratch[i + 1];
+                int c2 = candidateScratch[i + 2];
+                int c3 = candidateScratch[i + 3];
+                ESVectorUtil.squareDistanceBulk(
+                    vector,
+                    prefixOffset,
+                    centroids[c0],
+                    prefixOffset,
+                    centroids[c1],
+                    prefixOffset,
+                    centroids[c2],
+                    prefixOffset,
+                    centroids[c3],
+                    prefixOffset,
+                    batchLength,
+                    distances
+                );
+                float s0 = candidateScoresScratch[i] + distances[0];
+                float s1 = candidateScoresScratch[i + 1] + distances[1];
+                float s2 = candidateScoresScratch[i + 2] + distances[2];
+                float s3 = candidateScoresScratch[i + 3] + distances[3];
+                int d0 = candidateDimsScratch[i] + batchLength;
+                int d1 = candidateDimsScratch[i + 1] + batchLength;
+                int d2 = candidateDimsScratch[i + 2] + batchLength;
+                int d3 = candidateDimsScratch[i + 3] + batchLength;
+                if (enableThresholdPruning == false || s0 < minDsq) {
+                    candidateScratch[kept++] = c0;
+                    candidateScoresScratch[kept - 1] = s0;
+                    candidateDimsScratch[kept - 1] = d0;
+                } else if (scoredDimensionsHistogram != null) {
+                    scoredDimensionsHistogram[d0]++;
+                    updateMinDimensions(minDimensionsStats, d0);
+                }
+                if (enableThresholdPruning == false || s1 < minDsq) {
+                    candidateScratch[kept++] = c1;
+                    candidateScoresScratch[kept - 1] = s1;
+                    candidateDimsScratch[kept - 1] = d1;
+                } else if (scoredDimensionsHistogram != null) {
+                    scoredDimensionsHistogram[d1]++;
+                    updateMinDimensions(minDimensionsStats, d1);
+                }
+                if (enableThresholdPruning == false || s2 < minDsq) {
+                    candidateScratch[kept++] = c2;
+                    candidateScoresScratch[kept - 1] = s2;
+                    candidateDimsScratch[kept - 1] = d2;
+                } else if (scoredDimensionsHistogram != null) {
+                    scoredDimensionsHistogram[d2]++;
+                    updateMinDimensions(minDimensionsStats, d2);
+                }
+                if (enableThresholdPruning == false || s3 < minDsq) {
+                    candidateScratch[kept++] = c3;
+                    candidateScoresScratch[kept - 1] = s3;
+                    candidateDimsScratch[kept - 1] = d3;
+                } else if (scoredDimensionsHistogram != null) {
+                    scoredDimensionsHistogram[d3]++;
+                    updateMinDimensions(minDimensionsStats, d3);
+                }
+            }
+            for (; i < activeCount; i++) {
+                int centroidOrd = candidateScratch[i];
+                float score = candidateScoresScratch[i] + ESVectorUtil.squareDistance(
+                    vector,
+                    prefixOffset,
+                    centroids[centroidOrd],
+                    prefixOffset,
+                    batchLength
+                );
+                int dims = candidateDimsScratch[i] + batchLength;
+                if (enableThresholdPruning == false || score < minDsq) {
+                    candidateScratch[kept++] = centroidOrd;
+                    candidateScoresScratch[kept - 1] = score;
+                    candidateDimsScratch[kept - 1] = dims;
+                } else if (scoredDimensionsHistogram != null) {
+                    scoredDimensionsHistogram[dims]++;
+                    updateMinDimensions(minDimensionsStats, dims);
+                }
+            }
+            activeCount = kept;
+        }
+        final int refinementCap = refinementCapSize(centroids.length);
+        if (activeCount > refinementCap) {
+            final int originalActiveCount = activeCount;
+            final int[] originalCandidates = scoredDimensionsHistogram == null
+                ? null
+                : Arrays.copyOf(candidateScratch, originalActiveCount);
+            final int[] originalDims = scoredDimensionsHistogram == null ? null : Arrays.copyOf(candidateDimsScratch, originalActiveCount);
+            final NeighborQueue shortlist = new NeighborQueue(refinementCap, true);
+            for (int i = 0; i < activeCount; i++) {
+                shortlist.insertWithOverflow(candidateScratch[i], candidateScoresScratch[i]);
+            }
+            activeCount = shortlist.size();
+            for (int i = 0; i < activeCount; i++) {
+                long candidate = shortlist.popRaw();
+                candidateScratch[i] = shortlist.decodeNodeId(candidate);
+                candidateScoresScratch[i] = shortlist.decodeScore(candidate);
+                if (scoredDimensionsHistogram != null) {
+                    candidateDimsScratch[i] = findDimensions(originalCandidates, originalDims, originalActiveCount, candidateScratch[i]);
+                }
+            }
+            if (scoredDimensionsHistogram != null && originalActiveCount > activeCount) {
+                int[] selected = Arrays.copyOf(candidateScratch, activeCount);
+                Arrays.sort(selected);
+                for (int i = 0; i < originalActiveCount; i++) {
+                    if (Arrays.binarySearch(selected, originalCandidates[i]) < 0) {
+                        scoredDimensionsHistogram[originalDims[i]]++;
+                        updateMinDimensions(minDimensionsStats, originalDims[i]);
+                    }
+                }
+            }
+        }
+        pruningStats[1] += activeCount;
+        if (suffixLength == 0) {
+            if (scoredDimensionsHistogram != null) {
+                recordActiveDimensions(scoredDimensionsHistogram, minDimensionsStats, candidateDimsScratch, 0, activeCount);
+            }
+            for (int i = 0; i < activeCount; i++) {
+                int centroidOrd = candidateScratch[i];
+                float dsq = candidateScoresScratch[i];
+                if (dsq < minDsq) {
+                    minDsq = dsq;
+                    bestCentroidOffset = centroidOrd;
+                }
+            }
+            return bestCentroidOffset;
+        }
+        int i = 0;
+        int shortlistLimit = activeCount - 3;
+        for (; i < shortlistLimit; i += 4) {
+            int c0 = candidateScratch[i];
+            int c1 = candidateScratch[i + 1];
+            int c2 = candidateScratch[i + 2];
+            int c3 = candidateScratch[i + 3];
+            ESVectorUtil.squareDistanceBulk(
+                vector,
+                suffixOffset,
+                centroids[c0],
+                suffixOffset,
+                centroids[c1],
+                suffixOffset,
+                centroids[c2],
+                suffixOffset,
+                centroids[c3],
+                suffixOffset,
+                suffixLength,
+                distances
+            );
+            float dsq0 = candidateScoresScratch[i] + distances[0];
+            float dsq1 = candidateScoresScratch[i + 1] + distances[1];
+            float dsq2 = candidateScoresScratch[i + 2] + distances[2];
+            float dsq3 = candidateScoresScratch[i + 3] + distances[3];
+            if (dsq0 < minDsq) {
+                minDsq = dsq0;
+                bestCentroidOffset = c0;
+            }
+            if (scoredDimensionsHistogram != null) {
+                scoredDimensionsHistogram[vector.length]++;
+                scoredDimensionsHistogram[vector.length]++;
+                scoredDimensionsHistogram[vector.length]++;
+                scoredDimensionsHistogram[vector.length]++;
+                updateMinDimensions(minDimensionsStats, vector.length);
+            }
+            if (dsq1 < minDsq) {
+                minDsq = dsq1;
+                bestCentroidOffset = c1;
+            }
+            if (dsq2 < minDsq) {
+                minDsq = dsq2;
+                bestCentroidOffset = c2;
+            }
+            if (dsq3 < minDsq) {
+                minDsq = dsq3;
+                bestCentroidOffset = c3;
+            }
+        }
+        for (; i < activeCount; i++) {
+            int centroidOrd = candidateScratch[i];
+            float dsq = candidateScoresScratch[i] + ESVectorUtil.squareDistance(
+                vector,
+                suffixOffset,
+                centroids[centroidOrd],
+                suffixOffset,
+                suffixLength
+            );
+            if (scoredDimensionsHistogram != null) {
+                scoredDimensionsHistogram[vector.length]++;
+                updateMinDimensions(minDimensionsStats, vector.length);
+            }
+            if (dsq < minDsq) {
+                minDsq = dsq;
+                bestCentroidOffset = centroidOrd;
+            }
+        }
+        return bestCentroidOffset;
+    }
+
+    /**
+     * Find the closest centroid for a materialized vector, restricting the search to its
+     * currently assigned centroid and that centroid's pre-computed neighborhood.
+     *
+     * @param vector       the vector to assign
+     * @param centroids    the centroid vectors to compare against
+     * @param centroidIdx  the index of the vector's current centroid assignment
+     * @param neighborhood the neighborhood of {@code centroidIdx}, containing neighboring
+     *                     centroid indices and the maximum intra-cluster distance
+     * @param distances    scratch array of length 4 used for bulk distance results
+     * @return the index into {@code centroids} of the nearest centroid (may be {@code centroidIdx}
+     *         if no closer neighbor was found)
+     */
+    private static int computeBestCentroidFromNeighbours(
+        float[] vector,
+        float[][] centroids,
+        int centroidIdx,
+        NeighborHood neighborhood,
+        float[] distances,
+        float[] candidateScoresScratch,
+        int[] candidateScratch,
+        int[] candidateDimsScratch,
+        int prefixDivisor,
+        boolean enableThresholdPruning,
+        long[] pruningStats,
+        long[] scoredDimensionsHistogram,
+        int[] minDimensionsStats
+    ) {
+        final int prefixLength = computePrefixLength(vector.length, prefixDivisor);
+        final int suffixOffset = prefixLength;
+        final int suffixLength = vector.length - prefixLength;
+        final int[] neighbors = neighborhood.neighbors();
+        if (usePrefixThresholdPruning(neighbors.length, suffixLength, enableThresholdPruning) == false) {
+            pruningStats[0] += neighbors.length;
+            pruningStats[1] += neighbors.length;
+            if (scoredDimensionsHistogram != null) {
+                scoredDimensionsHistogram[vector.length] += neighbors.length;
+                updateMinDimensions(minDimensionsStats, vector.length);
+            }
+            return computeBestCentroidFromNeighboursFull(vector, centroids, centroidIdx, neighborhood, distances);
+        }
+        pruningStats[0] += neighbors.length;
+        int bestCentroidOffset = centroidIdx;
+        assert centroidIdx >= 0 && centroidIdx < centroids.length;
+        float minDsq = ESVectorUtil.squareDistance(vector, centroids[centroidIdx]);
+        int activeCount = neighbors.length;
+        for (int i = 0; i < neighbors.length; i++) {
+            int centroidOrd = neighbors[i];
+            candidateScratch[i] = centroidOrd;
+            candidateScoresScratch[i] = 0f;
+            candidateDimsScratch[i] = 0;
+        }
+        for (int prefixOffset = 0; prefixOffset < prefixLength && activeCount > 0; prefixOffset += PREFIX_PRUNING_BATCH_DIMS) {
+            if (minDsq < neighborhood.maxIntraDistance()) {
+                if (scoredDimensionsHistogram != null) {
+                    recordActiveDimensions(scoredDimensionsHistogram, minDimensionsStats, candidateDimsScratch, 0, activeCount);
+                }
+                return bestCentroidOffset;
+            }
+            final int batchLength = Math.min(PREFIX_PRUNING_BATCH_DIMS, prefixLength - prefixOffset);
+            int kept = 0;
+            int i = 0;
+            int bulkLimit = activeCount - 3;
+            for (; i < bulkLimit; i += 4) {
+                int c0 = candidateScratch[i];
+                int c1 = candidateScratch[i + 1];
+                int c2 = candidateScratch[i + 2];
+                int c3 = candidateScratch[i + 3];
+                ESVectorUtil.squareDistanceBulk(
+                    vector,
+                    prefixOffset,
+                    centroids[c0],
+                    prefixOffset,
+                    centroids[c1],
+                    prefixOffset,
+                    centroids[c2],
+                    prefixOffset,
+                    centroids[c3],
+                    prefixOffset,
+                    batchLength,
+                    distances
+                );
+                float s0 = candidateScoresScratch[i] + distances[0];
+                float s1 = candidateScoresScratch[i + 1] + distances[1];
+                float s2 = candidateScoresScratch[i + 2] + distances[2];
+                float s3 = candidateScoresScratch[i + 3] + distances[3];
+                int d0 = candidateDimsScratch[i] + batchLength;
+                int d1 = candidateDimsScratch[i + 1] + batchLength;
+                int d2 = candidateDimsScratch[i + 2] + batchLength;
+                int d3 = candidateDimsScratch[i + 3] + batchLength;
+                if (enableThresholdPruning == false || s0 < minDsq) {
+                    candidateScratch[kept++] = c0;
+                    candidateScoresScratch[kept - 1] = s0;
+                    candidateDimsScratch[kept - 1] = d0;
+                } else if (scoredDimensionsHistogram != null) {
+                    scoredDimensionsHistogram[d0]++;
+                    updateMinDimensions(minDimensionsStats, d0);
+                }
+                if (enableThresholdPruning == false || s1 < minDsq) {
+                    candidateScratch[kept++] = c1;
+                    candidateScoresScratch[kept - 1] = s1;
+                    candidateDimsScratch[kept - 1] = d1;
+                } else if (scoredDimensionsHistogram != null) {
+                    scoredDimensionsHistogram[d1]++;
+                    updateMinDimensions(minDimensionsStats, d1);
+                }
+                if (enableThresholdPruning == false || s2 < minDsq) {
+                    candidateScratch[kept++] = c2;
+                    candidateScoresScratch[kept - 1] = s2;
+                    candidateDimsScratch[kept - 1] = d2;
+                } else if (scoredDimensionsHistogram != null) {
+                    scoredDimensionsHistogram[d2]++;
+                    updateMinDimensions(minDimensionsStats, d2);
+                }
+                if (enableThresholdPruning == false || s3 < minDsq) {
+                    candidateScratch[kept++] = c3;
+                    candidateScoresScratch[kept - 1] = s3;
+                    candidateDimsScratch[kept - 1] = d3;
+                } else if (scoredDimensionsHistogram != null) {
+                    scoredDimensionsHistogram[d3]++;
+                    updateMinDimensions(minDimensionsStats, d3);
+                }
+            }
+            for (; i < activeCount; i++) {
+                int centroidOrd = candidateScratch[i];
+                float score = candidateScoresScratch[i] + ESVectorUtil.squareDistance(
+                    vector,
+                    prefixOffset,
+                    centroids[centroidOrd],
+                    prefixOffset,
+                    batchLength
+                );
+                int dims = candidateDimsScratch[i] + batchLength;
+                if (enableThresholdPruning == false || score < minDsq) {
+                    candidateScratch[kept++] = centroidOrd;
+                    candidateScoresScratch[kept - 1] = score;
+                    candidateDimsScratch[kept - 1] = dims;
+                } else if (scoredDimensionsHistogram != null) {
+                    scoredDimensionsHistogram[dims]++;
+                    updateMinDimensions(minDimensionsStats, dims);
+                }
+            }
+            activeCount = kept;
+        }
+        final int refinementCap = refinementCapSize(neighbors.length);
+        if (activeCount > refinementCap) {
+            final int originalActiveCount = activeCount;
+            final int[] originalCandidates = scoredDimensionsHistogram == null
+                ? null
+                : Arrays.copyOf(candidateScratch, originalActiveCount);
+            final int[] originalDims = scoredDimensionsHistogram == null ? null : Arrays.copyOf(candidateDimsScratch, originalActiveCount);
+            final NeighborQueue shortlist = new NeighborQueue(refinementCap, true);
+            for (int i = 0; i < activeCount; i++) {
+                shortlist.insertWithOverflow(candidateScratch[i], candidateScoresScratch[i]);
+            }
+            activeCount = shortlist.size();
+            for (int i = 0; i < activeCount; i++) {
+                long candidate = shortlist.popRaw();
+                candidateScratch[i] = shortlist.decodeNodeId(candidate);
+                candidateScoresScratch[i] = shortlist.decodeScore(candidate);
+                if (scoredDimensionsHistogram != null) {
+                    candidateDimsScratch[i] = findDimensions(originalCandidates, originalDims, originalActiveCount, candidateScratch[i]);
+                }
+            }
+            if (scoredDimensionsHistogram != null && originalActiveCount > activeCount) {
+                int[] selected = Arrays.copyOf(candidateScratch, activeCount);
+                Arrays.sort(selected);
+                for (int i = 0; i < originalActiveCount; i++) {
+                    if (Arrays.binarySearch(selected, originalCandidates[i]) < 0) {
+                        scoredDimensionsHistogram[originalDims[i]]++;
+                        updateMinDimensions(minDimensionsStats, originalDims[i]);
+                    }
+                }
+            }
+        }
+        pruningStats[1] += activeCount;
+        if (suffixLength == 0) {
+            if (scoredDimensionsHistogram != null) {
+                recordActiveDimensions(scoredDimensionsHistogram, minDimensionsStats, candidateDimsScratch, 0, activeCount);
+            }
+            for (int i = 0; i < activeCount; i++) {
+                int centroidOrd = candidateScratch[i];
+                float dsq = candidateScoresScratch[i];
+                if (dsq < minDsq) {
+                    minDsq = dsq;
+                    bestCentroidOffset = centroidOrd;
+                }
+            }
+            return bestCentroidOffset;
+        }
+        int i = 0;
+        int shortlistLimit = activeCount - 3;
+        for (; i < shortlistLimit; i += 4) {
+            if (minDsq < neighborhood.maxIntraDistance()) {
+                if (scoredDimensionsHistogram != null) {
+                    recordActiveDimensions(scoredDimensionsHistogram, minDimensionsStats, candidateDimsScratch, i, activeCount);
+                }
+                return bestCentroidOffset;
+            }
+            int c0 = candidateScratch[i];
+            int c1 = candidateScratch[i + 1];
+            int c2 = candidateScratch[i + 2];
+            int c3 = candidateScratch[i + 3];
+            ESVectorUtil.squareDistanceBulk(
+                vector,
+                suffixOffset,
+                centroids[c0],
+                suffixOffset,
+                centroids[c1],
+                suffixOffset,
+                centroids[c2],
+                suffixOffset,
+                centroids[c3],
+                suffixOffset,
+                suffixLength,
+                distances
+            );
+            float dsq0 = candidateScoresScratch[i] + distances[0];
+            float dsq1 = candidateScoresScratch[i + 1] + distances[1];
+            float dsq2 = candidateScoresScratch[i + 2] + distances[2];
+            float dsq3 = candidateScoresScratch[i + 3] + distances[3];
+            if (scoredDimensionsHistogram != null) {
+                scoredDimensionsHistogram[vector.length]++;
+                scoredDimensionsHistogram[vector.length]++;
+                scoredDimensionsHistogram[vector.length]++;
+                scoredDimensionsHistogram[vector.length]++;
+                updateMinDimensions(minDimensionsStats, vector.length);
+            }
+            if (dsq0 < minDsq) {
+                minDsq = dsq0;
+                bestCentroidOffset = c0;
+            }
+            if (dsq1 < minDsq) {
+                minDsq = dsq1;
+                bestCentroidOffset = c1;
+            }
+            if (dsq2 < minDsq) {
+                minDsq = dsq2;
+                bestCentroidOffset = c2;
+            }
+            if (dsq3 < minDsq) {
+                minDsq = dsq3;
+                bestCentroidOffset = c3;
+            }
+        }
+        for (; i < activeCount; i++) {
+            if (minDsq < neighborhood.maxIntraDistance()) {
+                if (scoredDimensionsHistogram != null) {
+                    recordActiveDimensions(scoredDimensionsHistogram, minDimensionsStats, candidateDimsScratch, i, activeCount);
+                }
+                return bestCentroidOffset;
+            }
+            int centroidOrd = candidateScratch[i];
+            float dsq = candidateScoresScratch[i] + ESVectorUtil.squareDistance(
+                vector,
+                suffixOffset,
+                centroids[centroidOrd],
+                suffixOffset,
+                suffixLength
+            );
+            if (scoredDimensionsHistogram != null) {
+                scoredDimensionsHistogram[vector.length]++;
+                updateMinDimensions(minDimensionsStats, vector.length);
+            }
+            if (dsq < minDsq) {
+                minDsq = dsq;
+                bestCentroidOffset = centroidOrd;
+            }
+        }
+        return bestCentroidOffset;
+    }
+
+    private static int refinementCapSize(int candidateCount) {
+        if (candidateCount <= PREFIX_SHORTLIST_MIN_CANDIDATES) {
+            return candidateCount;
+        }
+        int shortlist = Math.max(PREFIX_REFINEMENT_CAP_MIN, Math.round(candidateCount * PREFIX_REFINEMENT_CAP_RATIO));
+        return Math.max(1, Math.min(candidateCount, shortlist));
+    }
+
+    private static float loadPrefixRefinementCapRatio() {
+        String value = System.getProperty(PREFIX_REFINEMENT_CAP_RATIO_PROPERTY);
+        if (value == null) {
+            return 0.125f;
+        }
+        try {
+            float ratio = Float.parseFloat(value);
+            if (ratio <= 0f || ratio > 1f) {
+                return 0.125f;
+            }
+            return ratio;
+        } catch (NumberFormatException e) {
+            return 0.125f;
+        }
+    }
+
+    private static void recordActiveDimensions(
+        long[] histogram,
+        int[] minDimensionsStats,
+        int[] candidateDimsScratch,
+        int start,
+        int endExclusive
+    ) {
+        for (int i = start; i < endExclusive; i++) {
+            int dims = candidateDimsScratch[i];
+            histogram[dims]++;
+            updateMinDimensions(minDimensionsStats, dims);
+        }
+    }
+
+    private static void updateMinDimensions(int[] minDimensionsStats, int dims) {
+        minDimensionsStats[0] = Math.min(minDimensionsStats[0], dims);
+    }
+
+    private static int findDimensions(int[] candidateIds, int[] candidateDims, int length, int candidateId) {
+        for (int i = 0; i < length; i++) {
+            if (candidateIds[i] == candidateId) {
+                return candidateDims[i];
+            }
+        }
+        return 0;
+    }
+
+    private static int computeBestCentroidFull(float[] vector, float[][] centroids, float[] distances) {
         final int limit = centroids.length - 3;
         int bestCentroidOffset = 0;
         float minDsq = Float.MAX_VALUE;
@@ -278,62 +943,45 @@ public abstract sealed class ClusteringFloatVectorValues extends FloatVectorValu
         return bestCentroidOffset;
     }
 
-    /**
-     * Find the closest centroid for a materialized vector, restricting the search to its
-     * currently assigned centroid and that centroid's pre-computed neighborhood.
-     *
-     * @param vector       the vector to assign
-     * @param centroids    the centroid vectors to compare against
-     * @param centroidIdx  the index of the vector's current centroid assignment
-     * @param neighborhood the neighborhood of {@code centroidIdx}, containing neighboring
-     *                     centroid indices and the maximum intra-cluster distance
-     * @param distances    scratch array of length 4 used for bulk distance results
-     * @return the index into {@code centroids} of the nearest centroid (may be {@code centroidIdx}
-     *         if no closer neighbor was found)
-     */
-    private static int computeBestCentroidFromNeighbours(
+    private static int computeBestCentroidFromNeighboursFull(
         float[] vector,
         float[][] centroids,
         int centroidIdx,
         NeighborHood neighborhood,
         float[] distances
     ) {
-        final int limit = neighborhood.neighbors().length - 3;
+        final int[] neighbors = neighborhood.neighbors();
+        final int limit = neighbors.length - 3;
         int bestCentroidOffset = centroidIdx;
         assert centroidIdx >= 0 && centroidIdx < centroids.length;
         float minDsq = ESVectorUtil.squareDistance(vector, centroids[centroidIdx]);
         int i = 0;
         for (; i < limit; i += 4) {
             if (minDsq < neighborhood.maxIntraDistance()) {
-                // if the distance found is smaller than the maximum intra-cluster distance
-                // we don't consider it for further re-assignment
                 return bestCentroidOffset;
             }
             ESVectorUtil.squareDistanceBulk(
                 vector,
-                centroids[neighborhood.neighbors()[i]],
-                centroids[neighborhood.neighbors()[i + 1]],
-                centroids[neighborhood.neighbors()[i + 2]],
-                centroids[neighborhood.neighbors()[i + 3]],
+                centroids[neighbors[i]],
+                centroids[neighbors[i + 1]],
+                centroids[neighbors[i + 2]],
+                centroids[neighbors[i + 3]],
                 distances
             );
             for (int j = 0; j < distances.length; j++) {
                 float dsq = distances[j];
                 if (dsq < minDsq) {
                     minDsq = dsq;
-                    bestCentroidOffset = neighborhood.neighbors()[i + j];
+                    bestCentroidOffset = neighbors[i + j];
                 }
             }
         }
-        for (; i < neighborhood.neighbors().length; i++) {
+        for (; i < neighbors.length; i++) {
             if (minDsq < neighborhood.maxIntraDistance()) {
-                // if the distance found is smaller than the maximum intra-cluster distance
-                // we don't consider it for further re-assignment
                 return bestCentroidOffset;
             }
-            int offset = neighborhood.neighbors()[i];
+            int offset = neighbors[i];
             assert offset >= 0 && offset < centroids.length : "Invalid neighbor offset: " + offset;
-            // compute the distance to the centroid
             float dsq = ESVectorUtil.squareDistance(vector, centroids[offset]);
             if (dsq < minDsq) {
                 minDsq = dsq;
@@ -341,6 +989,25 @@ public abstract sealed class ClusteringFloatVectorValues extends FloatVectorValu
             }
         }
         return bestCentroidOffset;
+    }
+
+    private static boolean usePrefixThresholdPruning(int candidateCount, int suffixLength, boolean enableThresholdPruning) {
+        if (enableThresholdPruning == false) {
+            return false;
+        }
+        if (suffixLength <= 0 || candidateCount < PREFIX_SHORTLIST_MIN_CANDIDATES) {
+            return false;
+        }
+        return true;
+    }
+
+    private static int computePrefixLength(int dimension, int prefixDivisor) {
+        if (dimension <= 0) {
+            return 0;
+        }
+        int divisor = Math.max(1, prefixDivisor);
+        int prefix = Math.max(PREFIX_MIN_DIMENSIONS, dimension / divisor);
+        return Math.min(prefix, dimension);
     }
 
     private static int computeSoarAssignment(

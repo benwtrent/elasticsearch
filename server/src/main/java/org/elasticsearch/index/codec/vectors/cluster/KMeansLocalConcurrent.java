@@ -38,27 +38,65 @@ class KMeansLocalConcurrent extends KMeansLocal {
     }
 
     @Override
-    protected boolean stepLloyd(
+    protected ClusteringFloatVectorValues.AssignmentStats stepLloyd(
         ClusteringFloatVectorValues vectors,
         IntToIntFunction ordTranslator,
         float[][] centroids,
         FixedBitSet[] centroidChangedSlices,
         int[] assignments,
-        NeighborHood[] neighborHoods
+        NeighborHood[] neighborHoods,
+        int prefixDivisor,
+        boolean enableThresholdPruning
     ) throws IOException {
         assert numWorkers == centroidChangedSlices.length;
         final int len = vectors.size() / numWorkers;
-        final List<Callable<Boolean>> runners = new ArrayList<>(numWorkers);
+        final List<Callable<ClusteringFloatVectorValues.AssignmentStats>> runners = new ArrayList<>(numWorkers);
         for (int i = 0; i < numWorkers; i++) {
             final int start = i * len;
             final int end = i == numWorkers - 1 ? vectors.size() : (i + 1) * len;
             final FixedBitSet centroidChangedSlice = centroidChangedSlices[i];
             runners.add(
-                () -> stepLloydSlice(vectors.copy(), ordTranslator, centroids, centroidChangedSlice, assignments, neighborHoods, start, end)
+                () -> stepLloydSlice(
+                    vectors.copy(),
+                    ordTranslator,
+                    centroids,
+                    centroidChangedSlice,
+                    assignments,
+                    neighborHoods,
+                    prefixDivisor,
+                    enableThresholdPruning,
+                    start,
+                    end
+                )
             );
         }
-        final List<Boolean> hasChanges = executor.invokeAll(runners);
-        return hasChanges.stream().anyMatch(Boolean::booleanValue);
+        final List<ClusteringFloatVectorValues.AssignmentStats> stats = executor.invokeAll(runners);
+        int changed = 0;
+        long candidates = 0;
+        long refined = 0;
+        int minScoredDimensions = Integer.MAX_VALUE;
+        long[] scoredDimensionsHistogram = null;
+        for (ClusteringFloatVectorValues.AssignmentStats stat : stats) {
+            changed += stat.changedCount;
+            candidates += stat.candidateCount;
+            refined += stat.refinedCount;
+            minScoredDimensions = Math.min(minScoredDimensions, stat.minScoredDimensions);
+            if (stat.scoredDimensionsHistogram != null) {
+                if (scoredDimensionsHistogram == null) {
+                    scoredDimensionsHistogram = new long[stat.scoredDimensionsHistogram.length];
+                }
+                for (int i = 0; i < scoredDimensionsHistogram.length; i++) {
+                    scoredDimensionsHistogram[i] += stat.scoredDimensionsHistogram[i];
+                }
+            }
+        }
+        return new ClusteringFloatVectorValues.AssignmentStats(
+            changed,
+            candidates,
+            refined,
+            minScoredDimensions,
+            scoredDimensionsHistogram
+        );
     }
 
     @Override

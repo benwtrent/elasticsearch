@@ -341,6 +341,37 @@ public class ESVectorUtilTests extends BaseVectorizationTests {
         assertArrayEquals(expectedDistances, panamaDistances, 1e-3f);
     }
 
+    public void testSquareDistanceRange() {
+        int vectorSize = randomIntBetween(8, 2048);
+        float[] a = generateRandomVector(vectorSize);
+        float[] b = generateRandomVector(vectorSize);
+        int offset = randomIntBetween(0, vectorSize - 1);
+        int length = randomIntBetween(1, vectorSize - offset);
+        float expected = scalarSquareDistanceRange(a, offset, b, offset, length);
+        float defaultDistance = defaultedProvider.getVectorUtilSupport().squareDistance(a, offset, b, offset, length);
+        float panamaDistance = defOrPanamaProvider.getVectorUtilSupport().squareDistance(a, offset, b, offset, length);
+        assertEquals(expected, defaultDistance, 1e-3f);
+        assertEquals(expected, panamaDistance, 1e-3f);
+    }
+
+    public void testSquareDistanceBulkRange() {
+        int vectorSize = randomIntBetween(8, 2048);
+        float[] query = generateRandomVector(vectorSize);
+        float[] v0 = generateRandomVector(vectorSize);
+        float[] v1 = generateRandomVector(vectorSize);
+        float[] v2 = generateRandomVector(vectorSize);
+        float[] v3 = generateRandomVector(vectorSize);
+        int offset = randomIntBetween(0, vectorSize - 1);
+        int length = randomIntBetween(1, vectorSize - offset);
+        float[] expectedDistances = new float[4];
+        float[] panamaDistances = new float[4];
+        defaultedProvider.getVectorUtilSupport()
+            .squareDistanceBulk(query, offset, v0, offset, v1, offset, v2, offset, v3, offset, length, expectedDistances);
+        defOrPanamaProvider.getVectorUtilSupport()
+            .squareDistanceBulk(query, offset, v0, offset, v1, offset, v2, offset, v3, offset, length, panamaDistances);
+        assertArrayEquals(expectedDistances, panamaDistances, 1e-3f);
+    }
+
     public void testSoarDistanceBulk() {
         int vectorSize = randomIntBetween(1, 2048);
         float deltaEps = 1e-3f * vectorSize;
@@ -482,6 +513,15 @@ public class ESVectorUtilTests extends BaseVectorizationTests {
             vector[i] = random().nextFloat();
         }
         return vector;
+    }
+
+    private static float scalarSquareDistanceRange(float[] a, int aOffset, float[] b, int bOffset, int length) {
+        float distance = 0f;
+        for (int i = 0; i < length; i++) {
+            float diff = a[aOffset + i] - b[bOffset + i];
+            distance += diff * diff;
+        }
+        return distance;
     }
 
     void testIpByteBinImpl(ToLongBiFunction<byte[], byte[]> ipByteBinFunc) {
