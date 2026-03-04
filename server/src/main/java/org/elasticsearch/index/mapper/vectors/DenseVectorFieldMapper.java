@@ -41,6 +41,7 @@ import org.apache.lucene.util.BitUtil;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.ElasticsearchSecurityException;
 import org.elasticsearch.common.ParsingException;
+import org.elasticsearch.common.logging.DeprecationCategory;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.core.Nullable;
@@ -54,9 +55,9 @@ import org.elasticsearch.index.codec.vectors.diskbbq.next.ESNextDiskBBQVectorsFo
 import org.elasticsearch.index.codec.vectors.es93.ES93BinaryQuantizedVectorsFormat;
 import org.elasticsearch.index.codec.vectors.es93.ES93FlatVectorFormat;
 import org.elasticsearch.index.codec.vectors.es93.ES93HnswBinaryQuantizedVectorsFormat;
-import org.elasticsearch.index.codec.vectors.es93.ES93HnswScalarQuantizedVectorsFormat;
 import org.elasticsearch.index.codec.vectors.es93.ES93HnswVectorsFormat;
-import org.elasticsearch.index.codec.vectors.es93.ES93ScalarQuantizedVectorsFormat;
+import org.elasticsearch.index.codec.vectors.es94.ES94HnswScalarQuantizedVectorsFormat;
+import org.elasticsearch.index.codec.vectors.es94.ES94ScalarQuantizedVectorsFormat;
 import org.elasticsearch.index.fielddata.FieldDataContext;
 import org.elasticsearch.index.fielddata.IndexFieldData;
 import org.elasticsearch.index.mapper.BlockLoader;
@@ -138,6 +139,9 @@ import static org.elasticsearch.index.codec.vectors.diskbbq.ES920DiskBBQVectorsF
 public class DenseVectorFieldMapper extends FieldMapper {
     public static final String COSINE_MAGNITUDE_FIELD_SUFFIX = "._magnitude";
     public static final int BBQ_MIN_DIMS = 64;
+    public static final String CONFIDENCE_INTERVAL_DEPRECATION_MESSAGE =
+        "Parameter [confidence_interval] in [index_options] for dense_vector field [{}] "
+            + "is deprecated and will be removed in a future version";
 
     private static final int DEFAULT_BBQ_IVF_QUANTIZE_BITS = 1;
 
@@ -414,7 +418,6 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 return new Int8HnswIndexOptions(
                     Lucene99HnswVectorsFormat.DEFAULT_MAX_CONN,
                     Lucene99HnswVectorsFormat.DEFAULT_BEAM_WIDTH,
-                    null,
                     false,
                     null,
                     -1
@@ -1485,10 +1488,16 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
     abstract static class QuantizedIndexOptions extends DenseVectorIndexOptions {
         final RescoreVector rescoreVector;
+        final Double confidenceInterval;
 
         QuantizedIndexOptions(VectorIndexType type, RescoreVector rescoreVector) {
+            this(type, rescoreVector, null);
+        }
+
+        QuantizedIndexOptions(VectorIndexType type, RescoreVector rescoreVector, Double confidenceInterval) {
             super(type);
             this.rescoreVector = rescoreVector;
+            this.confidenceInterval = confidenceInterval;
         }
     }
 
@@ -1538,7 +1547,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             ) {
                 Object mNode = indexOptionsMap.remove("m");
                 Object efConstructionNode = indexOptionsMap.remove("ef_construction");
-                Object confidenceIntervalNode = indexOptionsMap.remove("confidence_interval");
+                Double confidenceInterval = parseConfidenceInterval(fieldName, indexOptionsMap, indexVersion);
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
                 Object flatIndexThresholdNode = indexOptionsMap.remove("flat_index_threshold");
 
@@ -1547,16 +1556,12 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 boolean onDiskRescore = XContentMapValues.nodeBooleanValue(onDiskRescoreNode, false);
                 int flatIndexThreshold = XContentMapValues.nodeIntegerValue(flatIndexThresholdNode, -1);
 
-                Float confidenceInterval = null;
-                if (confidenceIntervalNode != null) {
-                    confidenceInterval = (float) XContentMapValues.nodeDoubleValue(confidenceIntervalNode);
-                }
                 RescoreVector rescoreVector = null;
                 if (hasRescoreIndexVersion(indexVersion)) {
                     rescoreVector = RescoreVector.fromIndexOptions(indexOptionsMap, indexVersion);
                 }
                 MappingParser.checkNoRemainingFields(fieldName, indexOptionsMap);
-                return new Int8HnswIndexOptions(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector, flatIndexThreshold);
+                return new Int8HnswIndexOptions(m, efConstruction, onDiskRescore, rescoreVector, flatIndexThreshold, confidenceInterval);
             }
 
             @Override
@@ -1578,7 +1583,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             ) {
                 Object mNode = indexOptionsMap.remove("m");
                 Object efConstructionNode = indexOptionsMap.remove("ef_construction");
-                Object confidenceIntervalNode = indexOptionsMap.remove("confidence_interval");
+                Double confidenceInterval = parseConfidenceInterval(fieldName, indexOptionsMap, indexVersion);
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
                 Object flatIndexThresholdNode = indexOptionsMap.remove("flat_index_threshold");
 
@@ -1587,17 +1592,13 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 boolean onDiskRescore = XContentMapValues.nodeBooleanValue(onDiskRescoreNode, false);
                 int flatIndexThreshold = XContentMapValues.nodeIntegerValue(flatIndexThresholdNode, -1);
 
-                Float confidenceInterval = null;
-                if (confidenceIntervalNode != null) {
-                    confidenceInterval = (float) XContentMapValues.nodeDoubleValue(confidenceIntervalNode);
-                }
                 RescoreVector rescoreVector = null;
                 if (hasRescoreIndexVersion(indexVersion)) {
                     rescoreVector = RescoreVector.fromIndexOptions(indexOptionsMap, indexVersion);
                 }
                 MappingParser.checkNoRemainingFields(fieldName, indexOptionsMap);
 
-                return new Int4HnswIndexOptions(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector, flatIndexThreshold);
+                return new Int4HnswIndexOptions(m, efConstruction, onDiskRescore, rescoreVector, flatIndexThreshold, confidenceInterval);
             }
 
             @Override
@@ -1646,11 +1647,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 boolean experimentalFeaturesEnabled
             ) {
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
-                Object confidenceIntervalNode = indexOptionsMap.remove("confidence_interval");
-                Float confidenceInterval = null;
-                if (confidenceIntervalNode != null) {
-                    confidenceInterval = (float) XContentMapValues.nodeDoubleValue(confidenceIntervalNode);
-                }
+                Double confidenceInterval = parseConfidenceInterval(fieldName, indexOptionsMap, indexVersion);
                 RescoreVector rescoreVector = null;
                 if (hasRescoreIndexVersion(indexVersion)) {
                     rescoreVector = RescoreVector.fromIndexOptions(indexOptionsMap, indexVersion);
@@ -1660,7 +1657,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                     throw new IllegalArgumentException("on_disk_rescore is only supported for indexed and quantized vector types");
                 }
                 MappingParser.checkNoRemainingFields(fieldName, indexOptionsMap);
-                return new Int8FlatIndexOptions(confidenceInterval, rescoreVector);
+                return new Int8FlatIndexOptions(rescoreVector, confidenceInterval);
             }
 
             @Override
@@ -1682,11 +1679,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 boolean experimentalFeaturesEnabled
             ) {
                 Object onDiskRescoreNode = indexOptionsMap.remove("on_disk_rescore");
-                Object confidenceIntervalNode = indexOptionsMap.remove("confidence_interval");
-                Float confidenceInterval = null;
-                if (confidenceIntervalNode != null) {
-                    confidenceInterval = (float) XContentMapValues.nodeDoubleValue(confidenceIntervalNode);
-                }
+                Double confidenceInterval = parseConfidenceInterval(fieldName, indexOptionsMap, indexVersion);
                 RescoreVector rescoreVector = null;
                 if (hasRescoreIndexVersion(indexVersion)) {
                     rescoreVector = RescoreVector.fromIndexOptions(indexOptionsMap, indexVersion);
@@ -1696,7 +1689,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                     throw new IllegalArgumentException("on_disk_rescore is only supported for indexed and quantized vector types");
                 }
                 MappingParser.checkNoRemainingFields(fieldName, indexOptionsMap);
-                return new Int4FlatIndexOptions(confidenceInterval, rescoreVector);
+                return new Int4FlatIndexOptions(rescoreVector, confidenceInterval);
             }
 
             @Override
@@ -1809,6 +1802,21 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
                 RescoreVector rescoreVector = RescoreVector.fromIndexOptions(indexOptionsMap, indexVersion);
 
+                Object flatIndexBuildThresholdNode = indexOptionsMap.remove("flat_index_threshold");
+                int flatIndexThreshold = -1;
+                if (flatIndexBuildThresholdNode != null) {
+                    flatIndexThreshold = XContentMapValues.nodeIntegerValue(flatIndexBuildThresholdNode);
+                    if (flatIndexThreshold < -1) {
+                        throw new IllegalArgumentException(
+                            "flat_index_threshold must be -1 (dynamic), 0 (disabled), or > 0, got: "
+                                + flatIndexThreshold
+                                + " for field ["
+                                + fieldName
+                                + "]"
+                        );
+                    }
+                }
+
                 Object visitPercentageNode = indexOptionsMap.remove("default_visit_percentage");
                 double visitPercentage = 0d;
                 if (visitPercentageNode != null) {
@@ -1857,6 +1865,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 MappingParser.checkNoRemainingFields(fieldName, indexOptionsMap);
                 return new BBQIVFIndexOptions(
                     clusterSize,
+                    flatIndexThreshold,
                     visitPercentage,
                     onDiskRescore,
                     rescoreVector,
@@ -1916,22 +1925,23 @@ public class DenseVectorFieldMapper extends FieldMapper {
     }
 
     static class Int8FlatIndexOptions extends QuantizedIndexOptions {
-        private final Float confidenceInterval;
-
-        Int8FlatIndexOptions(Float confidenceInterval, RescoreVector rescoreVector) {
+        Int8FlatIndexOptions(RescoreVector rescoreVector) {
             super(VectorIndexType.INT8_FLAT, rescoreVector);
-            this.confidenceInterval = confidenceInterval;
+        }
+
+        Int8FlatIndexOptions(RescoreVector rescoreVector, Double confidenceInterval) {
+            super(VectorIndexType.INT8_FLAT, rescoreVector, confidenceInterval);
         }
 
         @Override
         public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
             builder.startObject();
             builder.field("type", type);
-            if (confidenceInterval != null) {
-                builder.field("confidence_interval", confidenceInterval);
-            }
             if (rescoreVector != null) {
                 rescoreVector.toXContent(builder, params);
+            }
+            if (confidenceInterval != null) {
+                builder.field("confidence_interval", confidenceInterval);
             }
             builder.endObject();
             return builder;
@@ -1940,18 +1950,18 @@ public class DenseVectorFieldMapper extends FieldMapper {
         @Override
         KnnVectorsFormat getVectorsFormat(ElementType elementType, ExecutorService mergingExecutorService, int numMergeWorkers) {
             assert elementType == ElementType.FLOAT || elementType == ElementType.BFLOAT16;
-            return new ES93ScalarQuantizedVectorsFormat(elementType, confidenceInterval, 7, false, false);
+            return new ES94ScalarQuantizedVectorsFormat(elementType, 7, false);
         }
 
         @Override
         boolean doEquals(DenseVectorIndexOptions o) {
             Int8FlatIndexOptions that = (Int8FlatIndexOptions) o;
-            return Objects.equals(confidenceInterval, that.confidenceInterval) && Objects.equals(rescoreVector, that.rescoreVector);
+            return Objects.equals(rescoreVector, that.rescoreVector) && Objects.equals(confidenceInterval, that.confidenceInterval);
         }
 
         @Override
         int doHashCode() {
-            return Objects.hash(confidenceInterval, rescoreVector);
+            return Objects.hash(rescoreVector, confidenceInterval);
         }
 
         @Override
@@ -2014,24 +2024,24 @@ public class DenseVectorFieldMapper extends FieldMapper {
     public static class Int4HnswIndexOptions extends QuantizedIndexOptions {
         private final int m;
         private final int efConstruction;
-        private final float confidenceInterval;
         private final boolean onDiskRescore;
         private final int flatIndexThreshold;
+
+        public Int4HnswIndexOptions(int m, int efConstruction, boolean onDiskRescore, RescoreVector rescoreVector, int flatIndexThreshold) {
+            this(m, efConstruction, onDiskRescore, rescoreVector, flatIndexThreshold, null);
+        }
 
         public Int4HnswIndexOptions(
             int m,
             int efConstruction,
-            Float confidenceInterval,
             boolean onDiskRescore,
             RescoreVector rescoreVector,
-            int flatIndexThreshold
+            int flatIndexThreshold,
+            Double confidenceInterval
         ) {
-            super(VectorIndexType.INT4_HNSW, rescoreVector);
+            super(VectorIndexType.INT4_HNSW, rescoreVector, confidenceInterval);
             this.m = m;
             this.efConstruction = efConstruction;
-            // The default confidence interval for int4 is dynamic quantiles, this provides the best relevancy and is
-            // effectively required for int4 to behave well across a wide range of data.
-            this.confidenceInterval = confidenceInterval == null ? 0f : confidenceInterval;
             this.onDiskRescore = onDiskRescore;
             this.flatIndexThreshold = flatIndexThreshold;
         }
@@ -2039,13 +2049,11 @@ public class DenseVectorFieldMapper extends FieldMapper {
         @Override
         public KnnVectorsFormat getVectorsFormat(ElementType elementType, ExecutorService mergingExecutorService, int numMergeWorkers) {
             assert elementType == ElementType.FLOAT || elementType == ElementType.BFLOAT16;
-            return new ES93HnswScalarQuantizedVectorsFormat(
+            return new ES94HnswScalarQuantizedVectorsFormat(
                 m,
                 efConstruction,
                 elementType,
-                confidenceInterval,
                 4,
-                true,
                 onDiskRescore,
                 numMergeWorkers,
                 mergingExecutorService,
@@ -2059,7 +2067,9 @@ public class DenseVectorFieldMapper extends FieldMapper {
             builder.field("type", type);
             builder.field("m", m);
             builder.field("ef_construction", efConstruction);
-            builder.field("confidence_interval", confidenceInterval);
+            if (confidenceInterval != null) {
+                builder.field("confidence_interval", confidenceInterval);
+            }
             if (onDiskRescore) {
                 builder.field("on_disk_rescore", true);
             }
@@ -2078,15 +2088,15 @@ public class DenseVectorFieldMapper extends FieldMapper {
             Int4HnswIndexOptions that = (Int4HnswIndexOptions) o;
             return m == that.m
                 && efConstruction == that.efConstruction
-                && Objects.equals(confidenceInterval, that.confidenceInterval)
                 && onDiskRescore == that.onDiskRescore
                 && Objects.equals(rescoreVector, that.rescoreVector)
+                && Objects.equals(confidenceInterval, that.confidenceInterval)
                 && flatIndexThreshold == that.flatIndexThreshold;
         }
 
         @Override
         public int doHashCode() {
-            return Objects.hash(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector, flatIndexThreshold);
+            return Objects.hash(m, efConstruction, onDiskRescore, rescoreVector, confidenceInterval, flatIndexThreshold);
         }
 
         @Override
@@ -2106,8 +2116,6 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 + m
                 + ", ef_construction="
                 + efConstruction
-                + ", confidence_interval="
-                + confidenceInterval
                 + ", on_disk_rescore="
                 + onDiskRescore
                 + ", rescore_vector="
@@ -2123,8 +2131,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             if (update.type.equals(VectorIndexType.INT4_HNSW)) {
                 Int4HnswIndexOptions int4HnswIndexOptions = (Int4HnswIndexOptions) update;
                 // fewer connections would break assumptions on max number of connections (based on largest previous graph) during merge
-                // quantization could not behave as expected with different confidence intervals (and quantiles) to be created
-                updatable = int4HnswIndexOptions.m >= this.m && confidenceInterval == int4HnswIndexOptions.confidenceInterval;
+                updatable = int4HnswIndexOptions.m >= this.m;
             } else if (update.type.equals(VectorIndexType.BBQ_HNSW)) {
                 updatable = ((BBQHnswIndexOptions) update).m >= m;
             }
@@ -2133,28 +2140,29 @@ public class DenseVectorFieldMapper extends FieldMapper {
     }
 
     static class Int4FlatIndexOptions extends QuantizedIndexOptions {
-        private final float confidenceInterval;
-
-        Int4FlatIndexOptions(Float confidenceInterval, RescoreVector rescoreVector) {
+        Int4FlatIndexOptions(RescoreVector rescoreVector) {
             super(VectorIndexType.INT4_FLAT, rescoreVector);
-            // The default confidence interval for int4 is dynamic quantiles, this provides the best relevancy and is
-            // effectively required for int4 to behave well across a wide range of data.
-            this.confidenceInterval = confidenceInterval == null ? 0f : confidenceInterval;
+        }
+
+        Int4FlatIndexOptions(RescoreVector rescoreVector, Double confidenceInterval) {
+            super(VectorIndexType.INT4_FLAT, rescoreVector, confidenceInterval);
         }
 
         @Override
         public KnnVectorsFormat getVectorsFormat(ElementType elementType, ExecutorService mergingExecutorService, int numMergeWorkers) {
             assert elementType == ElementType.FLOAT || elementType == ElementType.BFLOAT16;
-            return new ES93ScalarQuantizedVectorsFormat(elementType, confidenceInterval, 4, true, false);
+            return new ES94ScalarQuantizedVectorsFormat(elementType, 4, false);
         }
 
         @Override
         public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
             builder.startObject();
             builder.field("type", type);
-            builder.field("confidence_interval", confidenceInterval);
             if (rescoreVector != null) {
                 rescoreVector.toXContent(builder, params);
+            }
+            if (confidenceInterval != null) {
+                builder.field("confidence_interval", confidenceInterval);
             }
             builder.endObject();
             return builder;
@@ -2165,12 +2173,12 @@ public class DenseVectorFieldMapper extends FieldMapper {
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
             Int4FlatIndexOptions that = (Int4FlatIndexOptions) o;
-            return Objects.equals(confidenceInterval, that.confidenceInterval) && Objects.equals(rescoreVector, that.rescoreVector);
+            return Objects.equals(rescoreVector, that.rescoreVector) && Objects.equals(confidenceInterval, that.confidenceInterval);
         }
 
         @Override
         public int doHashCode() {
-            return Objects.hash(confidenceInterval, rescoreVector);
+            return Objects.hash(rescoreVector, confidenceInterval);
         }
 
         @Override
@@ -2180,7 +2188,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
         @Override
         public String toString() {
-            return "{type=" + type + ", confidence_interval=" + confidenceInterval + ", rescore_vector=" + rescoreVector + "}";
+            return "{type=" + type + ", rescore_vector=" + rescoreVector + "}";
         }
 
         @Override
@@ -2198,22 +2206,24 @@ public class DenseVectorFieldMapper extends FieldMapper {
     public static class Int8HnswIndexOptions extends QuantizedIndexOptions {
         private final int m;
         private final int efConstruction;
-        private final Float confidenceInterval;
         private final boolean onDiskRescore;
         private final int flatIndexThreshold;
+
+        public Int8HnswIndexOptions(int m, int efConstruction, boolean onDiskRescore, RescoreVector rescoreVector, int flatIndexThreshold) {
+            this(m, efConstruction, onDiskRescore, rescoreVector, flatIndexThreshold, null);
+        }
 
         public Int8HnswIndexOptions(
             int m,
             int efConstruction,
-            Float confidenceInterval,
             boolean onDiskRescore,
             RescoreVector rescoreVector,
-            int flatIndexThreshold
+            int flatIndexThreshold,
+            Double confidenceInterval
         ) {
-            super(VectorIndexType.INT8_HNSW, rescoreVector);
+            super(VectorIndexType.INT8_HNSW, rescoreVector, confidenceInterval);
             this.m = m;
             this.efConstruction = efConstruction;
-            this.confidenceInterval = confidenceInterval;
             this.onDiskRescore = onDiskRescore;
             this.flatIndexThreshold = flatIndexThreshold;
         }
@@ -2221,13 +2231,11 @@ public class DenseVectorFieldMapper extends FieldMapper {
         @Override
         public KnnVectorsFormat getVectorsFormat(ElementType elementType, ExecutorService mergingExecutorService, int numMergeWorkers) {
             assert elementType == ElementType.FLOAT || elementType == ElementType.BFLOAT16;
-            return new ES93HnswScalarQuantizedVectorsFormat(
+            return new ES94HnswScalarQuantizedVectorsFormat(
                 m,
                 efConstruction,
                 elementType,
-                confidenceInterval,
                 7,
-                false,
                 onDiskRescore,
                 numMergeWorkers,
                 mergingExecutorService,
@@ -2264,15 +2272,15 @@ public class DenseVectorFieldMapper extends FieldMapper {
             Int8HnswIndexOptions that = (Int8HnswIndexOptions) o;
             return m == that.m
                 && efConstruction == that.efConstruction
-                && Objects.equals(confidenceInterval, that.confidenceInterval)
                 && onDiskRescore == that.onDiskRescore
                 && Objects.equals(rescoreVector, that.rescoreVector)
+                && Objects.equals(confidenceInterval, that.confidenceInterval)
                 && flatIndexThreshold == that.flatIndexThreshold;
         }
 
         @Override
         public int doHashCode() {
-            return Objects.hash(m, efConstruction, confidenceInterval, onDiskRescore, rescoreVector, flatIndexThreshold);
+            return Objects.hash(m, efConstruction, onDiskRescore, rescoreVector, confidenceInterval, flatIndexThreshold);
         }
 
         @Override
@@ -2288,10 +2296,6 @@ public class DenseVectorFieldMapper extends FieldMapper {
             return efConstruction;
         }
 
-        public Float confidenceInterval() {
-            return confidenceInterval;
-        }
-
         public int flatIndexThreshold() {
             return flatIndexThreshold;
         }
@@ -2304,8 +2308,6 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 + m
                 + ", ef_construction="
                 + efConstruction
-                + ", confidence_interval="
-                + confidenceInterval
                 + ", on_disk_rescore="
                 + onDiskRescore
                 + ", rescore_vector="
@@ -2321,11 +2323,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             if (update.type.equals(this.type)) {
                 Int8HnswIndexOptions int8HnswIndexOptions = (Int8HnswIndexOptions) update;
                 // fewer connections would break assumptions on max number of connections (based on largest previous graph) during merge
-                // quantization could not behave as expected with different confidence intervals (and quantiles) to be created
                 updatable = int8HnswIndexOptions.m >= this.m;
-                updatable &= confidenceInterval == null
-                    || int8HnswIndexOptions.confidenceInterval != null
-                        && confidenceInterval.equals(int8HnswIndexOptions.confidenceInterval);
             } else {
                 updatable = update.type.equals(VectorIndexType.INT4_HNSW) && ((Int4HnswIndexOptions) update).m >= this.m
                     || (update.type.equals(VectorIndexType.BBQ_HNSW) && ((BBQHnswIndexOptions) update).m >= m);
@@ -2569,6 +2567,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
     public static class BBQIVFIndexOptions extends QuantizedIndexOptions {
         final int clusterSize;
+        final int flatIndexThreshold;
         final double defaultVisitPercentage;
         final boolean onDiskRescore;
         final IndexVersion indexVersionCreated;
@@ -2578,6 +2577,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
         BBQIVFIndexOptions(
             int clusterSize,
+            int flatIndexThreshold,
             double defaultVisitPercentage,
             boolean onDiskRescore,
             RescoreVector rescoreVector,
@@ -2588,6 +2588,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
         ) {
             super(VectorIndexType.BBQ_DISK, rescoreVector);
             this.clusterSize = clusterSize;
+            this.flatIndexThreshold = flatIndexThreshold;
             this.defaultVisitPercentage = defaultVisitPercentage;
             this.onDiskRescore = onDiskRescore;
             this.indexVersionCreated = indexVersionCreated;
@@ -2617,7 +2618,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                     mergingExecutorService,
                     numMergeWorkers,
                     doPrecondition,
-                    ESNextDiskBBQVectorsFormat.DEFAULT_PRECONDITIONING_BLOCK_DIMENSION
+                    ESNextDiskBBQVectorsFormat.DEFAULT_PRECONDITIONING_BLOCK_DIMENSION,
+                    flatIndexThreshold
                 );
             }
             return new ES920DiskBBQVectorsFormat(
@@ -2626,7 +2628,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 elementType,
                 onDiskRescore,
                 mergingExecutorService,
-                numMergeWorkers
+                numMergeWorkers,
+                flatIndexThreshold
             );
         }
 
@@ -2639,6 +2642,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
         boolean doEquals(DenseVectorIndexOptions other) {
             BBQIVFIndexOptions that = (BBQIVFIndexOptions) other;
             return clusterSize == that.clusterSize
+                && flatIndexThreshold == that.flatIndexThreshold
                 && defaultVisitPercentage == that.defaultVisitPercentage
                 && onDiskRescore == that.onDiskRescore
                 && bits == that.bits
@@ -2647,7 +2651,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
         @Override
         int doHashCode() {
-            return Objects.hash(clusterSize, defaultVisitPercentage, onDiskRescore, rescoreVector, bits);
+            return Objects.hash(clusterSize, flatIndexThreshold, defaultVisitPercentage, onDiskRescore, rescoreVector);
         }
 
         @Override
@@ -2660,6 +2664,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             builder.startObject();
             builder.field("type", type);
             builder.field("cluster_size", clusterSize);
+            builder.field("flat_index_threshold", flatIndexThreshold);
             builder.field("default_visit_percentage", defaultVisitPercentage);
             if (onDiskRescore) {
                 builder.field("on_disk_rescore", true);
@@ -2679,6 +2684,10 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
         public int getClusterSize() {
             return clusterSize;
+        }
+
+        public int getFlatIndexThreshold() {
+            return flatIndexThreshold;
         }
 
         public double getDefaultVisitPercentage() {
@@ -3516,6 +3525,24 @@ public class DenseVectorFieldMapper extends FieldMapper {
         }
         VectorIndexType parsedType = vectorIndexType.get();
         return parsedType.parseIndexOptions(fieldName, indexOptionsMap, indexVersion, experimentalFeaturesEnabled);
+    }
+
+    private static Double parseConfidenceInterval(String fieldName, Map<String, ?> indexOptionsMap, IndexVersion indexVersion) {
+        Object confidenceIntervalNode = indexOptionsMap.remove("confidence_interval");
+        if (confidenceIntervalNode == null) {
+            return null;
+        }
+        double confidenceInterval = XContentMapValues.nodeDoubleValue(confidenceIntervalNode);
+        boolean shouldWarn = indexVersion.onOrAfter(IndexVersions.UPGRADE_TO_LUCENE_10_4_0);
+        if (shouldWarn) {
+            deprecationLogger.warn(
+                DeprecationCategory.MAPPINGS,
+                "dense_vector_confidence_interval_deprecated",
+                CONFIDENCE_INTERVAL_DEPRECATION_MESSAGE,
+                fieldName
+            );
+        }
+        return confidenceInterval;
     }
 
     /**

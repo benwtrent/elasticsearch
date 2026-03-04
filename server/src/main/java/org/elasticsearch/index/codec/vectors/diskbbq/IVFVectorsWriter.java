@@ -59,6 +59,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
     private final FlatVectorsWriter rawVectorDelegate;
     private final Directory directory;
     private final String segmentName;
+    private final int flatVectorThreshold;
 
     @SuppressWarnings("this-escape")
     protected IVFVectorsWriter(
@@ -66,7 +67,8 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         String rawVectorFormatName,
         Boolean useDirectIOReads,
         FlatVectorsWriter rawVectorDelegate,
-        int writeVersion
+        int writeVersion,
+        int flatVectorThreshold
     ) throws IOException {
         // if version >= VERSION_DIRECT_IO, useDirectIOReads should have a value
         if ((writeVersion >= ES920DiskBBQVectorsFormat.VERSION_DIRECT_IO) == (useDirectIOReads == null)) throw new IllegalArgumentException(
@@ -79,6 +81,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         this.rawVectorDelegate = rawVectorDelegate;
         this.directory = state.directory;
         this.segmentName = state.segmentInfo.name;
+        this.flatVectorThreshold = flatVectorThreshold;
         final String metaFileName = IndexFileNames.segmentFileName(
             state.segmentInfo.name,
             state.segmentSuffix,
@@ -252,7 +255,11 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
             );
 
             // build centroids
-            final CentroidAssignments centroidAssignments = calculateCentroids(fieldWriter.fieldInfo, floatVectorValues);
+            final CentroidAssignments centroidAssignments = floatVectorValues.size() > 0
+                && flatVectorThreshold > 0
+                && floatVectorValues.size() <= flatVectorThreshold
+                    ? buildFlatCentroidAssignments(fieldWriter.fieldInfo, floatVectorValues)
+                    : calculateCentroids(fieldWriter.fieldInfo, floatVectorValues);
             final CentroidSupplier centroidSupplier = createCentroidSupplier(
                 fieldWriter.fieldInfo,
                 centroidAssignments.centroids(),
@@ -368,6 +375,38 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         }
         assert iterator.nextDoc() == NO_MORE_DOCS;
         return KMeansFloatVectorValues.build(vectors, docIds, fieldInfo.getVectorDimension());
+    }
+
+    /**
+     * Builds a flat centroid assignment for a small set of vectors.
+     * <p>
+     * When the number of vectors is below the IVF flush threshold, we do not
+     * build multiple clusters. Instead, we compute a single centroid as the
+     * arithmetic mean of all vectors and assign every vector to that single
+     * centroid, producing a flat vector storage layout.
+     *
+     * @param fieldInfo          field metadata providing the vector dimension
+     * @param floatVectorValues  the vectors to summarize into a single centroid
+     * @return a {@link CentroidAssignments} instance with one centroid and
+     *         all vectors assigned to it
+     */
+    private CentroidAssignments buildFlatCentroidAssignments(FieldInfo fieldInfo, FloatVectorValues floatVectorValues) throws IOException {
+        int dimension = fieldInfo.getVectorDimension();
+        int count = floatVectorValues.size();
+        float[] centroid = new float[dimension];
+        for (int i = 0; i < count; i++) {
+            float[] vector = floatVectorValues.vectorValue(i);
+            for (int d = 0; d < dimension; d++) {
+                centroid[d] += vector[d];
+            }
+        }
+        for (int d = 0; d < dimension; d++) {
+            centroid[d] /= count;
+        }
+        // For flat centroid assignments there is a single global centroid and no SOAR (secondary) centroid assignments,
+        // so we pass an empty array for soarAssignments.
+        int[] assignments = new int[count];
+        return new CentroidAssignments(dimension, new float[][] { centroid }, assignments, new int[0]);
     }
 
     @Override
