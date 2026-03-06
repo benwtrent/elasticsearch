@@ -63,6 +63,7 @@ import static org.elasticsearch.simdvec.ESNextOSQVectorsScorer.BULK_SIZE;
  */
 public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
     private static final Logger logger = LogManager.getLogger(ESNextDiskBBQVectorsWriter.class);
+    private static final String DISABLE_PARENT_CENTROIDS_PROPERTY = "es.diskbbq.ivf.disable_parent_centroids";
 
     private final int vectorPerCluster;
     private final int centroidsPerParentCluster;
@@ -504,7 +505,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             fieldInfo,
             KMeansResult.singleCluster(globalCentroid, numCentroids)
         );
-        if (centroidSupplier.size() > centroidsPerParentCluster * centroidsPerParentCluster) {
+        if (shouldBuildParentLayer(centroidSupplier.size())) {
             KMeansResult centroidClusters = buildSecondLevelClusters(fieldInfo, centroidSupplier, true);
             return new OffHeapCentroidSupplier(centroidsInput, numCentroids, fieldInfo, centroidClusters);
         }
@@ -518,7 +519,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             KMeansResult.singleCluster(globalCentroid, centroids.length),
             info.getVectorDimension()
         );
-        if (centroidSupplier.size() > centroidsPerParentCluster * centroidsPerParentCluster) {
+        if (shouldBuildParentLayer(centroidSupplier.size())) {
             KMeansResult centroidClusters = buildSecondLevelClusters(info, centroidSupplier, false);
             return CentroidSupplier.fromArray(centroids, centroidClusters, info.getVectorDimension());
         }
@@ -693,6 +694,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
     private KMeansResult buildSecondLevelClusters(FieldInfo fieldInfo, CentroidSupplier centroidSupplier, boolean isMerge)
         throws IOException {
         final KMeansFloatVectorValues floatVectorValues = centroidSupplier.asKmeansFloatVectorValues();
+        final int targetChildrenPerParent = computeTargetChildrenPerParent(floatVectorValues.size());
         // we use the HierarchicalKMeans to partition the space of all vectors across merging segments
         // this are small numbers so we run it wih all the centroids.
         HierarchicalKMeans hierarchicalKMeans;
@@ -715,7 +717,35 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
                 -1 // disable SOAR assignments
             );
         }
-        return hierarchicalKMeans.cluster(floatVectorValues, centroidsPerParentCluster);
+        return hierarchicalKMeans.cluster(floatVectorValues, targetChildrenPerParent);
+    }
+
+    /** PDX-like sizing: choose parent count as floor(sqrt(numCentroids)). */
+    private int computeTargetParentCount(int numCentroids) {
+        if (numCentroids <= 1) {
+            return 1;
+        }
+        return Math.max(1, (int) Math.floor(Math.sqrt(numCentroids)));
+    }
+
+    /**
+     * PDX-like sizing: target approximately sqrt(numCentroids) parent groups.
+     * Since hierarchicalKMeans expects target vectors per parent, invert the relationship.
+     */
+    private int computeTargetChildrenPerParent(int numCentroids) {
+        if (numCentroids <= 1) {
+            return 1;
+        }
+        final int parentCount = computeTargetParentCount(numCentroids);
+        return Math.max(1, (int) Math.ceil((double) numCentroids / parentCount));
+    }
+
+    /** PDX-like parent layer enablement: require at least two top-level parents. */
+    private boolean shouldBuildParentLayer(int numCentroids) {
+        if (Boolean.getBoolean(DISABLE_PARENT_CENTROIDS_PROPERTY)) {
+            return false;
+        }
+        return computeTargetParentCount(numCentroids) > 1;
     }
 
     private CentroidGroups buildCentroidGroups(KMeansResult kMeansResult) {

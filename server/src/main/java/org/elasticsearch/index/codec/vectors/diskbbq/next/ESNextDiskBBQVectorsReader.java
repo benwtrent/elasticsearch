@@ -347,7 +347,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         FixedBitSet acceptCentroids,
         int bulkSize
     ) throws IOException {
-        // build the three queues we are going to use
+        // Build queues for parent-first traversal. We keep bulk scoring unchanged but
+        // consume children grouped by nearest parent first (PDX-like access pattern).
         final long rawParentSize = (long) fieldInfo.getVectorDimension() * Float.BYTES;
         final long centroidQuantizeSize = fieldInfo.getVectorDimension() + 3 * Float.BYTES + Integer.BYTES;
         final NeighborQueue parentsQueue = new NeighborQueue(numParents, true);
@@ -370,17 +371,14 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             };
         }
         final float[] scores = new float[bulkSize];
-        final NeighborQueue neighborQueue;
         if (acceptCentroids != null && numCentroidsFiltered <= bufferSize) {
             // we are collecting every non-filter centroid, therefore we do not need to score the
             // parents. We give each of them the same score.
-            neighborQueue = new NeighborQueue(numCentroidsFiltered, true);
             for (int i = 0; i < numParents; i++) {
                 parentsQueue.add(i, 0.5f);
             }
             centroids.skipBytes((centroidQuantizeSize + rawParentSize) * numParents);
         } else {
-            neighborQueue = new NeighborQueue(bufferSize, true);
             // score the parents
             centroids.skipBytes(rawParentSize * numParents);
             score(
@@ -402,8 +400,87 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
 
         final long offset = centroids.getFilePointer();
         final long childrenOffset = offset + (long) Long.BYTES * numParents;
-        // populate the children's queue by reading parents one by one
-        while (parentsQueue.size() > 0 && neighborQueue.size() < bufferSize) {
+        final long childrenFileOffsets = childrenOffset + centroidQuantizeSize * numCentroids;
+        if (acceptCentroids == null) {
+            final NeighborQueue neighborQueue = new NeighborQueue(bufferSize, true);
+            // preserve original ES behavior when centroid pre-filtering is unavailable
+            while (parentsQueue.size() > 0 && neighborQueue.size() < bufferSize) {
+                final int pop = parentsQueue.pop();
+                populateOneChildrenGroup(
+                    currentParentQueue,
+                    centroids,
+                    offset + 2L * Integer.BYTES * pop,
+                    childrenOffset,
+                    centroidQuantizeSize,
+                    fieldInfo,
+                    scorer,
+                    quantizeQuery,
+                    queryParams,
+                    globalCentroidDp,
+                    scores,
+                    null,
+                    bulkSize
+                );
+                while (currentParentQueue.size() > 0 && neighborQueue.size() < bufferSize) {
+                    final float score = currentParentQueue.topScore();
+                    final int children = currentParentQueue.pop();
+                    neighborQueue.add(children, score);
+                }
+            }
+            return new CentroidIterator() {
+                @Override
+                public boolean hasNext() {
+                    return neighborQueue.size() > 0;
+                }
+
+                @Override
+                public PostingMetadata nextPosting() throws IOException {
+                    long centroidOrdinalAndScore = nextCentroid();
+                    int centroidOrdinal = neighborQueue.decodeNodeId(centroidOrdinalAndScore);
+                    float score = neighborQueue.decodeScore(centroidOrdinalAndScore);
+                    centroids.seek(childrenFileOffsets + (long) (Long.BYTES * 2 + Integer.BYTES) * centroidOrdinal);
+                    long postingListOffset = centroids.readLong();
+                    long postingListLength = centroids.readLong();
+                    int parentOrd = centroids.readInt();
+                    return new PostingMetadata(postingListOffset, postingListLength, parentOrd, score);
+                }
+
+                private long nextCentroid() throws IOException {
+                    if (currentParentQueue.size() > 0) {
+                        // return next centroid and maybe add a children from the current parent queue
+                        return neighborQueue.popRawAndAddRaw(currentParentQueue.popRaw());
+                    } else if (parentsQueue.size() > 0) {
+                        // current parent queue is empty, populate it again with the next parent
+                        int pop = parentsQueue.pop();
+                        populateOneChildrenGroup(
+                            currentParentQueue,
+                            centroids,
+                            offset + 2L * Integer.BYTES * pop,
+                            childrenOffset,
+                            centroidQuantizeSize,
+                            fieldInfo,
+                            scorer,
+                            quantizeQuery,
+                            queryParams,
+                            globalCentroidDp,
+                            scores,
+                            null,
+                            bulkSize
+                        );
+                        return nextCentroid();
+                    } else {
+                        return neighborQueue.popRaw();
+                    }
+                }
+            };
+        }
+
+        final int selectionLimit = Math.max(bufferSize, numCentroidsFiltered);
+        final int[] selectedCentroidOrdinals = new int[selectionLimit];
+        final float[] selectedCentroidScores = new float[selectionLimit];
+        int selectedCount = 0;
+        // Populate children by reading nearest parents one by one.
+        while (parentsQueue.size() > 0 && selectedCount < selectionLimit) {
             final int pop = parentsQueue.pop();
             populateOneChildrenGroup(
                 currentParentQueue,
@@ -420,58 +497,32 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 acceptCentroids,
                 bulkSize
             );
-            while (currentParentQueue.size() > 0 && neighborQueue.size() < bufferSize) {
-                final float score = currentParentQueue.topScore();
-                final int children = currentParentQueue.pop();
-                neighborQueue.add(children, score);
+            while (currentParentQueue.size() > 0 && selectedCount < selectionLimit) {
+                long centroidOrdinalAndScore = currentParentQueue.popRaw();
+                selectedCentroidOrdinals[selectedCount] = currentParentQueue.decodeNodeId(centroidOrdinalAndScore);
+                selectedCentroidScores[selectedCount] = currentParentQueue.decodeScore(centroidOrdinalAndScore);
+                selectedCount++;
             }
         }
-        final long childrenFileOffsets = childrenOffset + centroidQuantizeSize * numCentroids;
+        final int selectedCentroidsCount = selectedCount;
         return new CentroidIterator() {
+            int nextIdx = 0;
 
             @Override
             public boolean hasNext() {
-                return neighborQueue.size() > 0;
+                return nextIdx < selectedCentroidsCount;
             }
 
             @Override
             public PostingMetadata nextPosting() throws IOException {
-                long centroidOrdinalAndScore = nextCentroid();
-                int centroidOrdinal = neighborQueue.decodeNodeId(centroidOrdinalAndScore);
-                float score = neighborQueue.decodeScore(centroidOrdinalAndScore);
+                int centroidOrdinal = selectedCentroidOrdinals[nextIdx];
+                float score = selectedCentroidScores[nextIdx];
+                nextIdx++;
                 centroids.seek(childrenFileOffsets + (long) (Long.BYTES * 2 + Integer.BYTES) * centroidOrdinal);
                 long postingListOffset = centroids.readLong();
                 long postingListLength = centroids.readLong();
                 int parentOrd = centroids.readInt();
                 return new PostingMetadata(postingListOffset, postingListLength, parentOrd, score);
-            }
-
-            private long nextCentroid() throws IOException {
-                if (currentParentQueue.size() > 0) {
-                    // return next centroid and maybe add a children from the current parent queue
-                    return neighborQueue.popRawAndAddRaw(currentParentQueue.popRaw());
-                } else if (parentsQueue.size() > 0) {
-                    // current parent queue is empty, populate it again with the next parent
-                    int pop = parentsQueue.pop();
-                    populateOneChildrenGroup(
-                        currentParentQueue,
-                        centroids,
-                        offset + 2L * Integer.BYTES * pop,
-                        childrenOffset,
-                        centroidQuantizeSize,
-                        fieldInfo,
-                        scorer,
-                        quantizeQuery,
-                        queryParams,
-                        globalCentroidDp,
-                        scores,
-                        acceptCentroids,
-                        bulkSize
-                    );
-                    return nextCentroid();
-                } else {
-                    return neighborQueue.popRaw();
-                }
             }
         };
     }
