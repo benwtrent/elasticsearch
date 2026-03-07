@@ -200,6 +200,48 @@ public class JDKVectorLibraryInt7uTests extends VectorSimilarityFunctionsTests {
         assertArrayEquals(expectedScores, bulkScores, 0f);
     }
 
+    public void testInt7uVerticalBulkAvailability() {
+        assumeTrue(notSupportedMsg(), supported());
+        assertNotNull(getVectorDistance().getInt7uVerticalDotProductBulkHandle());
+    }
+
+    public void testInt7uVerticalBulk() {
+        assumeTrue(notSupportedMsg(), supported());
+        var maybeHandle = getVectorDistance().getInt7uVerticalDotProductBulkHandle();
+        assumeTrue("Vertical int7 bulk handle not available", maybeHandle.isPresent());
+
+        final int dims = randomIntBetween(1, 257);
+        final int numVecs = randomIntBetween(2, 101);
+        byte[][] vectors = new byte[numVecs][dims];
+        for (int i = 0; i < numVecs; i++) {
+            randomBytesBetween(vectors[i], MIN_INT7_VALUE, MAX_INT7_VALUE);
+        }
+        byte[] query = new byte[dims];
+        randomBytesBetween(query, MIN_INT7_VALUE, MAX_INT7_VALUE);
+
+        float[] expected = new float[numVecs];
+        for (int i = 0; i < numVecs; i++) {
+            expected[i] = dotProductScalar(vectors[i], query);
+        }
+
+        byte[] verticalData = toVerticalInterleave4(vectors, dims, numVecs);
+        float[] actual = new float[numVecs];
+        try {
+            maybeHandle.get()
+                .invokeExact(
+                    MemorySegment.ofArray(verticalData),
+                    MemorySegment.ofArray(query),
+                    dims,
+                    numVecs,
+                    MemorySegment.ofArray(actual)
+                );
+        } catch (Throwable t) {
+            throw rethrow(t);
+        }
+
+        assertArrayEquals(expected, actual, 0f);
+    }
+
     public void testIllegalDims() {
         assumeTrue(notSupportedMsg(), supported());
         var segment = arena.allocate((long) size * 3);
@@ -338,5 +380,31 @@ public class JDKVectorLibraryInt7uTests extends VectorSimilarityFunctionsTests {
         for (int i = 0; i < expectedScores.length; i++) {
             assertEquals(expectedScores[i], expectedScoresSeg.get(JAVA_FLOAT_UNALIGNED, (long) i * Float.BYTES), 0f);
         }
+    }
+
+    static byte[] toVerticalInterleave4(byte[][] vectors, int dims, int count) {
+        final int groupedDims = dims & ~3;
+        final int groups = groupedDims / 4;
+        final int tailDims = dims - groupedDims;
+        byte[] out = new byte[groups * count * 4 + tailDims * count];
+        int cursor = 0;
+
+        for (int g = 0; g < groups; g++) {
+            int dimBase = g * 4;
+            for (int v = 0; v < count; v++) {
+                byte[] src = vectors[v];
+                out[cursor++] = src[dimBase];
+                out[cursor++] = src[dimBase + 1];
+                out[cursor++] = src[dimBase + 2];
+                out[cursor++] = src[dimBase + 3];
+            }
+        }
+        for (int v = 0; v < count; v++) {
+            byte[] src = vectors[v];
+            for (int d = 0; d < tailDims; d++) {
+                out[cursor++] = src[groupedDims + d];
+            }
+        }
+        return out;
     }
 }

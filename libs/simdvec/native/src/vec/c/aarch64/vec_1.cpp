@@ -15,6 +15,12 @@
 #include <stddef.h>
 #include <arm_neon.h>
 #include <math.h>
+#include <string.h>
+#include <stdlib.h>
+#ifdef __linux__
+    #include <sys/auxv.h>
+    #include <asm/hwcap.h>
+#endif
 #include "vec.h"
 #include "vec_common.h"
 #include "aarch64/aarch64_vec_common.h"
@@ -375,6 +381,218 @@ EXPORT void vec_doti7u_bulk_offsets(
     const int32_t count,
     f32_t* results) {
     doti8_inner_bulk<array_mapper>(a, b, dims, pitch, offsets, count, results);
+}
+
+#if defined(__clang__) || defined(__GNUC__)
+    #define DOTPROD_TARGET __attribute__((target("arch=armv8.2-a+dotprod")))
+#else
+    #define DOTPROD_TARGET
+#endif
+
+static inline bool has_dotprod_support() {
+#ifdef __APPLE__
+    // Apple Silicon (M-series) supports dot-product instructions.
+    return true;
+#elif __linux__
+    #if defined(HWCAP_ASIMDDP)
+    return (getauxval(AT_HWCAP) & HWCAP_ASIMDDP) != 0;
+    #else
+    return false;
+    #endif
+#else
+    return false;
+#endif
+}
+
+DOTPROD_TARGET static inline void vec_doti7u_vertical_bulk_dotprod(
+    const int8_t* a,
+    const int8_t* b,
+    const int32_t dims,
+    const int32_t count,
+    f32_t* results
+) {
+    const int32_t grouped_dims = dims & ~3;
+    const int32_t groups = grouped_dims / 4;
+    const int64_t full_group_pitch = (int64_t) count * 4;
+    constexpr int32_t qvec_stack_cap = 512;
+    int8x16_t qvec_stack[qvec_stack_cap];
+    int8x16_t* qvecs = groups <= qvec_stack_cap ? qvec_stack : (int8x16_t*) malloc((size_t) groups * sizeof(int8x16_t));
+    if (qvecs == nullptr) {
+        for (int32_t i = 0; i < count; i++) {
+            results[i] = 0.0f;
+        }
+        for (int32_t g = 0; g < groups; g++) {
+            const int8_t q0 = b[g * 4];
+            const int8_t q1 = b[g * 4 + 1];
+            const int8_t q2 = b[g * 4 + 2];
+            const int8_t q3 = b[g * 4 + 3];
+            const int8_t* block = a + (int64_t) g * full_group_pitch;
+            for (int32_t v = 0; v < count; v++) {
+                const int64_t base = (int64_t) v * 4;
+                const int32_t partial = block[base] * q0 + block[base + 1] * q1 + block[base + 2] * q2 + block[base + 3] * q3;
+                results[v] += (f32_t) partial;
+            }
+        }
+    } else {
+        for (int32_t g = 0; g < groups; g++) {
+            int32_t packed_q = 0;
+            memcpy(&packed_q, b + g * 4, sizeof(packed_q));
+            qvecs[g] = vreinterpretq_s8_s32(vdupq_n_s32(packed_q));
+        }
+
+        int32_t v = 0;
+        for (; v <= count - 16; v += 16) {
+            int32x4_t acc0 = vdupq_n_s32(0);
+            int32x4_t acc1 = vdupq_n_s32(0);
+            int32x4_t acc2 = vdupq_n_s32(0);
+            int32x4_t acc3 = vdupq_n_s32(0);
+            const int8_t* block_base = a + (int64_t) v * 4;
+
+            for (int32_t g = 0; g < groups; g++) {
+                const int8_t* ptr = block_base + (int64_t) g * full_group_pitch;
+                if (g + 2 < groups) {
+                    prefetch(ptr + 2 * full_group_pitch, 1);
+                }
+                const int8x16_t qvec = qvecs[g];
+                acc0 = vdotq_s32(acc0, vld1q_s8(ptr), qvec);
+                acc1 = vdotq_s32(acc1, vld1q_s8(ptr + 16), qvec);
+                acc2 = vdotq_s32(acc2, vld1q_s8(ptr + 32), qvec);
+                acc3 = vdotq_s32(acc3, vld1q_s8(ptr + 48), qvec);
+            }
+            vst1q_f32(results + v, vcvtq_f32_s32(acc0));
+            vst1q_f32(results + v + 4, vcvtq_f32_s32(acc1));
+            vst1q_f32(results + v + 8, vcvtq_f32_s32(acc2));
+            vst1q_f32(results + v + 12, vcvtq_f32_s32(acc3));
+        }
+
+        for (; v <= count - 8; v += 8) {
+            int32x4_t acc0 = vdupq_n_s32(0);
+            int32x4_t acc1 = vdupq_n_s32(0);
+            const int8_t* block_base = a + (int64_t) v * 4;
+            for (int32_t g = 0; g < groups; g++) {
+                const int8_t* ptr = block_base + (int64_t) g * full_group_pitch;
+                const int8x16_t qvec = qvecs[g];
+                acc0 = vdotq_s32(acc0, vld1q_s8(ptr), qvec);
+                acc1 = vdotq_s32(acc1, vld1q_s8(ptr + 16), qvec);
+            }
+            vst1q_f32(results + v, vcvtq_f32_s32(acc0));
+            vst1q_f32(results + v + 4, vcvtq_f32_s32(acc1));
+        }
+
+        for (; v < count; v++) {
+            int32_t total = 0;
+            const int8_t* block_base = a + (int64_t) v * 4;
+            for (int32_t g = 0; g < groups; g++) {
+                const int8_t* ptr = block_base + (int64_t) g * full_group_pitch;
+                total += ptr[0] * b[g * 4] + ptr[1] * b[g * 4 + 1] + ptr[2] * b[g * 4 + 2] + ptr[3] * b[g * 4 + 3];
+            }
+            results[v] = (f32_t) total;
+        }
+    }
+
+    const int32_t tail_dims = dims - grouped_dims;
+    if (tail_dims > 0) {
+        const int8_t* tail_block = a + (int64_t) groups * full_group_pitch;
+        for (int32_t vi = 0; vi < count; vi++) {
+            const int64_t base = (int64_t) vi * tail_dims;
+            int32_t partial = 0;
+            for (int32_t d = 0; d < tail_dims; d++) {
+                partial += tail_block[base + d] * b[grouped_dims + d];
+            }
+            results[vi] += (f32_t) partial;
+        }
+    }
+
+    if (qvecs != qvec_stack) {
+        free(qvecs);
+    }
+}
+
+// Vertical-only int7 layout inspired by PDX for grouped dimensions.
+// Data layout:
+// - Full 4-dim groups are stored as [v0d0,v0d1,v0d2,v0d3, v1d0,...] for each group.
+// - If dims % 4 != 0, the tail group is stored as [v0d0..v0d(r-1), v1d0..] where r = dims % 4.
+// - Groups are stored consecutively by increasing dimension.
+EXPORT void vec_doti7u_vertical_bulk(
+    const int8_t* a,
+    const int8_t* b,
+    const int32_t dims,
+    const int32_t count,
+    f32_t* results
+) {
+    if (dims <= 0 || count <= 0) {
+        return;
+    }
+    if (has_dotprod_support()) {
+        vec_doti7u_vertical_bulk_dotprod(a, b, dims, count, results);
+        return;
+    }
+
+    const int32_t grouped_dims = dims & ~3;
+    const int32_t groups = grouped_dims / 4;
+    const int64_t full_group_pitch = (int64_t) count * 4;
+
+    for (int32_t i = 0; i < count; i++) {
+        results[i] = 0.0f;
+    }
+
+    for (int32_t g = 0; g < groups; g++) {
+        const int8_t q0 = b[g * 4];
+        const int8_t q1 = b[g * 4 + 1];
+        const int8_t q2 = b[g * 4 + 2];
+        const int8_t q3 = b[g * 4 + 3];
+        const int8_t* block = a + (int64_t) g * full_group_pitch;
+        const int8x8_t q0v = vdup_n_s8(q0);
+        const int8x8_t q1v = vdup_n_s8(q1);
+        const int8x8_t q2v = vdup_n_s8(q2);
+        const int8x8_t q3v = vdup_n_s8(q3);
+
+        int32_t v = 0;
+        for (; v <= count - 8; v += 8) {
+            const int8x8x4_t vals = vld4_s8(block + (int64_t) v * 4);
+
+            const int16x8_t p0 = vmull_s8(vals.val[0], q0v);
+            const int16x8_t p1 = vmull_s8(vals.val[1], q1v);
+            const int16x8_t p2 = vmull_s8(vals.val[2], q2v);
+            const int16x8_t p3 = vmull_s8(vals.val[3], q3v);
+
+            int32x4_t sum_lo = vmovl_s16(vget_low_s16(p0));
+            sum_lo = vaddw_s16(sum_lo, vget_low_s16(p1));
+            sum_lo = vaddw_s16(sum_lo, vget_low_s16(p2));
+            sum_lo = vaddw_s16(sum_lo, vget_low_s16(p3));
+
+            int32x4_t sum_hi = vmovl_s16(vget_high_s16(p0));
+            sum_hi = vaddw_s16(sum_hi, vget_high_s16(p1));
+            sum_hi = vaddw_s16(sum_hi, vget_high_s16(p2));
+            sum_hi = vaddw_s16(sum_hi, vget_high_s16(p3));
+
+            float32x4_t acc_lo = vld1q_f32(results + v);
+            float32x4_t acc_hi = vld1q_f32(results + v + 4);
+            acc_lo = vaddq_f32(acc_lo, vcvtq_f32_s32(sum_lo));
+            acc_hi = vaddq_f32(acc_hi, vcvtq_f32_s32(sum_hi));
+            vst1q_f32(results + v, acc_lo);
+            vst1q_f32(results + v + 4, acc_hi);
+        }
+
+        for (; v < count; v++) {
+            const int64_t base = (int64_t) v * 4;
+            const int32_t partial = block[base] * q0 + block[base + 1] * q1 + block[base + 2] * q2 + block[base + 3] * q3;
+            results[v] += (f32_t)partial;
+        }
+    }
+
+    const int32_t tail_dims = dims - grouped_dims;
+    if (tail_dims > 0) {
+        const int8_t* tail_block = a + (int64_t) groups * full_group_pitch;
+        for (int32_t v = 0; v < count; v++) {
+            const int64_t base = (int64_t) v * tail_dims;
+            int32_t partial = 0;
+            for (int32_t d = 0; d < tail_dims; d++) {
+                partial += tail_block[base + d] * b[grouped_dims + d];
+            }
+            results[v] += (f32_t) partial;
+        }
+    }
 }
 
 EXPORT void vec_doti8_bulk(const int8_t* a, const int8_t* b, const int32_t dims, const int32_t count, f32_t* results) {

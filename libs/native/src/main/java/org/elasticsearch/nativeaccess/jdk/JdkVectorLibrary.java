@@ -29,6 +29,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
@@ -48,6 +49,7 @@ public final class JdkVectorLibrary implements VectorLibrary {
     static final MethodHandle applyCorrectionsEuclideanBulk$mh;
     static final MethodHandle applyCorrectionsMaxInnerProductBulk$mh;
     static final MethodHandle applyCorrectionsDotProductBulk$mh;
+    static final MethodHandle dotI7uVerticalBulk$mh;
 
     private static final JdkVectorSimilarityFunctions INSTANCE;
 
@@ -80,6 +82,21 @@ public final class JdkVectorLibrary implements VectorLibrary {
             }
         }
         throw new LinkageError("Native function [" + functionName + "] could not be found");
+    }
+
+    private static MethodHandle bindOptionalFunction(String functionName, int capability, FunctionDescriptor functionDescriptor) {
+        for (int caps = capability; caps > 0; --caps) {
+            var suffix = caps > 1 ? "_" + caps : "";
+            var fullFunctionName = functionName + suffix;
+            logger.trace("Optional lookup for {}", fullFunctionName);
+            var function = functionAddressOrNull(fullFunctionName);
+            if (function != null) {
+                logger.debug("Binding optional {}", fullFunctionName);
+                return downcallHandle(function, functionDescriptor, LinkerHelperUtil.critical());
+            }
+        }
+        logger.debug("Optional function [{}] not available", functionName);
+        return null;
     }
 
     static {
@@ -185,6 +202,7 @@ public final class JdkVectorLibrary implements VectorLibrary {
                 applyCorrectionsEuclideanBulk$mh = bindFunction("diskbbq_apply_corrections_euclidean_bulk", caps, score);
                 applyCorrectionsMaxInnerProductBulk$mh = bindFunction("diskbbq_apply_corrections_maximum_inner_product_bulk", caps, score);
                 applyCorrectionsDotProductBulk$mh = bindFunction("diskbbq_apply_corrections_dot_product_bulk", caps, score);
+                dotI7uVerticalBulk$mh = bindOptionalFunction("vec_doti7u_vertical_bulk", caps, bulk);
 
                 INSTANCE = new JdkVectorSimilarityFunctions();
             } else {
@@ -197,6 +215,7 @@ public final class JdkVectorLibrary implements VectorLibrary {
                 applyCorrectionsEuclideanBulk$mh = null;
                 applyCorrectionsMaxInnerProductBulk$mh = null;
                 applyCorrectionsDotProductBulk$mh = null;
+                dotI7uVerticalBulk$mh = null;
                 INSTANCE = null;
             }
         } catch (Throwable t) {
@@ -323,6 +342,35 @@ public final class JdkVectorLibrary implements VectorLibrary {
             Objects.checkFromIndexSize(0L, (long) count * Integer.BYTES, offsets.byteSize());
             Objects.checkFromIndexSize(0L, (long) count * Float.BYTES, result.byteSize());
             return true;
+        }
+
+        static boolean checkInt7uVerticalBulk(MemorySegment dataset, MemorySegment query, int dimensions, int count, MemorySegment result) {
+            final int groupedDims = dimensions & ~3;
+            final int groups = groupedDims / 4;
+            final int tailDims = dimensions - groupedDims;
+            final long expectedDatasetBytes = (long) groups * count * 4 + (long) tailDims * count;
+            Objects.checkFromIndexSize(0L, expectedDatasetBytes, dataset.byteSize());
+            Objects.checkFromIndexSize(0L, dimensions, query.byteSize());
+            Objects.checkFromIndexSize(0L, (long) count * Float.BYTES, result.byteSize());
+            return true;
+        }
+
+        private static void dotProductI7uVerticalBulk(
+            MemorySegment dataset,
+            MemorySegment query,
+            int dimensions,
+            int count,
+            MemorySegment result
+        ) {
+            if (dotI7uVerticalBulk$mh == null) {
+                throw new UnsupportedOperationException("int7 vertical bulk dot product is not available on this platform");
+            }
+            checkInt7uVerticalBulk(dataset, query, dimensions, count, result);
+            try {
+                dotI7uVerticalBulk$mh.invokeExact(dataset, query, dimensions, count, result);
+            } catch (Throwable t) {
+                throw invocationError(t, dataset, query);
+            }
         }
 
         private static final MethodHandle dotI7uHandle = HANDLES.get(
@@ -532,6 +580,7 @@ public final class JdkVectorLibrary implements VectorLibrary {
         static final MethodHandle APPLY_CORRECTIONS_EUCLIDEAN_HANDLE_BULK;
         static final MethodHandle APPLY_CORRECTIONS_MAX_INNER_PRODUCT_HANDLE_BULK;
         static final MethodHandle APPLY_CORRECTIONS_DOT_PRODUCT_HANDLE_BULK;
+        static final MethodHandle DOT_PRODUCT_I7U_VERTICAL_BULK_HANDLE;
 
         static {
             MethodHandles.Lookup lookup = MethodHandles.lookup();
@@ -719,6 +768,24 @@ public final class JdkVectorLibrary implements VectorLibrary {
                     "applyCorrectionsDotProductBulk",
                     scoringFunction
                 );
+
+                if (dotI7uVerticalBulk$mh != null) {
+                    MethodType verticalBulkType = MethodType.methodType(
+                        void.class,
+                        MemorySegment.class,
+                        MemorySegment.class,
+                        int.class,
+                        int.class,
+                        MemorySegment.class
+                    );
+                    DOT_PRODUCT_I7U_VERTICAL_BULK_HANDLE = lookup.findStatic(
+                        JdkVectorSimilarityFunctions.class,
+                        "dotProductI7uVerticalBulk",
+                        verticalBulkType
+                    );
+                } else {
+                    DOT_PRODUCT_I7U_VERTICAL_BULK_HANDLE = null;
+                }
             } catch (ReflectiveOperationException e) {
                 throw new AssertionError(e);
             }
@@ -753,6 +820,11 @@ public final class JdkVectorLibrary implements VectorLibrary {
         @Override
         public MethodHandle applyCorrectionsDotProductBulk() {
             return APPLY_CORRECTIONS_DOT_PRODUCT_HANDLE_BULK;
+        }
+
+        @Override
+        public Optional<MethodHandle> getInt7uVerticalDotProductBulkHandle() {
+            return Optional.ofNullable(DOT_PRODUCT_I7U_VERTICAL_BULK_HANDLE);
         }
     }
 }

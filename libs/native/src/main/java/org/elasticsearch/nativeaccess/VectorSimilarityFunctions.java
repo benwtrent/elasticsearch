@@ -10,6 +10,7 @@
 package org.elasticsearch.nativeaccess;
 
 import java.lang.invoke.MethodHandle;
+import java.util.Optional;
 
 /**
  * Utility interface providing vector similarity functions.
@@ -144,4 +145,18 @@ public interface VectorSimilarityFunctions {
     MethodHandle applyCorrectionsMaxInnerProductBulk();
 
     MethodHandle applyCorrectionsDotProductBulk();
+
+    /**
+     * Optional bulk dot-product handle for int7 vectors stored in a vertical (dim-grouped) layout.
+     *
+     * <p>Method handle takes arguments {@code (MemorySegment, MemorySegment, int, int, MemorySegment)}:
+     * <ol>
+     *     <li>Vertical-layout dataset segment</li>
+     *     <li>Single query vector segment</li>
+     *     <li>Number of dimensions</li>
+     *     <li>Number of vectors in dataset segment</li>
+     *     <li>Score results, as 4-byte floats</li>
+     * </ol>
+     */
+    Optional<MethodHandle> getInt7uVerticalDotProductBulkHandle();
 }

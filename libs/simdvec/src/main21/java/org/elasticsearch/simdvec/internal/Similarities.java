@@ -18,6 +18,7 @@ import org.elasticsearch.nativeaccess.VectorSimilarityFunctions.Operation;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
+import java.util.Optional;
 
 public class Similarities {
 
@@ -39,6 +40,7 @@ public class Similarities {
         DataType.INT7U,
         Operation.BULK_OFFSETS
     );
+    static final Optional<MethodHandle> DOT_PRODUCT_I7U_VERTICAL_BULK = DISTANCE_FUNCS.getInt7uVerticalDotProductBulkHandle();
 
     static final MethodHandle COSINE_I8 = DISTANCE_FUNCS.getHandle(Function.COSINE, DataType.INT8, Operation.SINGLE);
     static final MethodHandle COSINE_I8_BULK = DISTANCE_FUNCS.getHandle(Function.COSINE, DataType.INT8, Operation.BULK);
@@ -139,6 +141,20 @@ public class Similarities {
     ) {
         try {
             DOT_PRODUCT_I7U_BULK_WITH_OFFSETS.invokeExact(a, b, length, pitch, offsets, count, scores);
+        } catch (Throwable e) {
+            throw rethrow(e);
+        }
+    }
+
+    static boolean hasDotProductI7uVerticalBulk() {
+        return DOT_PRODUCT_I7U_VERTICAL_BULK.isPresent();
+    }
+
+    static void dotProductI7uVerticalBulk(MemorySegment dataset, MemorySegment query, int dimensions, int count, MemorySegment scores) {
+        try {
+            DOT_PRODUCT_I7U_VERTICAL_BULK.orElseThrow(
+                () -> new UnsupportedOperationException("int7 vertical bulk dot product not available on this platform")
+            ).invokeExact(dataset, query, dimensions, count, scores);
         } catch (Throwable e) {
             throw rethrow(e);
         }
