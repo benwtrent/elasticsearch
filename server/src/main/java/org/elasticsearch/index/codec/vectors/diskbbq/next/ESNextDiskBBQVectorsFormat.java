@@ -70,15 +70,18 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
     );
 
     public static final int DEFAULT_VECTORS_PER_CLUSTER = 384;
+    /** Sentinel value indicating that cluster sizing should be sqrt(num_items_clustered). */
+    public static final int DYNAMIC_CLUSTER_SIZE = -1;
     private static final int DEFAULT_FLAT_VECTOR_THRESHOLD_MULTIPLIER = 3;
 
     /**
      * Returns the default flat index threshold for the given cluster size.
-     * @param configuredClusterSize the configured cluster size
+     * @param configuredClusterSize the configured cluster size, or {@link #DYNAMIC_CLUSTER_SIZE}
      * @return the default flat index threshold
      */
     public static int defaultFlatThreshold(int configuredClusterSize) {
-        return configuredClusterSize * DEFAULT_FLAT_VECTOR_THRESHOLD_MULTIPLIER;
+        int effectiveSize = configuredClusterSize == DYNAMIC_CLUSTER_SIZE ? DEFAULT_VECTORS_PER_CLUSTER : configuredClusterSize;
+        return effectiveSize * DEFAULT_FLAT_VECTOR_THRESHOLD_MULTIPLIER;
     }
 
     public static final int MIN_VECTORS_PER_CLUSTER = 64;
@@ -336,9 +339,12 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
         int flatVectorThreshold
     ) {
         super(NAME);
-        if (vectorPerCluster < MIN_VECTORS_PER_CLUSTER || vectorPerCluster > MAX_VECTORS_PER_CLUSTER) {
+        if (vectorPerCluster != DYNAMIC_CLUSTER_SIZE
+            && (vectorPerCluster < MIN_VECTORS_PER_CLUSTER || vectorPerCluster > MAX_VECTORS_PER_CLUSTER)) {
             throw new IllegalArgumentException(
-                "vectorsPerCluster must be between "
+                "vectorsPerCluster must be "
+                    + DYNAMIC_CLUSTER_SIZE
+                    + " (dynamic) or between "
                     + MIN_VECTORS_PER_CLUSTER
                     + " and "
                     + MAX_VECTORS_PER_CLUSTER
@@ -346,9 +352,13 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
                     + vectorPerCluster
             );
         }
-        if (centroidsPerParentCluster < MIN_CENTROIDS_PER_PARENT_CLUSTER || centroidsPerParentCluster > MAX_CENTROIDS_PER_PARENT_CLUSTER) {
+        if (centroidsPerParentCluster != DYNAMIC_CLUSTER_SIZE
+            && (centroidsPerParentCluster < MIN_CENTROIDS_PER_PARENT_CLUSTER
+                || centroidsPerParentCluster > MAX_CENTROIDS_PER_PARENT_CLUSTER)) {
             throw new IllegalArgumentException(
-                "centroidsPerParentCluster must be between "
+                "centroidsPerParentCluster must be "
+                    + DYNAMIC_CLUSTER_SIZE
+                    + " (dynamic) or between "
                     + MIN_CENTROIDS_PER_PARENT_CLUSTER
                     + " and "
                     + MAX_CENTROIDS_PER_PARENT_CLUSTER
