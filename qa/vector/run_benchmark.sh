@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json"
+
 ES_DIR="/home/benjamintrent/elasticsearch"
 DATA_DIR="/mnt/data/.data"
 INDEX_DIR="/mnt/data/knn_index"
