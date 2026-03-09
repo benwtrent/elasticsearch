@@ -51,12 +51,14 @@ import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
 
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -304,7 +306,7 @@ public class KnnIndexTester {
         };
     }
 
-    private record ParsedArgs(boolean help, String configPath, int warmUpIterations) {
+    private record ParsedArgs(boolean help, String configPath, int warmUpIterations, String csvPath) {
 
     }
 
@@ -312,16 +314,15 @@ public class KnnIndexTester {
         boolean help = false;
         String configFile = null;
         int warmUpIterations = 1;
-
-        if (args.length > 2) {
-            return null; // invalid options
-        }
+        String csvPath = null;
 
         for (var arg : args) {
             if (arg.equals("-h") || arg.equals("--help")) {
                 help = true;
             } else if (arg.startsWith("--warmUp=")) {
                 warmUpIterations = Integer.parseInt(arg.substring("--warmUp=".length()));
+            } else if (arg.startsWith("--csv=")) {
+                csvPath = arg.substring("--csv=".length());
             } else {
                 configFile = arg;
             }
@@ -331,7 +332,7 @@ public class KnnIndexTester {
             return null; // config file required
         }
 
-        return new ParsedArgs(help, configFile, warmUpIterations);
+        return new ParsedArgs(help, configFile, warmUpIterations, csvPath);
     }
 
     /**
@@ -424,6 +425,10 @@ public class KnnIndexTester {
                 );
                 formattedResults.queryResults.addAll(List.of(results));
                 formattedResults.indexResults.add(indexResults);
+                if (parsedArgs.csvPath() != null) {
+                    appendIndexCsv(PathUtils.get(parsedArgs.csvPath() + "_index.csv"), testConfiguration, indexResults);
+                    appendSearchCsv(PathUtils.get(parsedArgs.csvPath() + "_search.csv"), testConfiguration, indexResults, results);
+                }
             } finally {
                 if (exec != null) {
                     exec.shutdown();
@@ -596,6 +601,106 @@ public class KnnIndexTester {
             result.numSegments = reader.leaves().size();
         } catch (IOException e) {
             throw new IOException("Failed to get segment count for dir: " + dir, e);
+        }
+    }
+
+    private static final String[] INDEX_CSV_HEADERS = {
+        "index_name",
+        "index_type",
+        "ivf_cluster_size",
+        "secondary_cluster_size",
+        "quantize_bits",
+        "num_docs",
+        "doc_add_time_ms",
+        "total_index_time_ms",
+        "force_merge_time_ms",
+        "num_segments" };
+
+    private static final String[] SEARCH_CSV_HEADERS = {
+        "index_name",
+        "index_type",
+        "ivf_cluster_size",
+        "secondary_cluster_size",
+        "quantize_bits",
+        "num_docs",
+        "num_segments",
+        "visit_percentage",
+        "over_sampling_factor",
+        "latency_ms",
+        "net_cpu_time_ms",
+        "avg_cpu_count",
+        "qps",
+        "recall",
+        "visited",
+        "num_candidates",
+        "early_termination" };
+
+    static void appendIndexCsv(Path csvPath, TestConfiguration config, Results indexResult) {
+        try {
+            boolean writeHeader = Files.exists(csvPath) == false || Files.size(csvPath) == 0;
+            try (BufferedWriter w = Files.newBufferedWriter(csvPath, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+                if (writeHeader) {
+                    w.write(String.join(",", INDEX_CSV_HEADERS));
+                    w.newLine();
+                }
+                w.write(
+                    String.join(
+                        ",",
+                        indexResult.indexName,
+                        indexResult.indexType,
+                        Integer.toString(config.ivfClusterSize()),
+                        Integer.toString(config.secondaryClusterSize()),
+                        String.valueOf(config.quantizeBits()),
+                        Integer.toString(indexResult.numDocs),
+                        Long.toString(indexResult.docAddTimeMS),
+                        Long.toString(indexResult.indexTimeMS),
+                        Long.toString(indexResult.forceMergeTimeMS),
+                        Integer.toString(indexResult.numSegments)
+                    )
+                );
+                w.newLine();
+            }
+        } catch (IOException e) {
+            logger.error("Failed to write index CSV to " + csvPath, e);
+        }
+    }
+
+    static void appendSearchCsv(Path csvPath, TestConfiguration config, Results indexResult, Results[] searchResults) {
+        try {
+            boolean writeHeader = Files.exists(csvPath) == false || Files.size(csvPath) == 0;
+            try (BufferedWriter w = Files.newBufferedWriter(csvPath, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+                if (writeHeader) {
+                    w.write(String.join(",", SEARCH_CSV_HEADERS));
+                    w.newLine();
+                }
+                for (Results r : searchResults) {
+                    w.write(
+                        String.join(
+                            ",",
+                            r.indexName,
+                            r.indexType,
+                            Integer.toString(config.ivfClusterSize()),
+                            Integer.toString(config.secondaryClusterSize()),
+                            String.valueOf(config.quantizeBits()),
+                            Integer.toString(r.numDocs),
+                            Integer.toString(indexResult.numSegments),
+                            String.format(Locale.ROOT, "%.3f", r.visitPercentage),
+                            String.format(Locale.ROOT, "%.2f", r.overSamplingFactor),
+                            String.format(Locale.ROOT, "%.2f", r.avgLatency),
+                            String.format(Locale.ROOT, "%.2f", r.netCpuTimeMS),
+                            String.format(Locale.ROOT, "%.2f", r.avgCpuCount),
+                            String.format(Locale.ROOT, "%.2f", r.qps),
+                            String.format(Locale.ROOT, "%.4f", r.avgRecall),
+                            String.format(Locale.ROOT, "%.2f", r.averageVisited),
+                            Integer.toString(r.numCandidates),
+                            Boolean.toString(r.earlyTermination)
+                        )
+                    );
+                    w.newLine();
+                }
+            }
+        } catch (IOException e) {
+            logger.error("Failed to write search CSV to " + csvPath, e);
         }
     }
 
