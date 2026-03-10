@@ -1788,9 +1788,12 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 int clusterSize = ES920DiskBBQVectorsFormat.DEFAULT_VECTORS_PER_CLUSTER;
                 if (clusterSizeNode != null) {
                     clusterSize = XContentMapValues.nodeIntegerValue(clusterSizeNode);
-                    if (clusterSize < MIN_VECTORS_PER_CLUSTER || clusterSize > MAX_VECTORS_PER_CLUSTER) {
+                    if (clusterSize != ESNextDiskBBQVectorsFormat.DYNAMIC_CLUSTER_SIZE
+                        && (clusterSize < MIN_VECTORS_PER_CLUSTER || clusterSize > MAX_VECTORS_PER_CLUSTER)) {
                         throw new IllegalArgumentException(
-                            "cluster_size must be between "
+                            "cluster_size must be "
+                                + ESNextDiskBBQVectorsFormat.DYNAMIC_CLUSTER_SIZE
+                                + " (dynamic) or between "
                                 + MIN_VECTORS_PER_CLUSTER
                                 + " and "
                                 + MAX_VECTORS_PER_CLUSTER
@@ -1839,9 +1842,9 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 if (indexVersion.onOrAfter(DISK_BBQ_QUANTIZE_BITS) && experimentalFeaturesEnabled) {
                     Object quantizeBitsNode = indexOptionsMap.remove("bits");
                     quantizeBits = XContentMapValues.nodeIntegerValue(quantizeBitsNode, DEFAULT_BBQ_IVF_QUANTIZE_BITS);
-                    if ((quantizeBits == 1 || quantizeBits == 2 || quantizeBits == 4) == false) {
+                    if ((quantizeBits == 1 || quantizeBits == 2 || quantizeBits == 4 || quantizeBits == 7) == false) {
                         throw new IllegalArgumentException(
-                            "'bits' must be 1, 2 or 4, got: " + quantizeBits + " for field [" + fieldName + "]"
+                            "'bits' must be 1, 2, 4 or 7, got: " + quantizeBits + " for field [" + fieldName + "]"
                         );
                     }
                 } else {
@@ -2610,7 +2613,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             }
             if (experimentalFeaturesEnabled) {
                 return new ESNextDiskBBQVectorsFormat(
-                    ESNextDiskBBQVectorsFormat.QuantEncoding.fromId(bits >> 1),
+                    ESNextDiskBBQVectorsFormat.QuantEncoding.fromBits((byte) bits),
                     clusterSize,
                     ES920DiskBBQVectorsFormat.DEFAULT_CENTROIDS_PER_PARENT_CLUSTER,
                     elementType,
@@ -2700,6 +2703,10 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
         public boolean doPrecondition() {
             return doPrecondition;
+        }
+
+        public int getBits() {
+            return bits;
         }
     }
 

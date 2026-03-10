@@ -588,7 +588,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             fieldInfo,
             KMeansResult.singleCluster(globalCentroid, numCentroids)
         );
-        if (centroidSupplier.size() > centroidsPerParentCluster * centroidsPerParentCluster) {
+        if (needsSecondLevelClustering(centroidSupplier.size())) {
             KMeansResult centroidClusters = buildSecondLevelClusters(fieldInfo, centroidSupplier, true);
             return new OffHeapCentroidSupplier(centroidsInput, numCentroids, fieldInfo, centroidClusters);
         }
@@ -602,7 +602,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             KMeansResult.singleCluster(globalCentroid, centroids.length),
             info.getVectorDimension()
         );
-        if (centroidSupplier.size() > centroidsPerParentCluster * centroidsPerParentCluster) {
+        if (needsSecondLevelClustering(centroidSupplier.size())) {
             KMeansResult centroidClusters = buildSecondLevelClusters(info, centroidSupplier, false);
             return CentroidSupplier.fromArray(centroids, centroidClusters, info.getVectorDimension());
         }
@@ -951,7 +951,22 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
                 -1 // disable SOAR assignments
             );
         }
-        return hierarchicalKMeans.cluster(floatVectorValues, centroidsPerParentCluster);
+        int effectiveClusterSize = resolveClusterSize(centroidsPerParentCluster, floatVectorValues.size());
+        return hierarchicalKMeans.cluster(floatVectorValues, effectiveClusterSize);
+    }
+
+    private static int resolveClusterSize(int configuredSize, int numItems) {
+        if (configuredSize == ESNextDiskBBQVectorsFormat.DYNAMIC_CLUSTER_SIZE) {
+            return Math.max(ESNextDiskBBQVectorsFormat.MIN_VECTORS_PER_CLUSTER, (int) Math.sqrt(numItems));
+        }
+        return configuredSize;
+    }
+
+    private boolean needsSecondLevelClustering(int numCentroids) {
+        int effectiveSize = centroidsPerParentCluster == ESNextDiskBBQVectorsFormat.DYNAMIC_CLUSTER_SIZE
+            ? ESNextDiskBBQVectorsFormat.DEFAULT_CENTROIDS_PER_PARENT_CLUSTER
+            : centroidsPerParentCluster;
+        return numCentroids > effectiveSize * effectiveSize;
     }
 
     @Override
@@ -989,7 +1004,8 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         KMeansFloatVectorValues floatVectorValues,
         FieldInfo fieldInfo
     ) throws IOException {
-        KMeansResult kMeansResult = hierarchicalKMeans.cluster(floatVectorValues, vectorPerCluster);
+        int effectiveClusterSize = resolveClusterSize(vectorPerCluster, floatVectorValues.size());
+        KMeansResult kMeansResult = hierarchicalKMeans.cluster(floatVectorValues, effectiveClusterSize);
         float[][] centroids = kMeansResult.centroids();
         if (logger.isDebugEnabled()) {
             logger.debug("final centroid count: {}", centroids.length);

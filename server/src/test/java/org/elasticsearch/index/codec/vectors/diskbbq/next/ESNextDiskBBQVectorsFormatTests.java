@@ -112,6 +112,22 @@ public class ESNextDiskBBQVectorsFormatTests extends BaseKnnVectorsFormatTestCas
                 random().nextInt(MIN_PRECONDITIONING_BLOCK_DIMS, MAX_PRECONDITIONING_BLOCK_DIMS),
                 flatVectorThreshold
             );
+        } else if (rarely()) {
+            // dynamic cluster sizing
+            int vectorPerCluster = ESNextDiskBBQVectorsFormat.DYNAMIC_CLUSTER_SIZE;
+            int flatVectorThreshold = disableFlatOnFlush ? 0 : ESNextDiskBBQVectorsFormat.defaultFlatThreshold(vectorPerCluster);
+            format = new ESNextDiskBBQVectorsFormat(
+                encoding,
+                vectorPerCluster,
+                ESNextDiskBBQVectorsFormat.DYNAMIC_CLUSTER_SIZE,
+                DenseVectorFieldMapper.ElementType.FLOAT,
+                false,
+                null,
+                1,
+                false,
+                DEFAULT_PRECONDITIONING_BLOCK_DIMENSION,
+                flatVectorThreshold
+            );
         } else {
             // run with low numbers to force many clusters with parents
             int vectorPerCluster = random().nextInt(MIN_VECTORS_PER_CLUSTER, 2 * MIN_VECTORS_PER_CLUSTER);
@@ -201,6 +217,13 @@ public class ESNextDiskBBQVectorsFormatTests extends BaseKnnVectorsFormatTestCas
         expectThrows(IllegalArgumentException.class, () -> new ESNextDiskBBQVectorsFormat(MAX_VECTORS_PER_CLUSTER + 1, 16));
         expectThrows(IllegalArgumentException.class, () -> new ESNextDiskBBQVectorsFormat(128, MIN_CENTROIDS_PER_PARENT_CLUSTER - 1));
         expectThrows(IllegalArgumentException.class, () -> new ESNextDiskBBQVectorsFormat(128, MAX_CENTROIDS_PER_PARENT_CLUSTER + 1));
+        // -2 and below are invalid
+        expectThrows(IllegalArgumentException.class, () -> new ESNextDiskBBQVectorsFormat(-2, 16));
+        expectThrows(IllegalArgumentException.class, () -> new ESNextDiskBBQVectorsFormat(128, -2));
+        // DYNAMIC_CLUSTER_SIZE (-1) is valid for both
+        new ESNextDiskBBQVectorsFormat(ESNextDiskBBQVectorsFormat.DYNAMIC_CLUSTER_SIZE, 16);
+        new ESNextDiskBBQVectorsFormat(128, ESNextDiskBBQVectorsFormat.DYNAMIC_CLUSTER_SIZE);
+        new ESNextDiskBBQVectorsFormat(ESNextDiskBBQVectorsFormat.DYNAMIC_CLUSTER_SIZE, ESNextDiskBBQVectorsFormat.DYNAMIC_CLUSTER_SIZE);
     }
 
     public void testSimpleOffHeapSize() throws IOException {
