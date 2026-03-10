@@ -7,8 +7,8 @@ ES_DIR="/home/benjamintrent/elasticsearch"
 DATA_DIR="/mnt/data/.data"
 INDEX_DIR="/mnt/data/knn_index"
 LOG_DIR="/mnt/data/logs"
-CSV_PATH="/mnt/data/results"
-COMPLETED_FILE="/mnt/data/completed.txt"
+CSV_PATH="/mnt/data/results_hnsw_centroids"
+COMPLETED_FILE="/mnt/data/completed_hnsw_centroids.txt"
 CONFIG_FILE="/tmp/bench_config.json"
 
 DATASETS=("dbpedia-entity-gte-base" "dbpedia-entity-E5-small" "hotpotqa-gte-base" "hotpotqa-E5-small")
@@ -57,7 +57,8 @@ for dataset in "${DATASETS[@]}"; do
     "reindex": true,
     "force_merge": false,
     "visit_percentage": [0.5,0.5,0.5,0.5,0.5, 1,1,1,1,1, 2,2,2,2,2, 2.5,2.5,2.5,2.5,2.5, 3,3,3,3,3, 4,4,4,4,4, 5,5,5,5,5],
-    "over_sampling_factor": [3.0, 5.0]
+    "over_sampling_factor": [3.0, 5.0],
+    "vector_space": "dot_product"
   },
   {
     "dataset": "$dataset",
@@ -74,7 +75,8 @@ for dataset in "${DATASETS[@]}"; do
     "reindex": false,
     "force_merge": true,
     "visit_percentage": [0.5,0.5,0.5,0.5,0.5, 1,1,1,1,1, 2,2,2,2,2, 2.5,2.5,2.5,2.5,2.5, 3,3,3,3,3, 4,4,4,4,4, 5,5,5,5,5],
-    "over_sampling_factor": [3.0, 5.0]
+    "over_sampling_factor": [3.0, 5.0],
+    "vector_space": "dot_product"
   }
 ]
 EOCONFIG
@@ -94,7 +96,7 @@ done
 
 echo ""
 echo "========================================="
-echo "Benchmark complete."
+echo "Benchmark complete (HNSW centroids)."
 echo "Index CSV:  ${CSV_PATH}_index.csv"
 echo "Search CSV: ${CSV_PATH}_search.csv"
 echo "========================================="
