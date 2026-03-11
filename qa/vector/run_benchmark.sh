@@ -7,12 +7,12 @@ ES_DIR="/home/benjamintrent/elasticsearch"
 DATA_DIR="/mnt/data/.data"
 INDEX_DIR="/mnt/data/knn_index"
 LOG_DIR="/mnt/data/logs"
-CSV_PATH="/mnt/data/results_hnsw_centroids"
-COMPLETED_FILE="/mnt/data/completed_hnsw_centroids.txt"
+CSV_PATH="/mnt/data/results_hnsw_centroids_many_clusters"
+COMPLETED_FILE="/mnt/data/completed_hnsw_centroids_many_clusters.txt"
 CONFIG_FILE="/tmp/bench_config.json"
 
 DATASETS=("dbpedia-entity-gte-base" "dbpedia-entity-E5-small" "hotpotqa-gte-base" "hotpotqa-E5-small")
-IVF_CLUSTER_SIZES=(-1 128 256 384 512)
+IVF_CLUSTER_SIZES=(16 32 64)
 SECONDARY_CLUSTER_SIZES=(-1 16 32 64 128)
 QUANTIZE_BITS=1
 
@@ -56,8 +56,8 @@ for dataset in "${DATASETS[@]}"; do
     "merge_workers": 16,
     "reindex": true,
     "force_merge": false,
-    "visit_percentage": [0.5,0.5,0.5,0.5,0.5, 1,1,1,1,1, 2,2,2,2,2, 2.5,2.5,2.5,2.5,2.5, 3,3,3,3,3, 4,4,4,4,4, 5,5,5,5,5],
-    "over_sampling_factor": [3.0, 5.0],
+    "visit_percentage": [0.025, 0.025, 0.025, 0.025, 0.5,0.5,0.5,0.5,0.5, 1,1,1,1,1, 2,2,2,2,2, 2.5,2.5,2.5,2.5,2.5, 3,3,3,3,3, 4,4,4,4,4, 5,5,5,5,5],
+    "over_sampling_factor": 5.0,
     "vector_space": "dot_product"
   },
   {
@@ -74,8 +74,8 @@ for dataset in "${DATASETS[@]}"; do
     "merge_workers": 16,
     "reindex": false,
     "force_merge": true,
-    "visit_percentage": [0.5,0.5,0.5,0.5,0.5, 1,1,1,1,1, 2,2,2,2,2, 2.5,2.5,2.5,2.5,2.5, 3,3,3,3,3, 4,4,4,4,4, 5,5,5,5,5],
-    "over_sampling_factor": [3.0, 5.0],
+    "visit_percentage": [0.025, 0.025, 0.025, 0.025, 0.5,0.5,0.5,0.5,0.5, 1,1,1,1,1, 2,2,2,2,2, 2.5,2.5,2.5,2.5,2.5, 3,3,3,3,3, 4,4,4,4,4, 5,5,5,5,5],
+    "over_sampling_factor": 5.0,
     "vector_space": "dot_product"
   }
 ]
