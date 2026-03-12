@@ -46,7 +46,7 @@ for dataset in "${DATASETS[@]}"; do
   {
     "dataset": "$dataset",
     "data_dir": "$DATA_DIR",
-    "num_queries": 1000,
+    "num_queries": 400,
     "quantize_bits": $QUANTIZE_BITS,
     "k": [100],
     "index_type": "ivf",
