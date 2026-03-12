@@ -87,6 +87,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
     private final int numMergeWorkers;
     private final int blockDimension;
     private final boolean doPrecondition;
+    private final boolean centroidsIndexed;
     private static final int CENTROID_GRAPH_M = 8;
     private static final int CENTROID_GRAPH_EF_CONSTRUCTION = 150;
 
@@ -102,7 +103,8 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         int numMergeWorkers,
         int blockDimension,
         boolean doPrecondition,
-        int flatVectorThreshold
+        int flatVectorThreshold,
+        boolean centroidsIndexed
     ) throws IOException {
         super(
             state,
@@ -119,6 +121,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         this.numMergeWorkers = numMergeWorkers;
         this.blockDimension = blockDimension;
         this.doPrecondition = doPrecondition;
+        this.centroidsIndexed = centroidsIndexed;
     }
 
     @Override
@@ -634,7 +637,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
 
     @Override
     protected boolean mayIndexCentroids() {
-        return true;
+        return centroidsIndexed;
     }
 
     @Override

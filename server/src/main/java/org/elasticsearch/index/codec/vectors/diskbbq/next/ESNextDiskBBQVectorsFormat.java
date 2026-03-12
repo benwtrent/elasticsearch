@@ -281,6 +281,7 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
     private final boolean doPrecondition;
     private final int preconditioningBlockDimension;
     private final int flatVectorThreshold;
+    private final boolean centroidsIndexed;
 
     public ESNextDiskBBQVectorsFormat(int vectorPerCluster, int centroidsPerParentCluster) {
         this(QuantEncoding.ONE_BIT_4BIT_QUERY, vectorPerCluster, centroidsPerParentCluster);
@@ -297,7 +298,8 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
             1,
             false,
             DEFAULT_PRECONDITIONING_BLOCK_DIMENSION,
-            defaultFlatThreshold(vectorPerCluster)
+            defaultFlatThreshold(vectorPerCluster),
+            true
         );
     }
 
@@ -322,7 +324,8 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
             maxMergingWorkers,
             doPrecondition,
             preconditioningBlockDimension,
-            defaultFlatThreshold(vectorPerCluster)
+            defaultFlatThreshold(vectorPerCluster),
+            true
         );
     }
 
@@ -337,6 +340,34 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
         boolean doPrecondition,
         int preconditioningBlockDimension,
         int flatVectorThreshold
+    ) {
+        this(
+            quantEncoding,
+            vectorPerCluster,
+            centroidsPerParentCluster,
+            elementType,
+            useDirectIO,
+            mergingExecutorService,
+            maxMergingWorkers,
+            doPrecondition,
+            preconditioningBlockDimension,
+            flatVectorThreshold,
+            true
+        );
+    }
+
+    public ESNextDiskBBQVectorsFormat(
+        QuantEncoding quantEncoding,
+        int vectorPerCluster,
+        int centroidsPerParentCluster,
+        DenseVectorFieldMapper.ElementType elementType,
+        boolean useDirectIO,
+        ExecutorService mergingExecutorService,
+        int maxMergingWorkers,
+        boolean doPrecondition,
+        int preconditioningBlockDimension,
+        int flatVectorThreshold,
+        boolean centroidsIndexed
     ) {
         super(NAME);
         if (vectorPerCluster != DYNAMIC_CLUSTER_SIZE
@@ -397,6 +428,7 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
         this.preconditioningBlockDimension = preconditioningBlockDimension;
         this.doPrecondition = doPrecondition;
         this.flatVectorThreshold = flatVectorThreshold == -1 ? defaultFlatThreshold(vectorPerCluster) : flatVectorThreshold;
+        this.centroidsIndexed = centroidsIndexed;
     }
 
     /** Constructs a format using the given graph construction parameters and scalar quantization. */
@@ -418,7 +450,8 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
             numMergeWorkers,
             preconditioningBlockDimension,
             doPrecondition,
-            flatVectorThreshold
+            flatVectorThreshold,
+            centroidsIndexed
         );
     }
 

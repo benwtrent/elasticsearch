@@ -81,6 +81,7 @@ public class ESNextDiskBBQVectorsFormatTests extends BaseKnnVectorsFormatTestCas
         ESNextDiskBBQVectorsFormat.QuantEncoding encoding = ESNextDiskBBQVectorsFormat.QuantEncoding.values()[random().nextInt(
             ESNextDiskBBQVectorsFormat.QuantEncoding.values().length
         )];
+        boolean centroidsIndexed = random().nextBoolean();
         boolean disableFlatOnFlush = random().nextBoolean();
         if (rarely()) {
             int vectorPerCluster = random().nextInt(2 * MIN_VECTORS_PER_CLUSTER, MAX_VECTORS_PER_CLUSTER);
@@ -95,7 +96,8 @@ public class ESNextDiskBBQVectorsFormatTests extends BaseKnnVectorsFormatTestCas
                 1,
                 false,
                 DEFAULT_PRECONDITIONING_BLOCK_DIMENSION,
-                flatVectorThreshold
+                flatVectorThreshold,
+                centroidsIndexed
             );
         } else if (rarely()) {
             int vectorPerCluster = random().nextInt(MIN_VECTORS_PER_CLUSTER, MAX_VECTORS_PER_CLUSTER);
@@ -110,7 +112,8 @@ public class ESNextDiskBBQVectorsFormatTests extends BaseKnnVectorsFormatTestCas
                 1,
                 true,
                 random().nextInt(MIN_PRECONDITIONING_BLOCK_DIMS, MAX_PRECONDITIONING_BLOCK_DIMS),
-                flatVectorThreshold
+                flatVectorThreshold,
+                centroidsIndexed
             );
         } else if (rarely()) {
             // dynamic cluster sizing
@@ -126,7 +129,8 @@ public class ESNextDiskBBQVectorsFormatTests extends BaseKnnVectorsFormatTestCas
                 1,
                 false,
                 DEFAULT_PRECONDITIONING_BLOCK_DIMENSION,
-                flatVectorThreshold
+                flatVectorThreshold,
+                centroidsIndexed
             );
         } else {
             // run with low numbers to force many clusters with parents
@@ -142,7 +146,8 @@ public class ESNextDiskBBQVectorsFormatTests extends BaseKnnVectorsFormatTestCas
                 1,
                 false,
                 DEFAULT_PRECONDITIONING_BLOCK_DIMENSION,
-                flatVectorThreshold
+                flatVectorThreshold,
+                centroidsIndexed
             );
         }
         super.setUp();

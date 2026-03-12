@@ -7,14 +7,15 @@ ES_DIR="/home/benjamintrent/elasticsearch"
 DATA_DIR="/mnt/data/.data"
 INDEX_DIR="/mnt/data/knn_index"
 LOG_DIR="/mnt/data/logs"
-CSV_PATH="/mnt/data/results_hnsw_centroids_many_clusters"
-COMPLETED_FILE="/mnt/data/completed_hnsw_centroids_many_clusters.txt"
+CSV_PATH="/mnt/data/all_results"
+COMPLETED_FILE="/mnt/data/all_results.txt"
 CONFIG_FILE="/tmp/bench_config.json"
 
 DATASETS=("dbpedia-entity-gte-base" "dbpedia-entity-E5-small" "hotpotqa-gte-base" "hotpotqa-E5-small")
-IVF_CLUSTER_SIZES=(16 32 64)
-SECONDARY_CLUSTER_SIZES=(-1 16 32 64 128)
-QUANTIZE_BITS=1
+IVF_CLUSTER_SIZES=(16 32 64 128 256 512 1024)
+SECONDARY_CLUSTER_SIZES=(16 32 64 128 256 512)
+QUANTIZE_BITS=(1 2 4)
+CENTROID_HNSW_INDEXED=(false true)
 
 mkdir -p "$DATA_DIR" "$INDEX_DIR" "$LOG_DIR"
 mkdir -p "$ES_DIR/qa/vector/target"
@@ -45,37 +46,21 @@ for dataset in "${DATASETS[@]}"; do
   {
     "dataset": "$dataset",
     "data_dir": "$DATA_DIR",
-    "num_docs": 2000000,
-    "num_queries": 100,
+    "num_queries": 1000,
     "quantize_bits": $QUANTIZE_BITS,
     "k": [100],
     "index_type": "ivf",
+    "centroids_indexed": $CENTROID_HNSW_INDEXED,
     "ivf_cluster_size": $ivf_size,
     "secondary_cluster_size": $sec_size,
     "index_threads": 16,
     "merge_workers": 16,
+    "num_searchers": 8,
+    "search_threads": 8,
     "reindex": true,
     "force_merge": false,
     "visit_percentage": [0.025, 0.025, 0.025, 0.025, 0.5,0.5,0.5,0.5,0.5, 1,1,1,1,1, 2,2,2,2,2, 2.5,2.5,2.5,2.5,2.5, 3,3,3,3,3, 4,4,4,4,4, 5,5,5,5,5],
-    "over_sampling_factor": 5.0,
-    "vector_space": "dot_product"
-  },
-  {
-    "dataset": "$dataset",
-    "data_dir": "$DATA_DIR",
-    "num_docs": 2000000,
-    "num_queries": 100,
-    "quantize_bits": $QUANTIZE_BITS,
-    "k": [100],
-    "index_type": "ivf",
-    "ivf_cluster_size": $ivf_size,
-    "secondary_cluster_size": $sec_size,
-    "index_threads": 16,
-    "merge_workers": 16,
-    "reindex": false,
-    "force_merge": true,
-    "visit_percentage": [0.025, 0.025, 0.025, 0.025, 0.5,0.5,0.5,0.5,0.5, 1,1,1,1,1, 2,2,2,2,2, 2.5,2.5,2.5,2.5,2.5, 3,3,3,3,3, 4,4,4,4,4, 5,5,5,5,5],
-    "over_sampling_factor": 5.0,
+    "over_sampling_factor": [1.0, 3.0, 5.0],
     "vector_space": "dot_product"
   }
 ]

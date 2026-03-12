@@ -28,6 +28,7 @@ public class TestConfigurationTests extends ESTestCase {
               "k": [5, 10],
               "visit_percentage": [0.5],
               "over_sampling_factor": [2.0],
+              "centroids_indexed": false,
               "search_threads": [1],
               "num_searchers": [1],
               "filter_selectivity": [0.8],
@@ -43,6 +44,7 @@ public class TestConfigurationTests extends ESTestCase {
             assertEquals(1, config.docVectors().size());
             assertTrue(config.docVectors().get(0).equals(PathUtils.get("/path/to/docs")));
             assertTrue(config.queryVectors().equals(PathUtils.get("/path/to/queries")));
+            assertFalse(config.centroidsIndexed());
 
             List<SearchParameters> params = config.searchParams();
             assertEquals(4, params.size());
@@ -62,6 +64,19 @@ public class TestConfigurationTests extends ESTestCase {
 
             assertEquals(20, params.get(3).numCandidates());
             assertEquals(10, params.get(3).topK());
+        }
+    }
+
+    public void testCentroidsIndexedDefaultsToTrue() throws Exception {
+        String json = """
+            {
+              "doc_vectors": ["/path/to/docs"],
+              "dimensions": 128
+            }
+            """;
+        try (XContentParser parser = createParser(XContentType.JSON.xContent(), json)) {
+            TestConfiguration config = TestConfiguration.fromXContent(parser);
+            assertTrue(config.centroidsIndexed());
         }
     }
 

@@ -201,6 +201,7 @@ public class KnnIndexTester {
                     )
                 );
                 suffix.add(Integer.toString(args.quantizeBits()));
+                suffix.add(args.centroidsIndexed() ? "hnsw_centroids" : "two_layer_centroids");
             }
             case HNSW -> {
                 suffix.add(Integer.toString(args.hnswM()));
@@ -237,7 +238,8 @@ public class KnnIndexTester {
                     mergeWorkers,
                     args.doPrecondition(),
                     args.preconditioningBlockDims(),
-                    flatVectorThreshold
+                    flatVectorThreshold,
+                    args.centroidsIndexed()
                 );
             }
             case GPU_HNSW -> switch (quantizeBits) {
@@ -616,6 +618,7 @@ public class KnnIndexTester {
         "index_type",
         "ivf_cluster_size",
         "secondary_cluster_size",
+        "centroids_indexed",
         "quantize_bits",
         "num_docs",
         "doc_add_time_ms",
@@ -628,6 +631,7 @@ public class KnnIndexTester {
         "index_type",
         "ivf_cluster_size",
         "secondary_cluster_size",
+        "centroids_indexed",
         "quantize_bits",
         "num_docs",
         "num_segments",
@@ -657,6 +661,7 @@ public class KnnIndexTester {
                         indexResult.indexType,
                         Integer.toString(config.ivfClusterSize()),
                         Integer.toString(config.secondaryClusterSize()),
+                        Boolean.toString(config.centroidsIndexed()),
                         String.valueOf(config.quantizeBits()),
                         Integer.toString(indexResult.numDocs),
                         Long.toString(indexResult.docAddTimeMS),
@@ -688,6 +693,7 @@ public class KnnIndexTester {
                             r.indexType,
                             Integer.toString(config.ivfClusterSize()),
                             Integer.toString(config.secondaryClusterSize()),
+                            Boolean.toString(config.centroidsIndexed()),
                             String.valueOf(config.quantizeBits()),
                             Integer.toString(r.numDocs),
                             Integer.toString(indexResult.numSegments),

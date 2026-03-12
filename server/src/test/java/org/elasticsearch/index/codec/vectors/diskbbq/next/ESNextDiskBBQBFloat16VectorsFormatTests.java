@@ -52,42 +52,52 @@ public class ESNextDiskBBQBFloat16VectorsFormatTests extends BaseBFloat16KnnVect
         ESNextDiskBBQVectorsFormat.QuantEncoding encoding = ESNextDiskBBQVectorsFormat.QuantEncoding.values()[random().nextInt(
             ESNextDiskBBQVectorsFormat.QuantEncoding.values().length
         )];
+        boolean centroidsIndexed = random().nextBoolean();
         if (rarely()) {
+            int vectorPerCluster = random().nextInt(2 * MIN_VECTORS_PER_CLUSTER, MAX_VECTORS_PER_CLUSTER);
             format = new ESNextDiskBBQVectorsFormat(
                 encoding,
-                random().nextInt(2 * MIN_VECTORS_PER_CLUSTER, MAX_VECTORS_PER_CLUSTER),
+                vectorPerCluster,
                 random().nextInt(8, MAX_CENTROIDS_PER_PARENT_CLUSTER),
                 DenseVectorFieldMapper.ElementType.BFLOAT16,
                 random().nextBoolean(),
                 null,
                 1,
                 false,
-                DEFAULT_PRECONDITIONING_BLOCK_DIMENSION
+                DEFAULT_PRECONDITIONING_BLOCK_DIMENSION,
+                ESNextDiskBBQVectorsFormat.defaultFlatThreshold(vectorPerCluster),
+                centroidsIndexed
             );
         } else if (rarely()) {
+            int vectorPerCluster = random().nextInt(MIN_VECTORS_PER_CLUSTER, MAX_VECTORS_PER_CLUSTER);
             format = new ESNextDiskBBQVectorsFormat(
                 encoding,
-                random().nextInt(MIN_VECTORS_PER_CLUSTER, MAX_VECTORS_PER_CLUSTER),
+                vectorPerCluster,
                 random().nextInt(MIN_CENTROIDS_PER_PARENT_CLUSTER, MAX_CENTROIDS_PER_PARENT_CLUSTER),
                 DenseVectorFieldMapper.ElementType.BFLOAT16,
                 false,
                 null,
                 1,
                 true,
-                random().nextInt(MIN_PRECONDITIONING_BLOCK_DIMS, MAX_PRECONDITIONING_BLOCK_DIMS)
+                random().nextInt(MIN_PRECONDITIONING_BLOCK_DIMS, MAX_PRECONDITIONING_BLOCK_DIMS),
+                ESNextDiskBBQVectorsFormat.defaultFlatThreshold(vectorPerCluster),
+                centroidsIndexed
             );
         } else {
             // run with low numbers to force many clusters with parents
+            int vectorPerCluster = random().nextInt(MIN_VECTORS_PER_CLUSTER, 2 * MIN_VECTORS_PER_CLUSTER);
             format = new ESNextDiskBBQVectorsFormat(
                 encoding,
-                random().nextInt(MIN_VECTORS_PER_CLUSTER, 2 * MIN_VECTORS_PER_CLUSTER),
+                vectorPerCluster,
                 random().nextInt(MIN_CENTROIDS_PER_PARENT_CLUSTER, 8),
                 DenseVectorFieldMapper.ElementType.BFLOAT16,
                 random().nextBoolean(),
                 null,
                 1,
                 false,
-                DEFAULT_PRECONDITIONING_BLOCK_DIMENSION
+                DEFAULT_PRECONDITIONING_BLOCK_DIMENSION,
+                ESNextDiskBBQVectorsFormat.defaultFlatThreshold(vectorPerCluster),
+                centroidsIndexed
             );
         }
         super.setUp();

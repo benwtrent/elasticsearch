@@ -70,6 +70,7 @@ record TestConfiguration(
     int preconditioningBlockDims,
     int flatVectorThreshold,
     int secondaryClusterSize,
+    boolean centroidsIndexed,
     String directoryType
 ) {
 
@@ -85,6 +86,7 @@ record TestConfiguration(
     static final ParseField VISIT_PERCENTAGE_FIELD = new ParseField("visit_percentage");
     static final ParseField IVF_CLUSTER_SIZE_FIELD = new ParseField("ivf_cluster_size");
     static final ParseField SECONDARY_CLUSTER_SIZE = new ParseField("secondary_cluster_size");
+    static final ParseField CENTROIDS_INDEXED = new ParseField("centroids_indexed");
     static final ParseField OVER_SAMPLING_FACTOR_FIELD = new ParseField("over_sampling_factor");
     static final ParseField HNSW_M_FIELD = new ParseField("hnsw_m");
     static final ParseField HNSW_EF_CONSTRUCTION_FIELD = new ParseField("hnsw_ef_construction");
@@ -176,6 +178,7 @@ record TestConfiguration(
         PARSER.declareInt(Builder::setMergeWorkers, MERGE_WORKERS_FIELD);
         PARSER.declareInt(Builder::setFlatVectorThreshold, FLAT_VECTOR_THRESHOLD);
         PARSER.declareInt(Builder::setSecondaryClusterSize, SECONDARY_CLUSTER_SIZE);
+        PARSER.declareBoolean(Builder::setCentroidsIndexed, CENTROIDS_INDEXED);
         PARSER.declareString(Builder::setDirectoryType, DIRECTORY_TYPE_FIELD);
     }
 
@@ -202,6 +205,11 @@ record TestConfiguration(
             new ParameterHelp("index_type", "string", "Index type: hnsw, flat, ivf, or gpu_hnsw."),
             new ParameterHelp("ivf_cluster_size", "int", "IVF: number of clusters."),
             new ParameterHelp("secondary_cluster_size", "int", "IVF: centroids per parent cluster; -1 uses the format default."),
+            new ParameterHelp(
+                "centroids_indexed",
+                "boolean",
+                "IVF: index centroids in HNSW graph (true) or use two-layer centroid search (false)."
+            ),
             new ParameterHelp("hnsw_m", "int", "HNSW: M parameter (graph degree)."),
             new ParameterHelp("hnsw_ef_construction", "int", "HNSW: efConstruction parameter."),
             new ParameterHelp("index_threads", "int", "Number of threads used for indexing."),
@@ -278,8 +286,8 @@ record TestConfiguration(
         private String dataDir = ".data";
         private List<Path> docVectors;
         private Path queryVectors;
-        private int numDocs = 1000;
-        private int numQueries = 100;
+        private Integer numDocs;
+        private Integer numQueries;
         private KnnIndexTester.IndexType indexType = KnnIndexTester.IndexType.HNSW;
         private List<Integer> numCandidates = List.of(1000);
         private List<Integer> k = List.of(10);
@@ -311,6 +319,7 @@ record TestConfiguration(
         private int numMergeWorkers = 1;
         private int flatVectorThreshold = -1; // -1 mean use default (vectorPerCluster * 3)
         private int secondaryClusterSize = -1;
+        private boolean centroidsIndexed = true;
         private int flatIndexThreshold = -1; // use format's default threshold
         private String directoryType = "default";
 
@@ -519,6 +528,11 @@ record TestConfiguration(
             return this;
         }
 
+        public Builder setCentroidsIndexed(boolean centroidsIndexed) {
+            this.centroidsIndexed = centroidsIndexed;
+            return this;
+        }
+
         public Builder setDirectoryType(String directoryType) {
             this.directoryType = directoryType.toLowerCase(Locale.ROOT);
             return this;
@@ -579,6 +593,12 @@ record TestConfiguration(
             String vectorSpace = dsData.get("vector_space").toString();
             int numDocVectors = ((Number) dsData.get("num_doc_vectors")).intValue();
             int numQueryVectors = ((Number) dsData.get("num_query_vectors")).intValue();
+            if (numDocs == null) {
+                numDocs = numDocVectors;
+            }
+            if (numQueries == null) {
+                numQueries = numQueryVectors;
+            }
 
             if (numDocs > numDocVectors) {
                 throw new IllegalArgumentException(numDocs + " docs requested, but only " + numDocVectors + " available");
@@ -676,6 +696,12 @@ record TestConfiguration(
                 vectorSpace = VectorSimilarityFunction.EUCLIDEAN;
             }
 
+            if (numDocs == null) {
+                numDocs = 1000;
+            }
+            if (numQueries == null) {
+                numQueries = 100;
+            }
             if (docVectors == null) {
                 throw new IllegalArgumentException("Dataset or document vectors path must be provided");
             }
@@ -748,6 +774,7 @@ record TestConfiguration(
                 preconditioningBlockDims,
                 flatVectorThreshold,
                 secondaryClusterSize,
+                centroidsIndexed,
                 directoryType
             );
         }
@@ -806,6 +833,7 @@ record TestConfiguration(
                 builder.field(SEARCH_PARAMS.getPreferredName(), searchParams);
             }
             builder.field(FLAT_VECTOR_THRESHOLD.getPreferredName(), flatVectorThreshold);
+            builder.field(CENTROIDS_INDEXED.getPreferredName(), centroidsIndexed);
             builder.field(DIRECTORY_TYPE_FIELD.getPreferredName(), directoryType);
             return builder.endObject();
         }

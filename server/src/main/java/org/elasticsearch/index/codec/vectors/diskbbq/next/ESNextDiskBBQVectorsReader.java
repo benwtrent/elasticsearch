@@ -164,10 +164,12 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
         }
         centroids.seek(fp + sizeLookup);
         int numParents = centroids.readVInt();
+        final long parentVectorsStart = centroids.getFilePointer();
         final NextFieldEntry nextFieldEntry = (NextFieldEntry) fieldEntry;
         final long quantizedStart = centroids.getFilePointer() + (long) numParents * fieldInfo.getVectorDimension() * Float.BYTES;
-        final CentroidIterator centroidIterator = nextFieldEntry.hasCentroidGraph()
-            ? getCentroidIteratorGraph(
+        final CentroidIterator centroidIterator;
+        if (nextFieldEntry.hasCentroidGraph()) {
+            centroidIterator = getCentroidIteratorGraph(
                 fieldInfo,
                 centroids,
                 nextFieldEntry,
@@ -181,26 +183,46 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 filteredCentroidCount,
                 visitRatio,
                 fieldEntry.globalCentroid()
-            )
-            : getCentroidIteratorFlat(
+            );
+        } else {
+            final RandomVectorScorer centroidScorer = createInt7uCentroidScorer(
                 fieldInfo,
                 centroids,
                 quantizedStart,
                 numCentroids,
-                acceptCentroids,
-                filteredCentroidCount,
-                createInt7uCentroidScorer(
+                targetQuery,
+                quantized,
+                queryParams,
+                fieldEntry.globalCentroid(),
+                fieldEntry.globalCentroidDp()
+            );
+            if (numParents > 0) {
+                // Match main-branch two-layer IVF traversal: rank parent groups, then score child centroids within parent groups.
+                final float centroidOversampling = (float) numCentroids / (2f * numParents);
+                centroidIterator = getCentroidIteratorWithParents(
+                    fieldInfo,
+                    centroids,
+                    parentVectorsStart,
+                    numParents,
+                    quantizedStart,
+                    numCentroids,
+                    targetQuery,
+                    acceptCentroids,
+                    centroidScorer,
+                    visitRatio * centroidOversampling
+                );
+            } else {
+                centroidIterator = getCentroidIteratorFlat(
                     fieldInfo,
                     centroids,
                     quantizedStart,
                     numCentroids,
-                    targetQuery,
-                    quantized,
-                    queryParams,
-                    fieldEntry.globalCentroid(),
-                    fieldEntry.globalCentroidDp()
-                )
-            );
+                    acceptCentroids,
+                    filteredCentroidCount,
+                    centroidScorer
+                );
+            }
+        }
         return getPostingListPrefetchIterator(centroidIterator, postingListSlice);
     }
 
@@ -475,6 +497,152 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             filteredCentroidCount,
             scoreDocs
         );
+    }
+
+    private static CentroidIterator getCentroidIteratorWithParents(
+        FieldInfo fieldInfo,
+        IndexInput centroids,
+        long parentVectorsStart,
+        int numParents,
+        long quantizedStart,
+        int numCentroids,
+        float[] targetQuery,
+        FixedBitSet acceptCentroids,
+        RandomVectorScorer centroidScorer,
+        float centroidRatio
+    ) throws IOException {
+        final NeighborQueue parentsQueue = scoreParents(fieldInfo, centroids, parentVectorsStart, numParents, targetQuery);
+        final int[][] childrenByParent = buildChildrenByParent(fieldInfo, centroids, quantizedStart, numCentroids, numParents);
+        int maxChildrenPerParent = 0;
+        for (int[] children : childrenByParent) {
+            maxChildrenPerParent = Math.max(maxChildrenPerParent, children.length);
+        }
+        if (maxChildrenPerParent == 0) {
+            return new CentroidIterator() {
+                @Override
+                public boolean hasNext() {
+                    return false;
+                }
+
+                @Override
+                public PostingMetadata nextPosting() {
+                    throw new IllegalStateException("No centroids available");
+                }
+            };
+        }
+        final int bufferSize = Math.max(1, Math.min(numCentroids, (int) Math.ceil(centroidRatio * numCentroids)));
+        final NeighborQueue currentParentQueue = new NeighborQueue(maxChildrenPerParent, true);
+        final NeighborQueue neighborQueue = new NeighborQueue(bufferSize, true);
+        while (parentsQueue.size() > 0 && neighborQueue.size() < bufferSize) {
+            final int parentOrd = parentsQueue.pop();
+            populateOneParentGroup(currentParentQueue, childrenByParent[parentOrd], acceptCentroids, centroidScorer);
+            while (currentParentQueue.size() > 0 && neighborQueue.size() < bufferSize) {
+                final long centroidOrdinalAndScore = currentParentQueue.popRaw();
+                neighborQueue.add(
+                    currentParentQueue.decodeNodeId(centroidOrdinalAndScore),
+                    currentParentQueue.decodeScore(centroidOrdinalAndScore)
+                );
+            }
+        }
+        final long postingsOffset = quantizedStart + (long) numCentroids * (fieldInfo.getVectorDimension() + 3L * Float.BYTES
+            + Integer.BYTES);
+        return new CentroidIterator() {
+            @Override
+            public boolean hasNext() {
+                return neighborQueue.size() > 0;
+            }
+
+            @Override
+            public PostingMetadata nextPosting() throws IOException {
+                final long centroidOrdinalAndScore = nextCentroid();
+                final int centroidOrd = neighborQueue.decodeNodeId(centroidOrdinalAndScore);
+                final float score = neighborQueue.decodeScore(centroidOrdinalAndScore);
+                centroids.seek(postingsOffset + (Long.BYTES * 2L + Integer.BYTES) * centroidOrd);
+                final long postingListOffset = centroids.readLong();
+                final long postingListLength = centroids.readLong();
+                final int parentOrd = centroids.readInt();
+                return new PostingMetadata(postingListOffset, postingListLength, parentOrd, score);
+            }
+
+            private long nextCentroid() throws IOException {
+                if (currentParentQueue.size() > 0) {
+                    return neighborQueue.popRawAndAddRaw(currentParentQueue.popRaw());
+                } else if (parentsQueue.size() > 0) {
+                    final int parentOrd = parentsQueue.pop();
+                    populateOneParentGroup(currentParentQueue, childrenByParent[parentOrd], acceptCentroids, centroidScorer);
+                    return nextCentroid();
+                } else {
+                    return neighborQueue.popRaw();
+                }
+            }
+        };
+    }
+
+    private static NeighborQueue scoreParents(
+        FieldInfo fieldInfo,
+        IndexInput centroids,
+        long parentVectorsStart,
+        int numParents,
+        float[] targetQuery
+    ) throws IOException {
+        final NeighborQueue parentsQueue = new NeighborQueue(numParents, true);
+        final float[] parentScratch = new float[fieldInfo.getVectorDimension()];
+        final VectorSimilarityFunction similarityFunction = fieldInfo.getVectorSimilarityFunction();
+        for (int parentOrd = 0; parentOrd < numParents; parentOrd++) {
+            centroids.seek(parentVectorsStart + (long) parentOrd * fieldInfo.getVectorDimension() * Float.BYTES);
+            centroids.readFloats(parentScratch, 0, parentScratch.length);
+            parentsQueue.add(parentOrd, similarityFunction.compare(targetQuery, parentScratch));
+        }
+        return parentsQueue;
+    }
+
+    private static int[][] buildChildrenByParent(
+        FieldInfo fieldInfo,
+        IndexInput centroids,
+        long quantizedStart,
+        int numCentroids,
+        int numParents
+    ) throws IOException {
+        final long postingsOffset = quantizedStart + (long) numCentroids * (fieldInfo.getVectorDimension() + 3L * Float.BYTES
+            + Integer.BYTES);
+        final int[] childrenCount = new int[numParents];
+        for (int centroidOrd = 0; centroidOrd < numCentroids; centroidOrd++) {
+            centroids.seek(postingsOffset + (Long.BYTES * 2L + Integer.BYTES) * centroidOrd + Long.BYTES * 2L);
+            final int parentOrd = centroids.readInt();
+            if (parentOrd >= 0 && parentOrd < numParents) {
+                childrenCount[parentOrd]++;
+            }
+        }
+        final int[][] childrenByParent = new int[numParents][];
+        for (int parentOrd = 0; parentOrd < numParents; parentOrd++) {
+            childrenByParent[parentOrd] = new int[childrenCount[parentOrd]];
+        }
+        Arrays.fill(childrenCount, 0);
+        for (int centroidOrd = 0; centroidOrd < numCentroids; centroidOrd++) {
+            centroids.seek(postingsOffset + (Long.BYTES * 2L + Integer.BYTES) * centroidOrd + Long.BYTES * 2L);
+            final int parentOrd = centroids.readInt();
+            if (parentOrd >= 0 && parentOrd < numParents) {
+                childrenByParent[parentOrd][childrenCount[parentOrd]++] = centroidOrd;
+            }
+        }
+        return childrenByParent;
+    }
+
+    private static void populateOneParentGroup(
+        NeighborQueue parentChildrenQueue,
+        int[] childCentroids,
+        FixedBitSet acceptCentroids,
+        RandomVectorScorer centroidScorer
+    ) throws IOException {
+        while (parentChildrenQueue.size() > 0) {
+            parentChildrenQueue.pop();
+        }
+        for (int centroidOrd : childCentroids) {
+            if (acceptCentroids != null && acceptCentroids.get(centroidOrd) == false) {
+                continue;
+            }
+            parentChildrenQueue.add(centroidOrd, centroidScorer.score(centroidOrd));
+        }
     }
 
     private static CentroidIterator getCentroidIteratorFlat(
