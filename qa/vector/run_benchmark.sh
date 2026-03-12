@@ -24,14 +24,14 @@ touch "$COMPLETED_FILE"
 
 cd "$ES_DIR"
 
-total_combos=$(( ${#DATASETS[@]} * ${#IVF_CLUSTER_SIZES[@]} * ${#SECONDARY_CLUSTER_SIZES[@]} ))
+total_combos=$(( ${#DATASETS[@]} * ${#IVF_CLUSTER_SIZES[@]} * ${#SECONDARY_CLUSTER_SIZES[@]} * ${#QUANTIZE_BITS[@]} * ${#CENTROID_HNSW_INDEXED[@]} ))
 current=0
 
 for dataset in "${DATASETS[@]}"; do
   for ivf_size in "${IVF_CLUSTER_SIZES[@]}"; do
     for sec_size in "${SECONDARY_CLUSTER_SIZES[@]}"; do
       current=$((current + 1))
-      run_key="${dataset}_ivf${ivf_size}_sec${sec_size}"
+      run_key="${dataset}_ivf${ivf_size}_sec${sec_size}_quant${QUANTIZE_BITS}_hnsw${CENTROID_HNSW_INDEXED}"
 
       if grep -qF "$run_key" "$COMPLETED_FILE"; then
         echo "[$current/$total_combos] SKIP (already done): $run_key"
