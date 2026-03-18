@@ -536,7 +536,8 @@ public class ES940DiskBBQVectorsWriter extends IVFVectorsWriter {
         FieldInfo field,
         int numCentroids,
         long preconditionerOffset,
-        long preconditionerLength
+        long preconditionerLength,
+        CentroidIndexMetaWriter centroidIndexMetaWriter
     ) throws IOException {
         metaOutput.writeInt(ESNextOSQVectorsScorer.BULK_SIZE);
         metaOutput.writeInt(quantEncoding.id());
@@ -544,6 +545,7 @@ public class ES940DiskBBQVectorsWriter extends IVFVectorsWriter {
         if (preconditionerLength > 0) {
             metaOutput.writeLong(preconditionerOffset);
         }
+        centroidIndexMetaWriter.writeTo(metaOutput);
     }
 
     @Override
