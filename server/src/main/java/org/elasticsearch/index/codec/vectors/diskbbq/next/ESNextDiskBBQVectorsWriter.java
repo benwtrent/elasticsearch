@@ -112,6 +112,11 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             useDirectIOReads,
             rawVectorDelegate,
             ESNextDiskBBQVectorsFormat.VERSION_CURRENT,
+            ESNextDiskBBQVectorsFormat.NAME,
+            ESNextDiskBBQVectorsFormat.IVF_META_EXTENSION,
+            ESNextDiskBBQVectorsFormat.CENTROID_EXTENSION,
+            ESNextDiskBBQVectorsFormat.CLUSTER_EXTENSION,
+            true,
             flatVectorThreshold
         );
         this.vectorPerCluster = vectorPerCluster;
