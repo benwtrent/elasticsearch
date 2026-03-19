@@ -680,7 +680,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
             numCentroids,
             filteredCentroidCount
         );
-        long offset = centroids.getFilePointer();
+        final long recordByteSize = (long) fieldInfo.getVectorDimension() + 3L * Float.BYTES + Integer.BYTES;
+        final long postingsOffset = quantizedStart + (long) numCentroids * recordByteSize;
         return new CentroidIterator() {
             @Override
             public boolean hasNext() {
@@ -692,7 +693,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader implements Vect
                 long centroidOrdinalAndScore = neighborQueue.popRaw();
                 int centroidOrd = neighborQueue.decodeNodeId(centroidOrdinalAndScore);
                 float score = neighborQueue.decodeScore(centroidOrdinalAndScore);
-                centroids.seek(offset + (Long.BYTES * 2L + Integer.BYTES) * centroidOrd);
+                centroids.seek(postingsOffset + (Long.BYTES * 2L + Integer.BYTES) * centroidOrd);
                 long postingListOffset = centroids.readLong();
                 long postingListLength = centroids.readLong();
                 int parentOrd = centroids.readInt();
