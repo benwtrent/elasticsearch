@@ -171,7 +171,10 @@ public class VectorScorerTestUtils {
             centroid
         );
         final byte[] quantizeQuery = new byte[queryVectorPackedLengthInBytes];
-        ESNextDiskBBQVectorsFormat.QuantEncoding.fromBits(queryBits).packQuery(scratch, quantizeQuery);
+        ESNextDiskBBQVectorsFormat.QuantEncoding encoding = queryBits == 1
+            ? ESNextDiskBBQVectorsFormat.QuantEncoding.ONE_BIT_ONE_BIT_QUERY
+            : ESNextDiskBBQVectorsFormat.QuantEncoding.fromBits(queryBits);
+        encoding.packQuery(scratch, quantizeQuery);
 
         return new OSQVectorData(
             quantizeQuery,

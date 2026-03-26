@@ -33,6 +33,25 @@ public class QuantEncodingTests extends ESTestCase {
         assertEquals(8, encoding.getQueryPackedLength(16));
     }
 
+    public void testSingleBitSingleBit() {
+        ESNextDiskBBQVectorsFormat.QuantEncoding encoding = ESNextDiskBBQVectorsFormat.QuantEncoding.ONE_BIT_ONE_BIT_QUERY;
+        int discretized = encoding.discretizedDimensions(randomIntBetween(1, 1024));
+        // should discretize to something that can be packed into bytes from bits
+        assertEquals(0, discretized % 8);
+    }
+
+    public void testSingleBitSingleBitPackSize() {
+        ESNextDiskBBQVectorsFormat.QuantEncoding encoding = ESNextDiskBBQVectorsFormat.QuantEncoding.ONE_BIT_ONE_BIT_QUERY;
+        assertEquals(1, encoding.getDocPackedLength(3));
+        assertEquals(1, encoding.getQueryPackedLength(3));
+        assertEquals(1, encoding.getDocPackedLength(8));
+        assertEquals(1, encoding.getQueryPackedLength(8));
+        assertEquals(2, encoding.getDocPackedLength(15));
+        assertEquals(2, encoding.getDocPackedLength(16));
+        assertEquals(2, encoding.getQueryPackedLength(15));
+        assertEquals(2, encoding.getQueryPackedLength(16));
+    }
+
     public void testDibitAndNibbles() {
         ESNextDiskBBQVectorsFormat.QuantEncoding encoding = ESNextDiskBBQVectorsFormat.QuantEncoding.TWO_BIT_4BIT_QUERY;
         int discretized = encoding.discretizedDimensions(randomIntBetween(1, 1024));

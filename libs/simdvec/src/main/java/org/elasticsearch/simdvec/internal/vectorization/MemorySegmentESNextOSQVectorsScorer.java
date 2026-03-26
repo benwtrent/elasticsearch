@@ -85,6 +85,21 @@ public final class MemorySegmentESNextOSQVectorsScorer extends ESNextOSQVectorsS
             case D4Q4 -> new MSInt4SymmetricESNextOSQVectorsScorer(in, dimensions, dataLength, bulkSize);
             case D7Q7 -> new MSD7Q7ESNextOSQVectorsScorer(in, dimensions, dataLength, bulkSize);
         };
+=======
+        if (queryBits == 1 && indexBits == 1) {
+            this.scorer = new MSBitToBitESNextOSQVectorsScorer(in, dimensions, dataLength, bulkSize);
+        } else if (queryBits == 4 && indexBits == 1) {
+            this.scorer = new MSBitToInt4ESNextOSQVectorsScorer(in, dimensions, dataLength, bulkSize);
+        } else if (queryBits == 4 && indexBits == 4) {
+            this.scorer = new MSInt4SymmetricESNextOSQVectorsScorer(in, dimensions, dataLength, bulkSize);
+        } else if (queryBits == 4 && indexBits == 2) {
+            this.scorer = new MSDibitToInt4ESNextOSQVectorsScorer(in, dimensions, dataLength, bulkSize);
+        } else if (queryBits == 7 && indexBits == 7) {
+            this.scorer = new MSD7Q7ESNextOSQVectorsScorer(in, dimensions, dataLength, bulkSize);
+        } else {
+            throw new IllegalArgumentException("Unsupported query/index bits combination: " + queryBits + "/" + indexBits);
+        }
+>>>>>>> Stashed changes:libs/simdvec/src/main21/java/org/elasticsearch/simdvec/internal/vectorization/MemorySegmentESNextOSQVectorsScorer.java
     }
 
     @Override
@@ -187,6 +202,7 @@ public final class MemorySegmentESNextOSQVectorsScorer extends ESNextOSQVectorsS
         );
     }
 
+<<<<<<< Updated upstream:libs/simdvec/src/main/java/org/elasticsearch/simdvec/internal/vectorization/MemorySegmentESNextOSQVectorsScorer.java
     @Override
     public float scoreBulkOffsets(
         byte[] q,
@@ -236,6 +252,13 @@ public final class MemorySegmentESNextOSQVectorsScorer extends ESNextOSQVectorsS
         MSDibitToInt4ESNextOSQVectorsScorer, MSInt4SymmetricESNextOSQVectorsScorer, MSD7Q7ESNextOSQVectorsScorer {
 
         static final boolean NATIVE_SUPPORTED = NativeAccess.instance().getVectorSimilarityFunctions().isPresent();
+=======
+    abstract static sealed class MemorySegmentScorer permits MSBitToInt4ESNextOSQVectorsScorer, MSBitToBitESNextOSQVectorsScorer, MSDibitToInt4ESNextOSQVectorsScorer,
+        MSInt4SymmetricESNextOSQVectorsScorer, MSD7Q7ESNextOSQVectorsScorer {
+
+        // TODO: split Panama and Native implementations
+        static final boolean NATIVE_SUPPORTED = false;//NativeAccess.instance().getVectorSimilarityFunctions().isPresent();
+>>>>>>> Stashed changes:libs/simdvec/src/main21/java/org/elasticsearch/simdvec/internal/vectorization/MemorySegmentESNextOSQVectorsScorer.java
         static final boolean SUPPORTS_HEAP_SEGMENTS = Runtime.version().feature() >= 22;
 
         static final float ONE_BIT_SCALE = ESNextOSQVectorsScorer.BIT_SCALES[0];

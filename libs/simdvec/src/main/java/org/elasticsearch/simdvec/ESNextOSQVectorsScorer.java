@@ -49,8 +49,8 @@ public class ESNextOSQVectorsScorer {
     private final byte[] scratch;
 
     public ESNextOSQVectorsScorer(IndexInput in, byte queryBits, byte indexBits, int dimensions, int dataLength, int bulkSize) {
-        if (indexBits == 1 && queryBits != 4) {
-            throw new IllegalArgumentException("Only asymmetric 4-bit query supported for 1-bit index");
+        if (indexBits == 1 && queryBits != 4 && queryBits != 1) {
+            throw new IllegalArgumentException("Only 1-bit or asymmetric 4-bit query supported for 1-bit index");
         }
         if (indexBits == 2 && queryBits != 4) {
             throw new IllegalArgumentException("Only asymmetric 4-bit query supported for 2-bit index");
@@ -84,6 +84,9 @@ public class ESNextOSQVectorsScorer {
      */
     public long quantizeScore(byte[] q) throws IOException {
         if (indexBits == 1) {
+            if (queryBits == 1) {
+                return quantized1BitScore(q);
+            }
             return quantized4BitScore(q, length);
         }
         if (indexBits == 2) {
@@ -99,6 +102,26 @@ public class ESNextOSQVectorsScorer {
     private long quantized7BitScore(byte[] q) throws IOException {
         in.readBytes(scratch, 0, dimensions);
         return VectorUtil.dotProduct(scratch, q);
+    }
+
+    private long quantized1BitScore(byte[] q) throws IOException {
+        assert q.length == length : "length mismatch q " + q.length + " vs " + length;
+        final int size = length;
+        long subRet0 = 0;
+        int r = 0;
+        for (final int upperBound = size & -Long.BYTES; r < upperBound; r += Long.BYTES) {
+            final long value = in.readLong();
+            subRet0 += Long.bitCount((long) BitUtil.VH_LE_LONG.get(q, r) & value);
+        }
+        for (final int upperBound = size & -Integer.BYTES; r < upperBound; r += Integer.BYTES) {
+            final int value = in.readInt();
+            subRet0 += Integer.bitCount((int) BitUtil.VH_LE_INT.get(q, r) & value);
+        }
+        for (; r < size; r++) {
+            final byte value = in.readByte();
+            subRet0 += Integer.bitCount((q[r] & value) & 0xFF);
+        }
+        return subRet0;
     }
 
     private long quantized4BitScoreSymmetric(byte[] q) throws IOException {

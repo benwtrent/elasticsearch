@@ -110,6 +110,17 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
                 ESVectorUtil.transposeHalfByte(quantized, destination);
             }
         },
+        ONE_BIT_ONE_BIT_QUERY(4, (byte) 1, (byte) 1) {
+            @Override
+            public void pack(int[] quantized, byte[] destination) {
+                ESVectorUtil.packAsBinary(quantized, destination);
+            }
+
+            @Override
+            public void packQuery(int[] quantized, byte[] destination) {
+                ESVectorUtil.packAsBinary(quantized, destination);
+            }
+        },
         TWO_BIT_4BIT_QUERY(1, (byte) 2, (byte) 4) {
             @Override
             public void pack(int[] quantized, byte[] destination) {

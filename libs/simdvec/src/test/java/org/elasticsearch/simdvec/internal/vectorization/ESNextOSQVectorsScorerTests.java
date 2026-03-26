@@ -587,6 +587,7 @@ public class ESNextOSQVectorsScorerTests extends BaseVectorizationTests {
     @ParametersFactory
     public static Iterable<Object[]> parametersFactory() {
         var bitCombinations = List.of(
+            List.of((byte) 1, (byte) 1),
             List.of((byte) 1, (byte) 4),
             List.of((byte) 2, (byte) 4),
             List.of((byte) 4, (byte) 4),
