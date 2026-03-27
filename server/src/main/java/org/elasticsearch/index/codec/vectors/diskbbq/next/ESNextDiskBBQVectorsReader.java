@@ -71,7 +71,7 @@ import static org.elasticsearch.simdvec.ESNextOSQVectorsScorer.BULK_SIZE;
  * Default implementation of {@link IVFVectorsReader}. It scores the posting lists centroids using
  * brute force and then scores the top ones using the posting list.
  */
-public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVectorsReader.ESNextDiskBBQVectorsReader.NextFieldEntry>
+public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVectorsReader.NextFieldEntry>
     implements
     VectorPreconditioner {    private static final Logger logger = LogManager.getLogger(ESNextDiskBBQVectorsReader.class);
     private static final float GRAPH_CENTROID_OVERSAMPLE_MULTIPLIER = 1.5f;
