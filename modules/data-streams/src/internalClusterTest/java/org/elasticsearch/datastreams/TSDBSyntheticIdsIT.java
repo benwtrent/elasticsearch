@@ -1038,7 +1038,8 @@ public class TSDBSyntheticIdsIT extends ESIntegTestCase {
                         Uid.decodeId(index.uid()),
                         index.source(),
                         XContentHelper.xContentType(index.source()),
-                        index.routing()
+                        index.routing(),
+                        index.slice()
                     )
                 );
                 assertThat(parsedDocument.id(), equalTo(expectedDocId));

@@ -75,6 +75,7 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
     private static final long SHALLOW_SIZE = RamUsageEstimator.shallowSizeOfInstance(IndexRequest.class);
 
     private static final TransportVersion INDEX_REQUEST_INCLUDE_TSID = TransportVersion.fromName("index_request_include_tsid");
+    private static final TransportVersion INDEX_REQUEST_INCLUDE_SLICE = TransportVersion.fromName("index_request_include_slice");
     private static final TransportVersion INDEX_SOURCE = TransportVersion.fromName("index_source");
     static final TransportVersion INGEST_REQUEST_DYNAMIC_TEMPLATE_PARAMS = TransportVersion.fromName(
         "ingest_request_dynamic_template_params"
@@ -99,6 +100,8 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
     private String id;
     @Nullable
     private String routing;
+    @Nullable
+    private String slice;
 
     private final IndexSource indexSource;
 
@@ -163,6 +166,9 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
         super(shardId, in);
         id = in.readOptionalString();
         routing = in.readOptionalString();
+        if (in.getTransportVersion().supports(INDEX_REQUEST_INCLUDE_SLICE)) {
+            slice = in.readOptionalString();
+        }
         boolean beforeSourceContext = in.getTransportVersion().supports(INDEX_SOURCE) == false;
         BytesReference source;
         IndexSource localIndexSource = null;
@@ -350,6 +356,19 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
     @Override
     public String routing() {
         return this.routing;
+    }
+
+    public IndexRequest slice(@Nullable String slice) {
+        if (slice != null && slice.isEmpty()) {
+            this.slice = null;
+        } else {
+            this.slice = slice;
+        }
+        return this;
+    }
+
+    public @Nullable String slice() {
+        return this.slice;
     }
 
     /**
@@ -743,6 +762,11 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
     private void writeBody(StreamOutput out) throws IOException {
         out.writeOptionalString(id);
         out.writeOptionalString(routing);
+        if (out.getTransportVersion().supports(INDEX_REQUEST_INCLUDE_SLICE)) {
+            out.writeOptionalString(slice);
+        } else if (slice != null) {
+            throw new IllegalStateException("cannot write slice to transport version [" + out.getTransportVersion() + "]");
+        }
         if (out.getTransportVersion().supports(INDEX_SOURCE)) {
             indexSource.writeTo(out);
         } else {

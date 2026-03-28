@@ -30,6 +30,7 @@ import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.index.mapper.RoutingFieldMapper;
 import org.elasticsearch.index.mapper.RuntimeField;
 import org.elasticsearch.index.mapper.SeqNoFieldMapper;
+import org.elasticsearch.index.mapper.SliceFieldMapper;
 import org.elasticsearch.index.mapper.SourceFieldMapper;
 import org.elasticsearch.index.mapper.TextFieldMapper;
 import org.elasticsearch.index.mapper.TimeSeriesIdFieldMapper;
@@ -48,6 +49,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
 import static org.elasticsearch.test.LambdaMatchers.falseWith;
 import static org.elasticsearch.test.LambdaMatchers.trueWith;
@@ -80,22 +82,34 @@ public class IndicesModuleTests extends ESTestCase {
         }
     });
 
-    private static final String[] EXPECTED_METADATA_FIELDS = new String[] {
-        IgnoredFieldMapper.NAME,
-        IdFieldMapper.NAME,
-        RoutingFieldMapper.NAME,
-        TimeSeriesIdFieldMapper.NAME,
-        TimeSeriesRoutingHashFieldMapper.NAME,
-        IndexFieldMapper.NAME,
-        IndexModeFieldMapper.NAME,
-        SourceFieldMapper.NAME,
-        IgnoredSourceFieldMapper.NAME,
-        NestedPathFieldMapper.NAME,
-        VersionFieldMapper.NAME,
-        SeqNoFieldMapper.NAME,
-        DocCountFieldMapper.NAME,
-        DataStreamTimestampFieldMapper.NAME,
-        FieldNamesFieldMapper.NAME };
+    private static List<String> expectedMetadataFields() {
+        Stream<String> maybeSlice = SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled() ? Stream.of(SliceFieldMapper.NAME) : Stream.empty();
+        return Stream.concat(Stream.of(IgnoredFieldMapper.NAME, IdFieldMapper.NAME, RoutingFieldMapper.NAME), maybeSlice)
+            .collect(
+                java.util.stream.Collectors.collectingAndThen(
+                    java.util.stream.Collectors.toCollection(ArrayList::new),
+                    list -> {
+                        list.addAll(
+                            List.of(
+                                TimeSeriesIdFieldMapper.NAME,
+                                TimeSeriesRoutingHashFieldMapper.NAME,
+                                IndexFieldMapper.NAME,
+                                IndexModeFieldMapper.NAME,
+                                SourceFieldMapper.NAME,
+                                IgnoredSourceFieldMapper.NAME,
+                                NestedPathFieldMapper.NAME,
+                                VersionFieldMapper.NAME,
+                                SeqNoFieldMapper.NAME,
+                                DocCountFieldMapper.NAME,
+                                DataStreamTimestampFieldMapper.NAME,
+                                FieldNamesFieldMapper.NAME
+                            )
+                        );
+                        return list;
+                    }
+                )
+            );
+    }
 
     public void testBuiltinMappers() {
         IndicesModule module = new IndicesModule(Collections.emptyList());
@@ -108,10 +122,11 @@ public class IndicesModuleTests extends ESTestCase {
             assertFalse(module.getMapperRegistry().getMetadataMapperParsers(version).isEmpty());
             Map<String, MetadataFieldMapper.TypeParser> metadataMapperParsers = module.getMapperRegistry()
                 .getMetadataMapperParsers(version);
-            assertEquals(EXPECTED_METADATA_FIELDS.length, metadataMapperParsers.size());
+            List<String> expected = expectedMetadataFields();
+            assertEquals(expected.size(), metadataMapperParsers.size());
             int i = 0;
             for (String field : metadataMapperParsers.keySet()) {
-                assertEquals(EXPECTED_METADATA_FIELDS[i++], field);
+                assertEquals(expected.get(i++), field);
             }
         }
         {
@@ -119,7 +134,7 @@ public class IndicesModuleTests extends ESTestCase {
                 IndexVersions.V_7_0_0,
                 IndexVersionUtils.getPreviousVersion(IndexVersions.V_8_0_0)
             );
-            assertEquals(EXPECTED_METADATA_FIELDS.length - 1, module.getMapperRegistry().getMetadataMapperParsers(version).size());
+            assertEquals(expectedMetadataFields().size() - 1, module.getMapperRegistry().getMetadataMapperParsers(version).size());
         }
     }
 
@@ -147,8 +162,9 @@ public class IndicesModuleTests extends ESTestCase {
     public void testGetBuiltInMetadataFields() {
         Set<String> builtInMetadataFields = IndicesModule.getBuiltInMetadataFields();
         int i = 0;
+        List<String> expected = expectedMetadataFields();
         for (String field : builtInMetadataFields) {
-            assertEquals(EXPECTED_METADATA_FIELDS[i++], field);
+            assertEquals(expected.get(i++), field);
         }
     }
 
