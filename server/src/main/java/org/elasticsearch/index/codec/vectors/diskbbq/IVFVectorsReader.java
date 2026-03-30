@@ -57,6 +57,7 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
     private final String clusterExtension;
     private final int versionDirectIo;
     private final float dynamicVisitRatio;
+    protected int versionMeta = -1;
 
     @SuppressWarnings("this-escape")
     protected IVFVectorsReader(
@@ -93,6 +94,7 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
                     state.segmentInfo.getId(),
                     state.segmentSuffix
                 );
+                this.versionMeta = versionMeta;
                 readFields(ivfMeta, versionMeta, genericReaders, loadReader);
             } catch (Throwable exception) {
                 priorE = exception;
