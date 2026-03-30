@@ -11,11 +11,11 @@ CSV_PATH="/mnt/data/all_results"
 COMPLETED_FILE="/mnt/data/all_results.txt"
 CONFIG_FILE="/tmp/bench_config.json"
 
-DATASETS=("dbpedia-entity-gte-base" "dbpedia-entity-E5-small" "hotpotqa-gte-base" "hotpotqa-E5-small")
-IVF_CLUSTER_SIZES=(16 32 64 128 256 512 1024)
-SECONDARY_CLUSTER_SIZES=(16 32 64 128 256 512)
-QUANTIZE_BITS=(1 2 4)
-CENTROID_HNSW_INDEXED=(false true)
+DATASETS=("dbpedia-entity-gte-base" "dbpedia-entity-E5-small" "hotpotqa-gte-base" "hotpotqa-E5-small" )
+IVF_CLUSTER_SIZES=(128 256 512 1024)
+SECONDARY_CLUSTER_SIZES=(16 32 64 128 256)
+QUANTIZE_BITS=(1 2 4 7)
+CENTROID_HNSW_INDEXED=(false)
 
 mkdir -p "$DATA_DIR" "$INDEX_DIR" "$LOG_DIR"
 mkdir -p "$ES_DIR/qa/vector/target"
@@ -30,27 +30,29 @@ current=0
 for dataset in "${DATASETS[@]}"; do
   for ivf_size in "${IVF_CLUSTER_SIZES[@]}"; do
     for sec_size in "${SECONDARY_CLUSTER_SIZES[@]}"; do
-      current=$((current + 1))
-      run_key="${dataset}_ivf${ivf_size}_sec${sec_size}_quant${QUANTIZE_BITS}_hnsw${CENTROID_HNSW_INDEXED}"
+      for q_bits in "${QUANTIZE_BITS[@]}"; do
+        for hnsw_indexed in "${CENTROID_HNSW_INDEXED[@]}"; do
+          current=$((current + 1))
+          run_key="${dataset}_ivf${ivf_size}_sec${sec_size}_quant${q_bits}_hnsw${hnsw_indexed}"
 
-      if grep -qF "$run_key" "$COMPLETED_FILE"; then
-        echo "[$current/$total_combos] SKIP (already done): $run_key"
-        continue
-      fi
+          if grep -qF "$run_key" "$COMPLETED_FILE"; then
+            echo "[$current/$total_combos] SKIP (already done): $run_key"
+            continue
+          fi
 
-      echo "[$current/$total_combos] START: $run_key"
-      log_file="$LOG_DIR/${run_key}.log"
+          echo "[$current/$total_combos] START: $run_key"
+          log_file="$LOG_DIR/${run_key}.log"
 
-      cat > "$CONFIG_FILE" <<EOCONFIG
+          cat > "$CONFIG_FILE" <<EOCONFIG
 [
   {
     "dataset": "$dataset",
     "data_dir": "$DATA_DIR",
     "num_queries": 400,
-    "quantize_bits": $QUANTIZE_BITS,
+    "quantize_bits": $q_bits,
     "k": [100],
     "index_type": "ivf",
-    "centroids_indexed": $CENTROID_HNSW_INDEXED,
+    "centroids_indexed": $hnsw_indexed,
     "ivf_cluster_size": $ivf_size,
     "secondary_cluster_size": $sec_size,
     "index_threads": 16,
@@ -66,22 +68,24 @@ for dataset in "${DATASETS[@]}"; do
 ]
 EOCONFIG
 
-      if ./gradlew :qa:vector:checkVec --args="$CONFIG_FILE --csv=$CSV_PATH" \
-            > "$log_file" 2>&1; then
-        echo "$run_key" >> "$COMPLETED_FILE"
-        echo "[$current/$total_combos] DONE: $run_key"
-      else
-        echo "[$current/$total_combos] FAILED: $run_key (see $log_file)"
-      fi
+          if ./gradlew :qa:vector:checkVec --args="$CONFIG_FILE --csv=$CSV_PATH" \
+                > "$log_file" 2>&1; then
+            echo "$run_key" >> "$COMPLETED_FILE"
+            echo "[$current/$total_combos] DONE: $run_key"
+          else
+            echo "[$current/$total_combos] FAILED: $run_key (see $log_file)"
+          fi
 
-      rm -rf "$INDEX_DIR"/*
+          rm -rf "$INDEX_DIR"/*
+        done
+      done
     done
   done
 done
 
 echo ""
 echo "========================================="
-echo "Benchmark complete (HNSW centroids)."
+echo "Benchmark complete"
 echo "Index CSV:  ${CSV_PATH}_index.csv"
 echo "Search CSV: ${CSV_PATH}_search.csv"
 echo "========================================="
