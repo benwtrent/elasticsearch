@@ -69,11 +69,10 @@ public class SliceFieldMapperTests extends MetadataMapperTestCase {
 
     public void testSliceEnabledRequiresSliceValue() throws Exception {
         assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
-        DocumentMapper docMapper = createDocumentMapper(topMapping(b -> b.startObject(SliceFieldMapper.NAME).field("enabled", true).endObject()));
-        Exception e = expectThrows(
-            DocumentParsingException.class,
-            () -> docMapper.parse(source(b -> b.field("field", "value")))
+        DocumentMapper docMapper = createDocumentMapper(
+            topMapping(b -> b.startObject(SliceFieldMapper.NAME).field("enabled", true).endObject())
         );
+        Exception e = expectThrows(DocumentParsingException.class, () -> docMapper.parse(source(b -> b.field("field", "value"))));
         assertThat(e.getCause().getMessage(), containsString("Slice is required"));
     }
 
@@ -90,7 +89,9 @@ public class SliceFieldMapperTests extends MetadataMapperTestCase {
 
     public void testSliceEnabledIndexesDocValues() throws Exception {
         assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
-        DocumentMapper docMapper = createDocumentMapper(topMapping(b -> b.startObject(SliceFieldMapper.NAME).field("enabled", true).endObject()));
+        DocumentMapper docMapper = createDocumentMapper(
+            topMapping(b -> b.startObject(SliceFieldMapper.NAME).field("enabled", true).endObject())
+        );
         BytesReference source = BytesReference.bytes(XContentFactory.jsonBuilder().startObject().field("field", "value").endObject());
         ParsedDocument doc = docMapper.parse(new SourceToParse("1", source, XContentType.JSON, null, "s1"));
         IndexableField sliceField = doc.rootDoc().getField(SliceFieldMapper.NAME);
@@ -98,4 +99,3 @@ public class SliceFieldMapperTests extends MetadataMapperTestCase {
         assertThat(sliceField.binaryValue().utf8ToString(), equalTo("s1"));
     }
 }
-

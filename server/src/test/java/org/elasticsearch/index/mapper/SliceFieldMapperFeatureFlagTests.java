@@ -41,4 +41,3 @@ public class SliceFieldMapperFeatureFlagTests extends MapperServiceTestCase {
         assertThat(e.getMessage(), containsString("_slice"));
     }
 }
-

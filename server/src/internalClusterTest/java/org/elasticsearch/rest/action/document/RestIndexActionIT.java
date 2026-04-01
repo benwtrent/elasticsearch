@@ -12,14 +12,17 @@ package org.elasticsearch.rest.action.document;
 import org.elasticsearch.client.Request;
 import org.elasticsearch.client.ResponseException;
 import org.elasticsearch.common.io.Streams;
+import org.elasticsearch.index.mapper.SliceFieldMapper;
 import org.elasticsearch.rest.RestUtils;
 import org.elasticsearch.test.ESIntegTestCase;
+import org.elasticsearch.test.rest.ObjectPath;
 
 import java.io.InputStreamReader;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.hamcrest.Matchers.both;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.not;
 
 public class RestIndexActionIT extends ESIntegTestCase {
@@ -49,5 +52,106 @@ public class RestIndexActionIT extends ESIntegTestCase {
                 containsString("REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled)")
             )
         );
+    }
+
+    public void testSliceEndToEndWhenEnabled() throws Exception {
+        assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+
+        final String index = "test-slice-enabled";
+        var create = new Request("PUT", "/" + index);
+        create.setJsonEntity("""
+            {
+              "mappings": {
+                "_slice": { "enabled": true },
+                "properties": { "field": { "type": "keyword" } }
+              }
+            }""");
+        getRestClient().performRequest(create);
+
+        var indexReq = new Request("POST", "/" + index + "/_doc/1");
+        indexReq.addParameter("_slice", "s1");
+        indexReq.addParameter("refresh", "true");
+        indexReq.setJsonEntity("{\"field\":\"value\"}");
+        getRestClient().performRequest(indexReq);
+
+        var search = new Request("GET", "/" + index + "/_search");
+        search.addParameter("filter_path", "hits.hits.fields");
+        search.setJsonEntity("""
+            {
+              "query": { "match_all": {} },
+              "_source": false,
+              "fields": ["_slice"]
+            }""");
+        var response = ObjectPath.createFromResponse(getRestClient().performRequest(search));
+        assertThat(response.evaluate("hits.hits.0.fields._slice.0"), equalTo("s1"));
+    }
+
+    public void testSliceMissingWhenEnabledFails() throws Exception {
+        assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+
+        final String index = "test-slice-required";
+        var create = new Request("PUT", "/" + index);
+        create.setJsonEntity("""
+            {
+              "mappings": {
+                "_slice": { "enabled": true },
+                "properties": { "field": { "type": "keyword" } }
+              }
+            }""");
+        getRestClient().performRequest(create);
+
+        var indexReq = new Request("POST", "/" + index + "/_doc/1");
+        indexReq.addParameter("refresh", "true");
+        indexReq.setJsonEntity("{\"field\":\"value\"}");
+
+        var exception = assertThrows(ResponseException.class, () -> getRestClient().performRequest(indexReq));
+        String response = Streams.copyToString(new InputStreamReader(exception.getResponse().getEntity().getContent(), UTF_8));
+        assertThat(response, containsString("Slice is required"));
+    }
+
+    public void testSliceProvidedWhenDisabledFails() throws Exception {
+        assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+
+        final String index = "test-slice-disabled";
+        var create = new Request("PUT", "/" + index);
+        create.setJsonEntity("""
+            {
+              "mappings": {
+                "_slice": { "enabled": false },
+                "properties": { "field": { "type": "keyword" } }
+              }
+            }""");
+        getRestClient().performRequest(create);
+
+        var indexReq = new Request("POST", "/" + index + "/_doc/1");
+        indexReq.addParameter("_slice", "s1");
+        indexReq.addParameter("refresh", "true");
+        indexReq.setJsonEntity("{\"field\":\"value\"}");
+
+        var exception = assertThrows(ResponseException.class, () -> getRestClient().performRequest(indexReq));
+        String response = Streams.copyToString(new InputStreamReader(exception.getResponse().getEntity().getContent(), UTF_8));
+        assertThat(response, containsString("Cannot provide [_slice]"));
+    }
+
+    public void testSliceParamRejectedWhenFeatureDisabled() throws Exception {
+        assumeFalse("slice mapper feature flag must be disabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+
+        final String index = "test-slice-feature-disabled";
+        var create = new Request("PUT", "/" + index);
+        create.setJsonEntity("""
+            {
+              "mappings": {
+                "properties": { "field": { "type": "keyword" } }
+              }
+            }""");
+        getRestClient().performRequest(create);
+
+        var indexReq = new Request("POST", "/" + index + "/_doc/1");
+        indexReq.addParameter("_slice", "s1");
+        indexReq.setJsonEntity("{\"field\":\"value\"}");
+
+        var exception = assertThrows(ResponseException.class, () -> getRestClient().performRequest(indexReq));
+        String response = Streams.copyToString(new InputStreamReader(exception.getResponse().getEntity().getContent(), UTF_8));
+        assertThat(response, containsString("request does not support [_slice]"));
     }
 }

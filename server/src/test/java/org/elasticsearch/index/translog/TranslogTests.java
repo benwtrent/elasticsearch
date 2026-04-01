@@ -49,6 +49,7 @@ import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.IndexVersion;
+import org.elasticsearch.index.SliceTransportVersions;
 import org.elasticsearch.index.VersionType;
 import org.elasticsearch.index.engine.Engine;
 import org.elasticsearch.index.engine.Engine.Operation.Origin;
@@ -482,7 +483,7 @@ public class TranslogTests extends ESTestCase {
         translog.add(operation);
 
         final int sourceLength = operation.source().length();
-        final long indexSliceOverhead = TransportVersion.current().supports(Translog.TRANSLOG_INDEX_INCLUDE_SLICE) ? 1L : 0L;
+        final long indexSliceOverhead = TransportVersion.current().supports(SliceTransportVersions.INCLUDE_SLICE) ? 1L : 0L;
         {
             waitForPositiveAge();
             final TranslogStats stats = stats();
@@ -549,21 +550,28 @@ public class TranslogTests extends ESTestCase {
                 builder.startObject();
                 copy.toXContent(builder, ToXContent.EMPTY_PARAMS);
                 builder.endObject();
-                assertThat(Strings.toString(builder), equalTo(XContentHelper.stripWhitespace(Strings.format("""
-                    {
-                      "translog": {
-                        "operations": 4,
-                        "size_in_bytes": %s,
-                        "uncommitted_operations": 4,
-                        "uncommitted_size_in_bytes": %s,
-                        "earliest_last_modified_age": %s
-                      }
-                    }""", 328L + sourceLength, 273L + sourceLength, stats.getEarliestLastModifiedAge()))));
-                    }""",
-                    328L + indexSliceOverhead + sourceLength,
-                    273L + indexSliceOverhead + sourceLength,
-                    stats.getEarliestLastModifiedAge()
-                ))));
+                assertThat(
+                    Strings.toString(builder),
+                    equalTo(
+                        XContentHelper.stripWhitespace(
+                            Strings.format(
+                                """
+                                    {
+                                      "translog": {
+                                        "operations": 4,
+                                        "size_in_bytes": %s,
+                                        "uncommitted_operations": 4,
+                                        "uncommitted_size_in_bytes": %s,
+                                        "earliest_last_modified_age": %s
+                                      }
+                                    }""",
+                                328L + indexSliceOverhead + sourceLength,
+                                273L + indexSliceOverhead + sourceLength,
+                                stats.getEarliestLastModifiedAge()
+                            )
+                        )
+                    )
+                );
             }
         }
         translog.getDeletionPolicy().setLocalCheckpointOfSafeCommit(randomLongBetween(3, Long.MAX_VALUE));

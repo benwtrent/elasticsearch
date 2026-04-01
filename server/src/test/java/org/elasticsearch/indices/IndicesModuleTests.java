@@ -85,30 +85,25 @@ public class IndicesModuleTests extends ESTestCase {
     private static List<String> expectedMetadataFields() {
         Stream<String> maybeSlice = SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled() ? Stream.of(SliceFieldMapper.NAME) : Stream.empty();
         return Stream.concat(Stream.of(IgnoredFieldMapper.NAME, IdFieldMapper.NAME, RoutingFieldMapper.NAME), maybeSlice)
-            .collect(
-                java.util.stream.Collectors.collectingAndThen(
-                    java.util.stream.Collectors.toCollection(ArrayList::new),
-                    list -> {
-                        list.addAll(
-                            List.of(
-                                TimeSeriesIdFieldMapper.NAME,
-                                TimeSeriesRoutingHashFieldMapper.NAME,
-                                IndexFieldMapper.NAME,
-                                IndexModeFieldMapper.NAME,
-                                SourceFieldMapper.NAME,
-                                IgnoredSourceFieldMapper.NAME,
-                                NestedPathFieldMapper.NAME,
-                                VersionFieldMapper.NAME,
-                                SeqNoFieldMapper.NAME,
-                                DocCountFieldMapper.NAME,
-                                DataStreamTimestampFieldMapper.NAME,
-                                FieldNamesFieldMapper.NAME
-                            )
-                        );
-                        return list;
-                    }
-                )
-            );
+            .collect(java.util.stream.Collectors.collectingAndThen(java.util.stream.Collectors.toCollection(ArrayList::new), list -> {
+                list.addAll(
+                    List.of(
+                        TimeSeriesIdFieldMapper.NAME,
+                        TimeSeriesRoutingHashFieldMapper.NAME,
+                        IndexFieldMapper.NAME,
+                        IndexModeFieldMapper.NAME,
+                        SourceFieldMapper.NAME,
+                        IgnoredSourceFieldMapper.NAME,
+                        NestedPathFieldMapper.NAME,
+                        VersionFieldMapper.NAME,
+                        SeqNoFieldMapper.NAME,
+                        DocCountFieldMapper.NAME,
+                        DataStreamTimestampFieldMapper.NAME,
+                        FieldNamesFieldMapper.NAME
+                    )
+                );
+                return list;
+            }));
     }
 
     public void testBuiltinMappers() {

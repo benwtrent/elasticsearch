@@ -18,6 +18,7 @@ import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.node.DiscoveryNodeUtils;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.common.bytes.BytesArray;
+import org.elasticsearch.index.mapper.SliceFieldMapper;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.action.document.RestIndexAction.AutoIdHandler;
@@ -27,6 +28,7 @@ import org.elasticsearch.test.rest.RestActionTestCase;
 import org.elasticsearch.xcontent.XContentType;
 import org.junit.Before;
 
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.hamcrest.Matchers.equalTo;
@@ -74,5 +76,40 @@ public final class RestIndexActionTests extends RestActionTestCase {
         );
         dispatchRequest(autoIdRequest);
         assertThat(executeCalled.get(), equalTo(true));
+    }
+
+    public void testSliceParamParsedWhenFeatureEnabled() {
+        assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+        SetOnce<Boolean> executeCalled = new SetOnce<>();
+        verifyingClient.setExecuteVerifier((actionType, request) -> {
+            assertThat(request, instanceOf(IndexRequest.class));
+            assertThat(((IndexRequest) request).slice(), equalTo("s1"));
+            executeCalled.set(true);
+            return new IndexResponse(new ShardId("test", "test", 0), "id", 0, 0, 0, true);
+        });
+        RestRequest indexRequest = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.POST)
+            .withPath("/some_index/_doc/1")
+            .withParams(Map.of("index", "some_index", "id", "1", "_slice", "s1"))
+            .withContent(new BytesArray("{}"), XContentType.JSON)
+            .build();
+        clusterStateSupplier.set(
+            ClusterState.builder(ClusterName.DEFAULT).nodes(DiscoveryNodes.builder().add(DiscoveryNodeUtils.create("test")).build()).build()
+        );
+        dispatchRequest(indexRequest);
+        assertThat(executeCalled.get(), equalTo(true));
+    }
+
+    public void testSliceParamRejectedWhenFeatureDisabled() {
+        assumeFalse("slice mapper feature flag must be disabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+        RestRequest indexRequest = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.POST)
+            .withPath("/some_index/_doc/1")
+            .withParams(Map.of("index", "some_index", "id", "1", "_slice", "s1"))
+            .withContent(new BytesArray("{}"), XContentType.JSON)
+            .build();
+        clusterStateSupplier.set(
+            ClusterState.builder(ClusterName.DEFAULT).nodes(DiscoveryNodes.builder().add(DiscoveryNodeUtils.create("test")).build()).build()
+        );
+        IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> dispatchRequest(indexRequest));
+        assertThat(e.getMessage(), equalTo("request does not support [_slice]"));
     }
 }
