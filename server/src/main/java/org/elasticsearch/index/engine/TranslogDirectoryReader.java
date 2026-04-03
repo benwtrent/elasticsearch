@@ -200,7 +200,7 @@ final class TranslogDirectoryReader extends DirectoryReader {
     ) {
         final String id = Uid.decodeId(operation.uid());
         final ParsedDocument parsedDocs = documentParser.parseDocument(
-            new SourceToParse(id, operation.source(), XContentHelper.xContentType(operation.source()), operation.routing()),
+            new SourceToParse(id, operation.source(), XContentHelper.xContentType(operation.source()), operation.routing(), operation.slice()),
             mappingLookup
         );
 

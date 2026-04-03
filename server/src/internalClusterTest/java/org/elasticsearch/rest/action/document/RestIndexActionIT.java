@@ -61,6 +61,9 @@ public class RestIndexActionIT extends ESIntegTestCase {
         var create = new Request("PUT", "/" + index);
         create.setJsonEntity("""
             {
+              "settings": {
+                "index.sort.field": ["_slice"]
+              },
               "mappings": {
                 "_slice": { "enabled": true },
                 "properties": { "field": { "type": "keyword" } }
@@ -93,6 +96,9 @@ public class RestIndexActionIT extends ESIntegTestCase {
         var create = new Request("PUT", "/" + index);
         create.setJsonEntity("""
             {
+              "settings": {
+                "index.sort.field": ["_slice"]
+              },
               "mappings": {
                 "_slice": { "enabled": true },
                 "properties": { "field": { "type": "keyword" } }
@@ -153,5 +159,30 @@ public class RestIndexActionIT extends ESIntegTestCase {
         var exception = assertThrows(ResponseException.class, () -> getRestClient().performRequest(indexReq));
         String response = Streams.copyToString(new InputStreamReader(exception.getResponse().getEntity().getContent(), UTF_8));
         assertThat(response, containsString("request does not support [_slice]"));
+    }
+
+    public void testSliceNotAllowedInTimeSeriesMode() throws Exception {
+        assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+
+        final String index = "test-slice-tsdb";
+        var create = new Request("PUT", "/" + index);
+        create.setJsonEntity("""
+            {
+              "settings": {
+                "index.mode": "time_series",
+                "index.routing_path": ["dim"]
+              },
+              "mappings": {
+                "_slice": { "enabled": true },
+                "properties": {
+                  "@timestamp": { "type": "date" },
+                  "dim": { "type": "keyword", "time_series_dimension": true }
+                }
+              }
+            }""");
+
+        var exception = assertThrows(ResponseException.class, () -> getRestClient().performRequest(create));
+        String response = Streams.copyToString(new InputStreamReader(exception.getResponse().getEntity().getContent(), UTF_8));
+        assertThat(response, containsString("[_slice] is not supported in [index.mode=time_series]"));
     }
 }

@@ -11,6 +11,7 @@ package org.elasticsearch.index.mapper;
 
 import org.apache.lucene.index.IndexableField;
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.xcontent.XContentFactory;
 import org.elasticsearch.xcontent.XContentType;
 
@@ -21,6 +22,14 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
 
 public class SliceFieldMapperTests extends MetadataMapperTestCase {
+
+    @Override
+    protected Settings getIndexSettings() {
+        if (SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled() == false) {
+            return super.getIndexSettings();
+        }
+        return Settings.builder().put(super.getIndexSettings()).put("index.sort.field", SliceFieldMapper.NAME).build();
+    }
 
     @Override
     protected String fieldName() {

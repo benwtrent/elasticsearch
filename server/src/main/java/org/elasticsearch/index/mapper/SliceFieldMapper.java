@@ -13,6 +13,8 @@ import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.util.FeatureFlag;
+import org.elasticsearch.index.IndexMode;
+import org.elasticsearch.index.IndexSortConfig;
 import org.elasticsearch.index.fielddata.FieldData;
 import org.elasticsearch.index.fielddata.FieldDataContext;
 import org.elasticsearch.index.fielddata.IndexFieldData;
@@ -41,10 +43,16 @@ public class SliceFieldMapper extends MetadataFieldMapper {
 
     public static class Builder extends MetadataFieldMapper.Builder {
 
+        private final IndexSortConfig indexSortConfig;
         private final Parameter<Boolean> enabled = Parameter.boolParam("enabled", false, m -> toType(m).enabled, false);
 
-        public Builder() {
+        public Builder(IndexSortConfig indexSortConfig) {
             super(NAME);
+            this.indexSortConfig = indexSortConfig;
+        }
+
+        public Builder() {
+            this(null);
         }
 
         @Override
@@ -59,11 +67,21 @@ public class SliceFieldMapper extends MetadataFieldMapper {
 
         @Override
         public SliceFieldMapper build() {
+            if (enabled.getValue() && indexSortConfig != null && indexSortConfig.hasPrimarySortOnField(NAME) == false) {
+                throw new IllegalArgumentException(
+                    "[" + NAME + "] requires primary index sort field [" + NAME + "] when enabled; set [index.sort.field] to [" + NAME + "]"
+                );
+            }
             return enabled.getValue() ? ENABLED_INSTANCE : DISABLED_INSTANCE;
         }
     }
 
-    public static final TypeParser PARSER = new ConfigurableTypeParser(c -> new Builder());
+    public static final TypeParser PARSER = new ConfigurableTypeParser(c -> {
+        if (c.getIndexSettings().getMode() == IndexMode.TIME_SERIES) {
+            throw new IllegalArgumentException("[" + NAME + "] is not supported in [index.mode=time_series]");
+        }
+        return new Builder(c.getIndexSettings().getIndexSortConfig());
+    });
 
     static final class SliceFieldType extends MappedFieldType {
         static final SliceFieldType INSTANCE = new SliceFieldType();

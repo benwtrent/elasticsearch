@@ -36,7 +36,7 @@ public class ParsedDocument {
 
     private final String routing;
 
-    private final @org.elasticsearch.core.Nullable String slice;
+    private final String slice;
 
     private final List<LuceneDocument> documents;
 
@@ -148,7 +148,7 @@ public class ParsedDocument {
         SeqNoFieldMapper.SequenceIDFields seqID,
         String id,
         String routing,
-        @org.elasticsearch.core.Nullable String slice,
+        String slice,
         List<LuceneDocument> documents,
         BytesReference source,
         XContentType xContentType,
@@ -187,7 +187,7 @@ public class ParsedDocument {
         return this.routing;
     }
 
-    public @org.elasticsearch.core.Nullable String slice() {
+    public String slice() {
         return this.slice;
     }
 

@@ -342,7 +342,7 @@ public abstract class DocumentParserContext {
         return mappingParserContext.getIndexSettings().getMode() == IndexMode.TIME_SERIES ? null : sourceToParse.routing();
     }
 
-    public final @org.elasticsearch.core.Nullable String slice() {
+    public final @Nullable String slice() {
         return sourceToParse.slice();
     }
 
