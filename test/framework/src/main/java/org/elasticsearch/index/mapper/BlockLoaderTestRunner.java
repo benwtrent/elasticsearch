@@ -135,7 +135,6 @@ public class BlockLoaderTestRunner {
                     BytesReference.bytes(documentXContent),
                     XContentType.JSON,
                     null,
-                    null,
                     Map.of(),
                     Map.of(),
                     true,

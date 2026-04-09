@@ -84,9 +84,6 @@ public final class DocumentParser {
         if (source.source() != null && source.source().length() == 0) {
             throw new DocumentParsingException(new XContentLocation(0, 0), "failed to parse, document is empty");
         }
-        if (source.slice() != null && SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled() == false) {
-            throw new DocumentParsingException(XContentLocation.UNKNOWN, "request does not support [_slice]");
-        }
         final RootDocumentParserContext context;
 
         try (
@@ -123,7 +120,6 @@ public final class DocumentParser {
             context.seqID(),
             context.id(),
             context.routing(),
-            context.slice(),
             context.reorderParentAndGetDocs(),
             context.sourceToParse().source(),
             context.sourceToParse().getXContentType(),

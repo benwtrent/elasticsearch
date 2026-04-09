@@ -475,7 +475,6 @@ public abstract class MapperServiceTestCase extends FieldTypeTestCase {
             BytesReference.bytes(builder),
             XContentType.JSON,
             routing,
-            null,
             dynamicTemplates,
             dynamicTemplateParams,
             true,

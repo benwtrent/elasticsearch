@@ -19,6 +19,7 @@ import org.elasticsearch.common.Strings;
 import org.elasticsearch.core.Booleans;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.features.NodeFeature;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestRequest;
@@ -263,7 +264,23 @@ public class RestSearchAction extends BaseRestHandler {
         if (scroll != null) {
             searchRequest.scroll(parseTimeValue(scroll, null, "scroll"));
         }
-        searchRequest.routing(request.param("routing"));
+        final String routing = request.param("routing");
+        final String slice = request.param("_slice");
+        if (slice != null) {
+            if (SliceIndexing.SLICE_FEATURE_FLAG.isEnabled() == false) {
+                throw new IllegalArgumentException("request does not support [_slice]");
+            }
+            if (routing != null) {
+                throw new IllegalArgumentException("[routing] is not allowed together with [_slice]");
+            }
+            if (SliceIndexing.SLICE_ALL.equals(slice)) {
+                searchRequest.routing(SliceIndexing.SLICE_ALL_ROUTING_MARKER);
+            } else {
+                searchRequest.routing(slice);
+            }
+        } else {
+            searchRequest.routing(routing);
+        }
         searchRequest.preference(request.param("preference"));
         IndicesOptions indicesOptions = IndicesOptions.fromRequest(request, searchRequest.indicesOptions());
         if (crossProjectEnabled.orElse(false) && searchRequest.allowsCrossProject()) {

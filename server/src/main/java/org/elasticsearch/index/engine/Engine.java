@@ -1982,10 +1982,6 @@ public abstract class Engine implements Closeable {
             return this.doc.routing();
         }
 
-        public @Nullable String slice() {
-            return this.doc.slice();
-        }
-
         public List<LuceneDocument> docs() {
             return this.doc.docs();
         }

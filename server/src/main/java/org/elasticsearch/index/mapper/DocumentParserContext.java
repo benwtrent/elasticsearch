@@ -10,6 +10,7 @@
 package org.elasticsearch.index.mapper;
 
 import org.apache.lucene.document.Field;
+import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.time.DateFormatter;
@@ -18,6 +19,7 @@ import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.IndexVersions;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.analysis.IndexAnalyzers;
 import org.elasticsearch.index.mapper.MapperService.MergeReason;
 import org.elasticsearch.index.mapper.vectors.VectorsFormatProvider;
@@ -340,10 +342,6 @@ public abstract class DocumentParserContext {
 
     public final String routing() {
         return mappingParserContext.getIndexSettings().getMode() == IndexMode.TIME_SERIES ? null : sourceToParse.routing();
-    }
-
-    public final @Nullable String slice() {
-        return sourceToParse.slice();
     }
 
     /**
@@ -822,6 +820,12 @@ public abstract class DocumentParserContext {
             return this;
         }
         final LuceneDocument doc = new LuceneDocument(nestedMapper.fullPath(), doc());
+        if (indexSettings().isSliceEnabled() && SliceIndexing.SLICE_FEATURE_FLAG.isEnabled()) {
+            final String routing = routing();
+            if (routing != null) {
+                doc.add(SortedDocValuesField.indexedField(RoutingFieldMapper.NAME, new BytesRef(routing)));
+            }
+        }
         // We need to add the uid or id to this nested Lucene document too,
         // If we do not do this then when a document gets deleted only the root Lucene document gets deleted and
         // not the nested Lucene documents! Besides the fact that we would have zombie Lucene documents, the ordering of

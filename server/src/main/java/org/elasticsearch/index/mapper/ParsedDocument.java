@@ -36,8 +36,6 @@ public class ParsedDocument {
 
     private final String routing;
 
-    private final String slice;
-
     private final List<LuceneDocument> documents;
 
     private final long normalizedSize;
@@ -63,7 +61,6 @@ public class ParsedDocument {
             versionField,
             seqIdFields,
             "",
-            null,
             null,
             Collections.singletonList(document),
             new BytesArray("{}"),
@@ -134,7 +131,6 @@ public class ParsedDocument {
             seqIdFields,
             id,
             null,
-            null,
             Collections.singletonList(document),
             new BytesArray("{}"),
             XContentType.JSON,
@@ -148,7 +144,6 @@ public class ParsedDocument {
         SeqNoFieldMapper.SequenceIDFields seqID,
         String id,
         String routing,
-        String slice,
         List<LuceneDocument> documents,
         BytesReference source,
         XContentType xContentType,
@@ -159,7 +154,6 @@ public class ParsedDocument {
         this.seqID = seqID;
         this.id = id;
         this.routing = routing;
-        this.slice = slice;
         this.documents = documents;
         this.source = source;
         this.dynamicMappingsUpdate = dynamicMappingsUpdate;
@@ -185,10 +179,6 @@ public class ParsedDocument {
 
     public String routing() {
         return this.routing;
-    }
-
-    public String slice() {
-        return this.slice;
     }
 
     public LuceneDocument rootDoc() {

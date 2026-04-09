@@ -15,33 +15,54 @@ import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.index.IndexResponse;
 import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.cluster.metadata.IndexMetadata;
+import org.elasticsearch.cluster.metadata.Metadata;
+import org.elasticsearch.cluster.metadata.ProjectMetadata;
 import org.elasticsearch.cluster.node.DiscoveryNodeUtils;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
+import org.elasticsearch.cluster.project.ProjectIdResolver;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.bytes.BytesArray;
-import org.elasticsearch.index.mapper.SliceFieldMapper;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.IndexVersion;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.rest.RestRequest;
+import org.elasticsearch.rest.RestResponseUtils;
+import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.rest.action.document.RestIndexAction.AutoIdHandler;
 import org.elasticsearch.rest.action.document.RestIndexAction.CreateHandler;
+import org.elasticsearch.test.ClusterServiceUtils;
+import org.elasticsearch.test.rest.FakeRestChannel;
 import org.elasticsearch.test.rest.FakeRestRequest;
 import org.elasticsearch.test.rest.RestActionTestCase;
 import org.elasticsearch.xcontent.XContentType;
+import org.junit.After;
 import org.junit.Before;
 
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
 
 public final class RestIndexActionTests extends RestActionTestCase {
-    private final AtomicReference<ClusterState> clusterStateSupplier = new AtomicReference<>();
+    private ClusterService clusterService;
+    private ProjectIdResolver projectIdResolver;
 
     @Before
     public void setUpAction() {
-        controller().registerHandler(new RestIndexAction(null, null));
-        controller().registerHandler(new CreateHandler(null, null));
-        controller().registerHandler(new AutoIdHandler(null, null));
+        clusterService = ClusterServiceUtils.createClusterService(verifyingClient.threadPool(), Metadata.DEFAULT_PROJECT_ID);
+        projectIdResolver = () -> Metadata.DEFAULT_PROJECT_ID;
+        controller().registerHandler(new RestIndexAction(clusterService, projectIdResolver));
+        controller().registerHandler(new CreateHandler(clusterService, projectIdResolver));
+        controller().registerHandler(new AutoIdHandler(clusterService, projectIdResolver));
+    }
+
+    @After
+    public void tearDownAction() {
+        clusterService.close();
     }
 
     public void testCreateOpTypeValidation() {
@@ -71,19 +92,17 @@ public final class RestIndexActionTests extends RestActionTestCase {
             .withPath("/some_index/_doc")
             .withContent(new BytesArray("{}"), XContentType.JSON)
             .build();
-        clusterStateSupplier.set(
-            ClusterState.builder(ClusterName.DEFAULT).nodes(DiscoveryNodes.builder().add(DiscoveryNodeUtils.create("test")).build()).build()
-        );
+        ClusterServiceUtils.setState(clusterService, clusterState("some_index", false));
         dispatchRequest(autoIdRequest);
         assertThat(executeCalled.get(), equalTo(true));
     }
 
-    public void testSliceParamParsedWhenFeatureEnabled() {
-        assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+    public void testSliceParamParsedWhenFeatureEnabledAndIndexSliceEnabled() {
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
         SetOnce<Boolean> executeCalled = new SetOnce<>();
         verifyingClient.setExecuteVerifier((actionType, request) -> {
             assertThat(request, instanceOf(IndexRequest.class));
-            assertThat(((IndexRequest) request).slice(), equalTo("s1"));
+            assertThat(((IndexRequest) request).routing(), equalTo("s1"));
             executeCalled.set(true);
             return new IndexResponse(new ShardId("test", "test", 0), "id", 0, 0, 0, true);
         });
@@ -92,24 +111,65 @@ public final class RestIndexActionTests extends RestActionTestCase {
             .withParams(Map.of("index", "some_index", "id", "1", "_slice", "s1"))
             .withContent(new BytesArray("{}"), XContentType.JSON)
             .build();
-        clusterStateSupplier.set(
-            ClusterState.builder(ClusterName.DEFAULT).nodes(DiscoveryNodes.builder().add(DiscoveryNodeUtils.create("test")).build()).build()
-        );
+        ClusterServiceUtils.setState(clusterService, clusterState("some_index", true));
         dispatchRequest(indexRequest);
         assertThat(executeCalled.get(), equalTo(true));
     }
 
-    public void testSliceParamRejectedWhenFeatureDisabled() {
-        assumeFalse("slice mapper feature flag must be disabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+    public void testSliceParamRejectedWhenIndexSliceDisabled() {
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
         RestRequest indexRequest = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.POST)
             .withPath("/some_index/_doc/1")
             .withParams(Map.of("index", "some_index", "id", "1", "_slice", "s1"))
             .withContent(new BytesArray("{}"), XContentType.JSON)
             .build();
-        clusterStateSupplier.set(
-            ClusterState.builder(ClusterName.DEFAULT).nodes(DiscoveryNodes.builder().add(DiscoveryNodeUtils.create("test")).build()).build()
-        );
-        IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> dispatchRequest(indexRequest));
-        assertThat(e.getMessage(), equalTo("request does not support [_slice]"));
+        ClusterServiceUtils.setState(clusterService, clusterState("some_index", false));
+        FakeRestChannel channel = dispatchRequestWithChannel(indexRequest);
+        try (var response = channel.capturedResponse()) {
+            assertThat(response.status(), equalTo(RestStatus.BAD_REQUEST));
+            assertThat(RestResponseUtils.getBodyContent(response).utf8ToString(), containsString("illegal_argument_exception"));
+            assertThat(
+                RestResponseUtils.getBodyContent(response).utf8ToString(),
+                containsString("[_slice] is not allowed when [index.slice.enabled] is false")
+            );
+        }
+    }
+
+    public void testSliceParamRejectedWhenFeatureDisabled() {
+        assumeFalse("slice indexing feature flag must be disabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
+        RestRequest indexRequest = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.POST)
+            .withPath("/some_index/_doc/1")
+            .withParams(Map.of("index", "some_index", "id", "1", "_slice", "s1"))
+            .withContent(new BytesArray("{}"), XContentType.JSON)
+            .build();
+        ClusterServiceUtils.setState(clusterService, clusterState("some_index", true));
+        FakeRestChannel channel = dispatchRequestWithChannel(indexRequest);
+        try (var response = channel.capturedResponse()) {
+            assertThat(response.status(), equalTo(RestStatus.BAD_REQUEST));
+            assertThat(RestResponseUtils.getBodyContent(response).utf8ToString(), containsString("illegal_argument_exception"));
+            assertThat(RestResponseUtils.getBodyContent(response).utf8ToString(), containsString("request does not support [_slice]"));
+        }
+    }
+
+    private FakeRestChannel dispatchRequestWithChannel(RestRequest request) {
+        FakeRestChannel channel = new FakeRestChannel(request, true);
+        var threadContext = verifyingClient.threadPool().getThreadContext();
+        try (var ignore = threadContext.stashContext()) {
+            controller().dispatchRequest(request, channel, threadContext);
+        }
+        return channel;
+    }
+
+    private static ClusterState clusterState(String index, boolean sliceEnabled) {
+        Settings settings = Settings.builder()
+            .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
+            .put(IndexMetadata.SETTING_INDEX_UUID, "test-uuid")
+            .put(IndexSettings.SLICE_ENABLED.getKey(), sliceEnabled)
+            .build();
+        IndexMetadata imd = IndexMetadata.builder(index).settings(settings).numberOfShards(1).numberOfReplicas(0).build();
+        return ClusterState.builder(ClusterName.DEFAULT)
+            .metadata(Metadata.builder().put(ProjectMetadata.builder(Metadata.DEFAULT_PROJECT_ID).put(imd, true)).build())
+            .nodes(DiscoveryNodes.builder().add(DiscoveryNodeUtils.create("test")).build())
+            .build();
     }
 }

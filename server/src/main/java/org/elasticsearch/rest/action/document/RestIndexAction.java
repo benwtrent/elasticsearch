@@ -22,8 +22,9 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.bytes.ReleasableBytesReference;
 import org.elasticsearch.common.streams.StreamType;
 import org.elasticsearch.common.util.set.Sets;
+import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.VersionType;
-import org.elasticsearch.index.mapper.SliceFieldMapper;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestUtils;
@@ -131,14 +132,31 @@ public class RestIndexAction extends BaseRestHandler {
 
         IndexRequest indexRequest = new IndexRequest(index);
         indexRequest.id(request.param("id"));
-        indexRequest.routing(request.param("routing"));
+
+        final String routing = request.param("routing");
         final String slice = request.param("_slice");
-        if (slice != null) {
-            if (SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled() == false) {
-                throw new IllegalArgumentException("request does not support [_slice]");
-            }
-            indexRequest.slice(slice);
+        if (slice != null && SliceIndexing.SLICE_FEATURE_FLAG.isEnabled() == false) {
+            throw new IllegalArgumentException("request does not support [_slice]");
         }
+
+        final ProjectMetadata projectMetadata = clusterService.state().projectState(projectIdResolver.getProjectId()).metadata();
+        final boolean sliceEnabled = isSliceEnabledForWriteIndex(projectMetadata, index, indexRequest);
+
+        if (sliceEnabled) {
+            if (routing != null) {
+                throw new IllegalArgumentException("[routing] is not allowed when [index.slice.enabled] is true; use [_slice]");
+            }
+            if (slice == null) {
+                throw new IllegalArgumentException("[_slice] is required when [index.slice.enabled] is true");
+            }
+            indexRequest.routing(slice);
+        } else {
+            if (slice != null) {
+                throw new IllegalArgumentException("[_slice] is not allowed when [index.slice.enabled] is false");
+            }
+            indexRequest.routing(routing);
+        }
+
         indexRequest.setPipeline(request.param("pipeline"));
         indexRequest.indexSource().source(source, request.getXContentType());
         indexRequest.timeout(request.paramAsTime("timeout", IndexRequest.DEFAULT_TIMEOUT));
@@ -169,6 +187,22 @@ public class RestIndexAction extends BaseRestHandler {
                 )
             );
         };
+    }
+
+    private static boolean isSliceEnabledForWriteIndex(ProjectMetadata projectMetadata, String indexExpression, IndexRequest indexRequest) {
+        var abstraction = projectMetadata.getIndicesLookup().get(indexExpression);
+        if (abstraction == null) {
+            return false;
+        }
+        var writeIndex = abstraction.getWriteIndex(indexRequest, projectMetadata);
+        if (writeIndex == null) {
+            return false;
+        }
+        var indexMetadata = projectMetadata.index(writeIndex);
+        if (indexMetadata == null) {
+            return false;
+        }
+        return IndexSettings.SLICE_ENABLED.get(indexMetadata.getSettings());
     }
 
     private void validateStreamsParamRestrictions(RestRequest request, String index) {

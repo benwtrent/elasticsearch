@@ -75,6 +75,8 @@ import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.ActionLoggingFieldsProvider;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.IndexNotFoundException;
+import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.Rewriteable;
 import org.elasticsearch.index.shard.ShardId;
@@ -432,6 +434,20 @@ public class TransportSearchAction extends HandledTransportAction<SearchRequest,
                 timeProvider.absoluteStartMillis()
             );
             frozenIndexCheck(resolvedIndices);
+        }
+
+        if (SliceIndexing.SLICE_FEATURE_FLAG.isEnabled()) {
+            boolean anySliceEnabled = resolvedIndices.getConcreteLocalIndicesMetadata()
+                .values()
+                .stream()
+                .anyMatch(imd -> IndexSettings.SLICE_ENABLED.get(imd.getSettings()));
+            if (anySliceEnabled && original.routing() == null) {
+                originalListener.onFailure(new IllegalArgumentException("[_slice] is required when [index.slice.enabled] is true"));
+                return;
+            }
+            if (SliceIndexing.SLICE_ALL_ROUTING_MARKER.equals(original.routing())) {
+                original.routing((String) null);
+            }
         }
 
         final SearchSourceBuilder source = original.source();

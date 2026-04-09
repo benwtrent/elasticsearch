@@ -21,6 +21,7 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.fielddata.IndexFieldData;
 import org.elasticsearch.index.mapper.DataStreamTimestampFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
+import org.elasticsearch.index.mapper.RoutingFieldMapper;
 import org.elasticsearch.index.mapper.TimeSeriesIdFieldMapper;
 import org.elasticsearch.search.MultiValueMode;
 import org.elasticsearch.search.lookup.SearchLookup;
@@ -328,22 +329,38 @@ public final class IndexSortConfig {
         validateSortSettings(settings);
 
         List<String> fields = INDEX_SORT_FIELD_SETTING.get(settings);
-        sortSpecs = fields.stream().map(FieldSortSpec::new).toArray(FieldSortSpec[]::new);
+        FieldSortSpec[] specs = fields.stream().map(FieldSortSpec::new).toArray(FieldSortSpec[]::new);
 
         List<SortOrder> orders = INDEX_SORT_ORDER_SETTING.get(settings);
-        for (int i = 0; i < sortSpecs.length; i++) {
-            sortSpecs[i].order = orders.get(i);
+        for (int i = 0; i < specs.length; i++) {
+            specs[i].order = orders.get(i);
         }
 
         List<MultiValueMode> modes = INDEX_SORT_MODE_SETTING.get(settings);
-        for (int i = 0; i < sortSpecs.length; i++) {
-            sortSpecs[i].mode = modes.get(i);
+        for (int i = 0; i < specs.length; i++) {
+            specs[i].mode = modes.get(i);
         }
 
         List<String> missingValues = INDEX_SORT_MISSING_SETTING.get(settings);
-        for (int i = 0; i < sortSpecs.length; i++) {
-            sortSpecs[i].missingValue = missingValues.get(i);
+        for (int i = 0; i < specs.length; i++) {
+            specs[i].missingValue = missingValues.get(i);
         }
+
+        if (indexSettings.isSliceEnabled() && SliceIndexing.SLICE_FEATURE_FLAG.isEnabled()) {
+            if (specs.length == 0 || RoutingFieldMapper.NAME.equals(specs[0].field) == false) {
+                FieldSortSpec routing = new FieldSortSpec(RoutingFieldMapper.NAME);
+                routing.order = SortOrder.ASC;
+                routing.mode = MultiValueMode.MIN;
+                routing.missingValue = "_last";
+
+                FieldSortSpec[] newSpecs = new FieldSortSpec[specs.length + 1];
+                newSpecs[0] = routing;
+                System.arraycopy(specs, 0, newSpecs, 1, specs.length);
+                specs = newSpecs;
+            }
+        }
+
+        sortSpecs = specs;
     }
 
     /**

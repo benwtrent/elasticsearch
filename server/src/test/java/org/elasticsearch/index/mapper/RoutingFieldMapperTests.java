@@ -9,9 +9,13 @@
 
 package org.elasticsearch.index.mapper;
 
+import org.apache.lucene.index.DocValuesSkipIndexType;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.IndexSearcher;
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.search.lookup.SearchLookup;
 import org.elasticsearch.search.lookup.Source;
@@ -24,6 +28,8 @@ import java.util.List;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -84,5 +90,84 @@ public class RoutingFieldMapperTests extends MetadataMapperTestCase {
                 assertEquals(List.of("abcd"), valueFetcher.fetchValues(Source.empty(XContentType.JSON), 0, new ArrayList<>()));
             }
         );
+    }
+
+    public void testRoutingUsesDocValuesSkipperWhenSliceEnabled() throws Exception {
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
+
+        Settings settings = Settings.builder().put(getIndexSettings()).put(IndexSettings.SLICE_ENABLED.getKey(), true).build();
+        DocumentMapper docMapper = createMapperService(settings, mapping(b -> {})).documentMapper();
+
+        ParsedDocument doc = docMapper.parse(
+            new SourceToParse(
+                "1",
+                BytesReference.bytes(XContentFactory.jsonBuilder().startObject().field("field", "value").endObject()),
+                XContentType.JSON,
+                "routing_value"
+            )
+        );
+
+        var routingFields = doc.rootDoc().getFields(RoutingFieldMapper.NAME);
+        assertThat(routingFields.size(), not(equalTo(0)));
+
+        boolean foundIndexedSortedDv = false;
+        for (var f : routingFields) {
+            if (f.fieldType().docValuesType() == org.apache.lucene.index.DocValuesType.SORTED
+                && f.fieldType().docValuesSkipIndexType() != DocValuesSkipIndexType.NONE) {
+                foundIndexedSortedDv = true;
+                break;
+            }
+        }
+        assertTrue("expected an indexed SORTED doc values field for [_routing] in slice mode", foundIndexedSortedDv);
+    }
+
+    public void testNestedDocsAlsoHaveRoutingDocValuesWhenSliceEnabled() throws Exception {
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
+
+        Settings settings = Settings.builder().put(getIndexSettings()).put(IndexSettings.SLICE_ENABLED.getKey(), true).build();
+        MapperService mapperService = createMapperService(settings, mapping(b -> {
+            b.startObject("n");
+            b.field("type", "nested");
+            b.startObject("properties");
+            b.startObject("k").field("type", "keyword").endObject();
+            b.endObject();
+            b.endObject();
+        }));
+
+        ParsedDocument doc = mapperService.documentMapper()
+            .parse(
+                new SourceToParse(
+                    "1",
+                    BytesReference.bytes(
+                        XContentFactory.jsonBuilder()
+                            .startObject()
+                            .startArray("n")
+                            .startObject()
+                            .field("k", "v")
+                            .endObject()
+                            .endArray()
+                            .endObject()
+                    ),
+                    XContentType.JSON,
+                    "routing_value"
+                )
+            );
+
+        assertThat("expected nested lucene docs", doc.docs().size(), greaterThan(1));
+        // root doc is last; every other doc is a nested doc
+        for (int i = 0; i < doc.docs().size() - 1; i++) {
+            LuceneDocument nestedDoc = doc.docs().get(i);
+            var routingFields = nestedDoc.getFields(RoutingFieldMapper.NAME);
+            assertThat("nested doc missing [_routing] doc values", routingFields.size(), greaterThan(0));
+            boolean foundSkipper = false;
+            for (var f : routingFields) {
+                if (f.fieldType().docValuesType() == org.apache.lucene.index.DocValuesType.SORTED
+                    && f.fieldType().docValuesSkipIndexType() != DocValuesSkipIndexType.NONE) {
+                    foundSkipper = true;
+                    break;
+                }
+            }
+            assertTrue("expected skipper-enabled SORTED doc values for [_routing] on nested doc", foundSkipper);
+        }
     }
 }

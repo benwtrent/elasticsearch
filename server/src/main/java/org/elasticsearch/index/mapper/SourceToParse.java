@@ -29,8 +29,6 @@ public class SourceToParse {
 
     private final @Nullable String routing;
 
-    private final @Nullable String slice;
-
     private final XContentType xContentType;
 
     private final Map<String, String> dynamicTemplates;
@@ -46,7 +44,6 @@ public class SourceToParse {
         BytesReference source,
         XContentType xContentType,
         @Nullable String routing,
-        @Nullable String slice,
         Map<String, String> dynamicTemplates,
         Map<String, Map<String, String>> dynamicTemplateParams,
         boolean includeSourceOnError,
@@ -59,7 +56,6 @@ public class SourceToParse {
         this.source = source.hasArray() ? source : new BytesArray(source.toBytesRef());
         this.xContentType = Objects.requireNonNull(xContentType);
         this.routing = routing;
-        this.slice = slice;
         this.dynamicTemplates = Objects.requireNonNull(dynamicTemplates);
         this.dynamicTemplateParams = dynamicTemplateParams;
         this.includeSourceOnError = includeSourceOnError;
@@ -68,27 +64,11 @@ public class SourceToParse {
     }
 
     public SourceToParse(String id, BytesReference source, XContentType xContentType) {
-        this(id, source, xContentType, null, null, Map.of(), Map.of(), true, XContentMeteringParserDecorator.NOOP, null);
+        this(id, source, xContentType, null, Map.of(), Map.of(), true, XContentMeteringParserDecorator.NOOP, null);
     }
 
     public SourceToParse(String id, BytesReference source, XContentType xContentType, String routing) {
-        this(id, source, xContentType, routing, null, Map.of(), Map.of(), true, XContentMeteringParserDecorator.NOOP, null);
-    }
-
-    public SourceToParse(String id, BytesReference source, XContentType xContentType, @Nullable String routing, @Nullable String slice) {
-        this(id, source, xContentType, routing, slice, Map.of(), Map.of(), true, XContentMeteringParserDecorator.NOOP, null);
-    }
-
-    public SourceToParse(
-        String id,
-        BytesReference source,
-        XContentType xContentType,
-        String routing,
-        @Nullable String slice,
-        Map<String, String> dynamicTemplates,
-        BytesRef tsid
-    ) {
-        this(id, source, xContentType, routing, slice, dynamicTemplates, Map.of(), true, XContentMeteringParserDecorator.NOOP, tsid);
+        this(id, source, xContentType, routing, Map.of(), Map.of(), true, XContentMeteringParserDecorator.NOOP, null);
     }
 
     public SourceToParse(
@@ -99,7 +79,7 @@ public class SourceToParse {
         Map<String, String> dynamicTemplates,
         BytesRef tsid
     ) {
-        this(id, source, xContentType, routing, null, dynamicTemplates, tsid);
+        this(id, source, xContentType, routing, dynamicTemplates, Map.of(), true, XContentMeteringParserDecorator.NOOP, tsid);
     }
 
     public BytesReference source() {
@@ -123,10 +103,6 @@ public class SourceToParse {
 
     public @Nullable String routing() {
         return this.routing;
-    }
-
-    public @Nullable String slice() {
-        return this.slice;
     }
 
     /**

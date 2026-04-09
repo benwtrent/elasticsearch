@@ -10,8 +10,11 @@
 package org.elasticsearch.index.mapper;
 
 import org.apache.lucene.document.Field;
+import org.apache.lucene.document.SortedDocValuesField;
 import org.apache.lucene.document.StringField;
+import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.lucene.Lucene;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
 import org.elasticsearch.index.query.SearchExecutionContext;
 
@@ -25,7 +28,7 @@ public class RoutingFieldMapper extends MetadataFieldMapper {
 
     @Override
     public FieldMapper.Builder getMergeBuilder() {
-        return new Builder().init(this);
+        return new Builder(useDocValues).init(this);
     }
 
     public static class Defaults {
@@ -39,9 +42,11 @@ public class RoutingFieldMapper extends MetadataFieldMapper {
     public static class Builder extends MetadataFieldMapper.Builder {
 
         final Parameter<Boolean> required = Parameter.boolParam("required", false, m -> toType(m).required, Defaults.REQUIRED);
+        private final boolean useDocValues;
 
-        protected Builder() {
+        protected Builder(boolean useDocValues) {
             super(NAME);
+            this.useDocValues = useDocValues;
         }
 
         @Override
@@ -56,18 +61,29 @@ public class RoutingFieldMapper extends MetadataFieldMapper {
 
         @Override
         public RoutingFieldMapper build() {
-            return RoutingFieldMapper.get(required.getValue());
+            if (useDocValues) {
+                if (required.isConfigured() && required.getValue() == false) {
+                    throw new IllegalArgumentException("[_routing.required] cannot be set to [false] when [index.slice.enabled] is true");
+                }
+                return RoutingFieldMapper.get(true, true);
+            }
+            return RoutingFieldMapper.get(required.getValue(), false);
         }
     }
 
-    public static final TypeParser PARSER = new ConfigurableTypeParser(c -> new Builder());
+    public static final TypeParser PARSER = new ConfigurableTypeParser(c -> {
+        boolean sliceEnabled = c.getIndexSettings().isSliceEnabled() && SliceIndexing.SLICE_FEATURE_FLAG.isEnabled();
+        return new Builder(sliceEnabled);
+    });
 
-    public static final MappedFieldType FIELD_TYPE = new RoutingFieldType();
+    public static final MappedFieldType FIELD_TYPE = new RoutingFieldType(false);
+    private static final MappedFieldType DOC_VALUES_FIELD_TYPE = new RoutingFieldType(true);
 
     static final class RoutingFieldType extends StringFieldType {
 
-        private RoutingFieldType() {
-            super(NAME, IndexType.terms(true, false), true, TextSearchInfo.SIMPLE_MATCH_ONLY, Collections.emptyMap());
+        private RoutingFieldType(boolean hasDocValues) {
+            // TODO we need to ensure we have doc values skipper aka SortedDocValuesField.indexedField
+            super(NAME, IndexType.terms(true, hasDocValues), true, TextSearchInfo.SIMPLE_MATCH_ONLY, Collections.emptyMap());
         }
 
         @Override
@@ -85,19 +101,26 @@ public class RoutingFieldMapper extends MetadataFieldMapper {
      * Should we require {@code routing} on CRUD operations?
      */
     private final boolean required;
+    private final boolean useDocValues;
 
-    private static final RoutingFieldMapper REQUIRED = new RoutingFieldMapper(true);
-    private static final RoutingFieldMapper NOT_REQUIRED = new RoutingFieldMapper(false);
+    private static final RoutingFieldMapper REQUIRED = new RoutingFieldMapper(true, false);
+    private static final RoutingFieldMapper NOT_REQUIRED = new RoutingFieldMapper(false, false);
+    private static final RoutingFieldMapper REQUIRED_WITH_DOC_VALUES = new RoutingFieldMapper(true, true);
+    private static final RoutingFieldMapper NOT_REQUIRED_WITH_DOC_VALUES = new RoutingFieldMapper(false, true);
 
     private static final Map<String, NamedAnalyzer> ANALYZERS = Map.of(NAME, Lucene.KEYWORD_ANALYZER);
 
-    public static RoutingFieldMapper get(boolean required) {
+    public static RoutingFieldMapper get(boolean required, boolean useDocValues) {
+        if (useDocValues) {
+            return required ? REQUIRED_WITH_DOC_VALUES : NOT_REQUIRED_WITH_DOC_VALUES;
+        }
         return required ? REQUIRED : NOT_REQUIRED;
     }
 
-    private RoutingFieldMapper(boolean required) {
-        super(FIELD_TYPE);
+    private RoutingFieldMapper(boolean required, boolean useDocValues) {
+        super(useDocValues ? DOC_VALUES_FIELD_TYPE : FIELD_TYPE);
         this.required = required;
+        this.useDocValues = useDocValues;
     }
 
     @Override
@@ -117,7 +140,11 @@ public class RoutingFieldMapper extends MetadataFieldMapper {
         String routing = context.routing();
         if (routing != null) {
             context.doc().add(new StringField(fieldType().name(), routing, Field.Store.YES));
-            context.addToFieldNames(fieldType().name());
+            if (useDocValues) {
+                context.doc().add(SortedDocValuesField.indexedField(fieldType().name(), new BytesRef(routing)));
+            } else {
+                context.addToFieldNames(fieldType().name());
+            }
         }
     }
 

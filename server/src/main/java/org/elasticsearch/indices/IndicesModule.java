@@ -61,7 +61,6 @@ import org.elasticsearch.index.mapper.RootObjectMapperNamespaceValidator;
 import org.elasticsearch.index.mapper.RoutingFieldMapper;
 import org.elasticsearch.index.mapper.RuntimeField;
 import org.elasticsearch.index.mapper.SeqNoFieldMapper;
-import org.elasticsearch.index.mapper.SliceFieldMapper;
 import org.elasticsearch.index.mapper.SourceFieldMapper;
 import org.elasticsearch.index.mapper.TextFieldMapper;
 import org.elasticsearch.index.mapper.TimeSeriesIdFieldMapper;
@@ -285,9 +284,6 @@ public class IndicesModule extends AbstractModule {
         // (so will benefit from "fields: []" early termination
         builtInMetadataMappers.put(IdFieldMapper.NAME, IdFieldMapper.PARSER);
         builtInMetadataMappers.put(RoutingFieldMapper.NAME, RoutingFieldMapper.PARSER);
-        if (SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled()) {
-            builtInMetadataMappers.put(SliceFieldMapper.NAME, SliceFieldMapper.PARSER);
-        }
         builtInMetadataMappers.put(TimeSeriesIdFieldMapper.NAME, TimeSeriesIdFieldMapper.PARSER);
         builtInMetadataMappers.put(TimeSeriesRoutingHashFieldMapper.NAME, TimeSeriesRoutingHashFieldMapper.PARSER);
         builtInMetadataMappers.put(IndexFieldMapper.NAME, IndexFieldMapper.PARSER);

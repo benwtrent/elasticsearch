@@ -204,7 +204,6 @@ public class TransportSimulateBulkAction extends TransportAbstractBulkAction {
             request.source(),
             request.getContentType(),
             request.routing(),
-            request.slice(),
             request.getDynamicTemplates(),
             request.getDynamicTemplateParams(),
             request.getIncludeSourceOnError(),

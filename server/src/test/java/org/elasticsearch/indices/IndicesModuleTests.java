@@ -30,7 +30,6 @@ import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.index.mapper.RoutingFieldMapper;
 import org.elasticsearch.index.mapper.RuntimeField;
 import org.elasticsearch.index.mapper.SeqNoFieldMapper;
-import org.elasticsearch.index.mapper.SliceFieldMapper;
 import org.elasticsearch.index.mapper.SourceFieldMapper;
 import org.elasticsearch.index.mapper.TextFieldMapper;
 import org.elasticsearch.index.mapper.TimeSeriesIdFieldMapper;
@@ -83,8 +82,7 @@ public class IndicesModuleTests extends ESTestCase {
     });
 
     private static List<String> expectedMetadataFields() {
-        Stream<String> maybeSlice = SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled() ? Stream.of(SliceFieldMapper.NAME) : Stream.empty();
-        return Stream.concat(Stream.of(IgnoredFieldMapper.NAME, IdFieldMapper.NAME, RoutingFieldMapper.NAME), maybeSlice)
+        return Stream.of(IgnoredFieldMapper.NAME, IdFieldMapper.NAME, RoutingFieldMapper.NAME)
             .collect(java.util.stream.Collectors.collectingAndThen(java.util.stream.Collectors.toCollection(ArrayList::new), list -> {
                 list.addAll(
                     List.of(

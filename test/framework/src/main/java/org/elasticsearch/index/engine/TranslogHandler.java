@@ -104,8 +104,7 @@ public class TranslogHandler implements Engine.TranslogRecoveryRunner {
                         Uid.decodeId(index.uid()),
                         index.source(),
                         XContentHelper.xContentType(index.source()),
-                        index.routing(),
-                        index.slice()
+                        index.routing()
                     ),
                     index.seqNo(),
                     index.primaryTerm(),

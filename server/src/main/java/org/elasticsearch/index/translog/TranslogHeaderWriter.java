@@ -14,7 +14,6 @@ import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.RecyclerBytesStreamOutput;
 import org.elasticsearch.common.io.stream.StreamOutputHelper;
 import org.elasticsearch.common.util.ByteUtils;
-import org.elasticsearch.index.SliceTransportVersions;
 
 import java.io.IOException;
 
@@ -60,7 +59,6 @@ public final class TranslogHeaderWriter {
         throws IOException {
         BytesRef uid = index.uid();
         String routing = index.routing();
-        String slice = index.slice();
 
         int off = page.offset;
         byte[] bytes = page.bytes;
@@ -79,14 +77,6 @@ public final class TranslogHeaderWriter {
         // Write variable length items in header
         if (routing != null) {
             buffer.writeString(routing);
-        }
-
-        if (buffer.getTransportVersion().supports(SliceTransportVersions.INCLUDE_SLICE)) {
-            buffer.writeOptionalString(slice);
-        } else if (slice != null) {
-            throw new IllegalStateException(
-                "cannot write translog index slice to transport version [" + buffer.getTransportVersion() + "]"
-            );
         }
 
         BytesReference source = index.source();

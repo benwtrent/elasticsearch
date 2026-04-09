@@ -35,7 +35,6 @@ import org.elasticsearch.common.util.StringLiteralDeduplicator;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.Index;
-import org.elasticsearch.index.SliceTransportVersions;
 import org.elasticsearch.index.VersionType;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.ingest.IngestService;
@@ -100,8 +99,6 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
     private String id;
     @Nullable
     private String routing;
-    @Nullable
-    private String slice;
 
     private final IndexSource indexSource;
 
@@ -166,9 +163,6 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
         super(shardId, in);
         id = in.readOptionalString();
         routing = in.readOptionalString();
-        if (in.getTransportVersion().supports(SliceTransportVersions.INCLUDE_SLICE)) {
-            slice = in.readOptionalString();
-        }
         boolean beforeSourceContext = in.getTransportVersion().supports(INDEX_SOURCE) == false;
         BytesReference source;
         IndexSource localIndexSource = null;
@@ -356,19 +350,6 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
     @Override
     public String routing() {
         return this.routing;
-    }
-
-    public IndexRequest slice(@Nullable String slice) {
-        if (slice != null && slice.isEmpty()) {
-            this.slice = null;
-        } else {
-            this.slice = slice;
-        }
-        return this;
-    }
-
-    public @Nullable String slice() {
-        return this.slice;
     }
 
     /**
@@ -762,11 +743,6 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
     private void writeBody(StreamOutput out) throws IOException {
         out.writeOptionalString(id);
         out.writeOptionalString(routing);
-        if (out.getTransportVersion().supports(SliceTransportVersions.INCLUDE_SLICE)) {
-            out.writeOptionalString(slice);
-        } else if (slice != null) {
-            throw new IllegalStateException("cannot write slice to transport version [" + out.getTransportVersion() + "]");
-        }
         if (out.getTransportVersion().supports(INDEX_SOURCE)) {
             indexSource.writeTo(out);
         } else {

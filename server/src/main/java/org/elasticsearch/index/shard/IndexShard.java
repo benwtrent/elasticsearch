@@ -2165,8 +2165,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                         Uid.decodeId(index.uid()),
                         index.source(),
                         XContentHelper.xContentType(index.source()),
-                        index.routing(),
-                        index.slice()
+                        index.routing()
                     )
                 );
             }

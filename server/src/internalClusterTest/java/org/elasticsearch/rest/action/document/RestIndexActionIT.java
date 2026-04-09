@@ -12,7 +12,7 @@ package org.elasticsearch.rest.action.document;
 import org.elasticsearch.client.Request;
 import org.elasticsearch.client.ResponseException;
 import org.elasticsearch.common.io.Streams;
-import org.elasticsearch.index.mapper.SliceFieldMapper;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.rest.RestUtils;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.rest.ObjectPath;
@@ -55,17 +55,16 @@ public class RestIndexActionIT extends ESIntegTestCase {
     }
 
     public void testSliceEndToEndWhenEnabled() throws Exception {
-        assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
 
         final String index = "test-slice-enabled";
         var create = new Request("PUT", "/" + index);
         create.setJsonEntity("""
             {
               "settings": {
-                "index.sort.field": ["_slice"]
+                "index.slice.enabled": true
               },
               "mappings": {
-                "_slice": { "enabled": true },
                 "properties": { "field": { "type": "keyword" } }
               }
             }""");
@@ -78,7 +77,8 @@ public class RestIndexActionIT extends ESIntegTestCase {
         getRestClient().performRequest(indexReq);
 
         var search = new Request("GET", "/" + index + "/_search");
-        search.addParameter("filter_path", "hits.hits.fields");
+        search.addParameter("_slice", "s1");
+        search.addParameter("filter_path", "hits.total.value,hits.hits.fields");
         search.setJsonEntity("""
             {
               "query": { "match_all": {} },
@@ -86,21 +86,21 @@ public class RestIndexActionIT extends ESIntegTestCase {
               "fields": ["_slice"]
             }""");
         var response = ObjectPath.createFromResponse(getRestClient().performRequest(search));
+        assertThat(response.evaluate("hits.total.value"), equalTo(1));
         assertThat(response.evaluate("hits.hits.0.fields._slice.0"), equalTo("s1"));
     }
 
     public void testSliceMissingWhenEnabledFails() throws Exception {
-        assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
 
         final String index = "test-slice-required";
         var create = new Request("PUT", "/" + index);
         create.setJsonEntity("""
             {
               "settings": {
-                "index.sort.field": ["_slice"]
+                "index.slice.enabled": true
               },
               "mappings": {
-                "_slice": { "enabled": true },
                 "properties": { "field": { "type": "keyword" } }
               }
             }""");
@@ -112,18 +112,95 @@ public class RestIndexActionIT extends ESIntegTestCase {
 
         var exception = assertThrows(ResponseException.class, () -> getRestClient().performRequest(indexReq));
         String response = Streams.copyToString(new InputStreamReader(exception.getResponse().getEntity().getContent(), UTF_8));
-        assertThat(response, containsString("Slice is required"));
+        assertThat(response, containsString("[_slice] is required"));
+    }
+
+    public void testSearchRequiresSliceWhenSliceEnabled() throws Exception {
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
+
+        final String index = "test-slice-search-required";
+        var create = new Request("PUT", "/" + index);
+        create.setJsonEntity("""
+            {
+              "settings": {
+                "index.slice.enabled": true
+              },
+              "mappings": {
+                "properties": { "field": { "type": "keyword" } }
+              }
+            }""");
+        getRestClient().performRequest(create);
+
+        var indexReq = new Request("POST", "/" + index + "/_doc/1");
+        indexReq.addParameter("_slice", "s1");
+        indexReq.addParameter("refresh", "true");
+        indexReq.setJsonEntity("{\"field\":\"value\"}");
+        getRestClient().performRequest(indexReq);
+
+        var searchMissingSlice = new Request("GET", "/" + index + "/_search");
+        var exception = assertThrows(ResponseException.class, () -> getRestClient().performRequest(searchMissingSlice));
+        String response = Streams.copyToString(new InputStreamReader(exception.getResponse().getEntity().getContent(), UTF_8));
+        assertThat(response, containsString("[_slice] is required"));
+
+        var searchWithSlice = new Request("GET", "/" + index + "/_search");
+        searchWithSlice.addParameter("_slice", "s1");
+        searchWithSlice.addParameter("filter_path", "hits.total.value");
+        var ok = ObjectPath.createFromResponse(getRestClient().performRequest(searchWithSlice));
+        assertThat(ok.evaluate("hits.total.value"), equalTo(1));
+    }
+
+    public void testSearchSliceAllAndMultipleSlices() throws Exception {
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
+
+        final String index = "test-slice-search-all";
+        var create = new Request("PUT", "/" + index);
+        create.setJsonEntity("""
+            {
+              "settings": {
+                "index.slice.enabled": true
+              },
+              "mappings": {
+                "properties": { "field": { "type": "keyword" } }
+              }
+            }""");
+        getRestClient().performRequest(create);
+
+        var indexS1 = new Request("POST", "/" + index + "/_doc/1");
+        indexS1.addParameter("_slice", "s1");
+        indexS1.addParameter("refresh", "true");
+        indexS1.setJsonEntity("{\"field\":\"v1\"}");
+        getRestClient().performRequest(indexS1);
+
+        var indexS2 = new Request("POST", "/" + index + "/_doc/2");
+        indexS2.addParameter("_slice", "s2");
+        indexS2.addParameter("refresh", "true");
+        indexS2.setJsonEntity("{\"field\":\"v2\"}");
+        getRestClient().performRequest(indexS2);
+
+        var searchAll = new Request("GET", "/" + index + "/_search");
+        searchAll.addParameter("_slice", "_all");
+        searchAll.addParameter("filter_path", "hits.total.value");
+        var all = ObjectPath.createFromResponse(getRestClient().performRequest(searchAll));
+        assertThat(all.evaluate("hits.total.value"), equalTo(2));
+
+        var searchMulti = new Request("GET", "/" + index + "/_search");
+        searchMulti.addParameter("_slice", "s1,s2");
+        searchMulti.addParameter("filter_path", "hits.total.value");
+        var multi = ObjectPath.createFromResponse(getRestClient().performRequest(searchMulti));
+        assertThat(multi.evaluate("hits.total.value"), equalTo(2));
     }
 
     public void testSliceProvidedWhenDisabledFails() throws Exception {
-        assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
 
         final String index = "test-slice-disabled";
         var create = new Request("PUT", "/" + index);
         create.setJsonEntity("""
             {
+              "settings": {
+                "index.slice.enabled": false
+              },
               "mappings": {
-                "_slice": { "enabled": false },
                 "properties": { "field": { "type": "keyword" } }
               }
             }""");
@@ -136,11 +213,11 @@ public class RestIndexActionIT extends ESIntegTestCase {
 
         var exception = assertThrows(ResponseException.class, () -> getRestClient().performRequest(indexReq));
         String response = Streams.copyToString(new InputStreamReader(exception.getResponse().getEntity().getContent(), UTF_8));
-        assertThat(response, containsString("Cannot provide [_slice]"));
+        assertThat(response, containsString("[_slice] is not allowed"));
     }
 
     public void testSliceParamRejectedWhenFeatureDisabled() throws Exception {
-        assumeFalse("slice mapper feature flag must be disabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+        assumeFalse("slice indexing feature flag must be disabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
 
         final String index = "test-slice-feature-disabled";
         var create = new Request("PUT", "/" + index);
@@ -162,7 +239,7 @@ public class RestIndexActionIT extends ESIntegTestCase {
     }
 
     public void testSliceNotAllowedInTimeSeriesMode() throws Exception {
-        assumeTrue("slice mapper feature flag must be enabled", SliceFieldMapper.SLICE_FEATURE_FLAG.isEnabled());
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
 
         final String index = "test-slice-tsdb";
         var create = new Request("PUT", "/" + index);
@@ -170,10 +247,10 @@ public class RestIndexActionIT extends ESIntegTestCase {
             {
               "settings": {
                 "index.mode": "time_series",
+                "index.slice.enabled": true,
                 "index.routing_path": ["dim"]
               },
               "mappings": {
-                "_slice": { "enabled": true },
                 "properties": {
                   "@timestamp": { "type": "date" },
                   "dim": { "type": "keyword", "time_series_dimension": true }
@@ -183,6 +260,8 @@ public class RestIndexActionIT extends ESIntegTestCase {
 
         var exception = assertThrows(ResponseException.class, () -> getRestClient().performRequest(create));
         String response = Streams.copyToString(new InputStreamReader(exception.getResponse().getEntity().getContent(), UTF_8));
-        assertThat(response, containsString("[_slice] is not supported in [index.mode=time_series]"));
+        assertThat(response, containsString("index.slice.enabled"));
+        assertThat(response, containsString("index.mode"));
+        assertThat(response, containsString("time_series"));
     }
 }

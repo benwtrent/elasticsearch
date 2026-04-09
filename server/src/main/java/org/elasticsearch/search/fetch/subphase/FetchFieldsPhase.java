@@ -10,8 +10,13 @@
 package org.elasticsearch.search.fetch.subphase;
 
 import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.SortedDocValues;
+import org.apache.lucene.index.StoredFieldVisitor;
+import org.apache.lucene.index.StoredFields;
+import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.document.DocumentField;
 import org.elasticsearch.common.regex.Regex;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.mapper.IdFieldMapper;
 import org.elasticsearch.index.mapper.IgnoredFieldMapper;
 import org.elasticsearch.index.mapper.IgnoredSourceFieldMapper;
@@ -27,6 +32,7 @@ import org.elasticsearch.search.fetch.StoredFieldsContext;
 import org.elasticsearch.search.fetch.StoredFieldsSpec;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -39,6 +45,8 @@ import java.util.Set;
  * and returns them as document fields.
  */
 public final class FetchFieldsPhase implements FetchSubPhase {
+
+    private static final String SLICE_FIELD = "_slice";
 
     private static final List<FieldAndFormat> DEFAULT_METADATA_FIELDS = List.of(
         new FieldAndFormat(IgnoredFieldMapper.NAME, null),
@@ -61,6 +69,12 @@ public final class FetchFieldsPhase implements FetchSubPhase {
         // We need to retain `_id` and `_source` here to correctly populate the `StoredFieldSpecs` created by the
         // `FieldFetcher` constructor.
         final SearchExecutionContext searchExecutionContext = fetchContext.getSearchExecutionContext();
+        final boolean sliceAliasEnabled = SliceIndexing.SLICE_FEATURE_FLAG.isEnabled();
+        final boolean sliceRequested = sliceAliasEnabled
+            && fetchFieldsContext != null
+            && fetchFieldsContext.fields() != null
+            && fetchFieldsContext.fields().stream().anyMatch(f -> SLICE_FIELD.equals(f.field));
+
         final FieldFetcher fieldFetcher = (fetchFieldsContext == null
             || fetchFieldsContext.fields() == null
             || fetchFieldsContext.fields().isEmpty())
@@ -69,6 +83,7 @@ public final class FetchFieldsPhase implements FetchSubPhase {
                     searchExecutionContext,
                     fetchFieldsContext.fields()
                         .stream()
+                        .filter(fieldAndFormat -> sliceAliasEnabled == false || SLICE_FIELD.equals(fieldAndFormat.field) == false)
                         .filter(
                             fieldAndFormat -> (searchExecutionContext.isMetadataField(fieldAndFormat.field) == false
                                 || searchExecutionContext.getFieldType(fieldAndFormat.field).isStored() == false
@@ -84,6 +99,10 @@ public final class FetchFieldsPhase implements FetchSubPhase {
             for (final FieldAndFormat fieldAndFormat : fetchFieldsContext.fields()) {
                 // NOTE: _id and _source are always retrieved anyway, no need to do it explicitly. See FieldsVisitor.
                 if (SourceFieldMapper.NAME.equals(fieldAndFormat.field) || IdFieldMapper.NAME.equals(fieldAndFormat.field)) {
+                    continue;
+                }
+                if (sliceAliasEnabled && SLICE_FIELD.equals(fieldAndFormat.field)) {
+                    fetchContextMetadataFields.add(new FieldAndFormat(RoutingFieldMapper.NAME, fieldAndFormat.format));
                     continue;
                 }
                 if (searchExecutionContext.isMetadataField(fieldAndFormat.field)
@@ -127,12 +146,15 @@ public final class FetchFieldsPhase implements FetchSubPhase {
             metadataFieldFetcher = FieldFetcher.create(searchExecutionContext, allMetadataFields);
         }
         return new FetchSubPhaseProcessor() {
+            private StoredFields storedFields;
+
             @Override
             public void setNextReader(LeafReaderContext readerContext) {
                 if (fieldFetcher != null) {
                     fieldFetcher.setNextReader(readerContext);
                 }
                 metadataFieldFetcher.setNextReader(readerContext);
+                storedFields = null;
             }
 
             @Override
@@ -145,10 +167,90 @@ public final class FetchFieldsPhase implements FetchSubPhase {
 
             @Override
             public void process(HitContext hitContext) throws IOException {
-                final Map<String, DocumentField> fields = fieldFetcher != null
+                Map<String, DocumentField> fields = fieldFetcher != null
                     ? fieldFetcher.fetch(hitContext.source(), hitContext.docId())
                     : Collections.emptyMap();
-                final Map<String, DocumentField> metadataFields = metadataFieldFetcher.fetch(hitContext.source(), hitContext.docId());
+                Map<String, DocumentField> metadataFields = metadataFieldFetcher.fetch(hitContext.source(), hitContext.docId());
+                if (sliceRequested) {
+                    DocumentField routing = metadataFields.get(RoutingFieldMapper.NAME);
+                    if (routing != null) {
+                        if (fields.isEmpty()) {
+                            fields = new java.util.HashMap<>(1);
+                        } else {
+                            fields = new java.util.HashMap<>(fields);
+                        }
+                        fields.put(SLICE_FIELD, new DocumentField(SLICE_FIELD, routing.getValues(), routing.getIgnoredValues()));
+                    } else {
+                        List<Object> loadedRoutingValues = hitContext.loadedFields().get(RoutingFieldMapper.NAME);
+                        if (loadedRoutingValues != null && loadedRoutingValues.isEmpty() == false) {
+                            List<Object> values = loadedRoutingValues;
+                            if (loadedRoutingValues.get(0) instanceof BytesRef) {
+                                values = new ArrayList<>(loadedRoutingValues.size());
+                                for (Object o : loadedRoutingValues) {
+                                    if (o instanceof BytesRef bytesRef) {
+                                        values.add(bytesRef.utf8ToString());
+                                    } else {
+                                        values.add(o);
+                                    }
+                                }
+                            }
+                            if (fields.isEmpty()) {
+                                fields = new java.util.HashMap<>(1);
+                            } else {
+                                fields = new java.util.HashMap<>(fields);
+                            }
+                            fields.put(SLICE_FIELD, new DocumentField(SLICE_FIELD, values));
+                        } else {
+                            try {
+                                SortedDocValues routingDocValues = org.apache.lucene.index.DocValues.getSorted(
+                                    hitContext.reader(),
+                                    RoutingFieldMapper.NAME
+                                );
+                                if (routingDocValues.advanceExact(hitContext.docId())) {
+                                    BytesRef value = routingDocValues.lookupOrd(routingDocValues.ordValue());
+                                    if (fields.isEmpty()) {
+                                        fields = new java.util.HashMap<>(1);
+                                    } else {
+                                        fields = new java.util.HashMap<>(fields);
+                                    }
+                                    fields.put(SLICE_FIELD, new DocumentField(SLICE_FIELD, List.of(value.utf8ToString())));
+                                }
+                            } catch (IllegalStateException e) {
+                                // Field does not have doc values; ignore.
+                            }
+                            if (fields.containsKey(SLICE_FIELD) == false) {
+                                if (storedFields == null) {
+                                    storedFields = hitContext.reader().storedFields();
+                                }
+                                final var values = new ArrayList<>(1);
+                                storedFields.document(hitContext.docId(), new StoredFieldVisitor() {
+                                    @Override
+                                    public Status needsField(org.apache.lucene.index.FieldInfo fieldInfo) {
+                                        return RoutingFieldMapper.NAME.equals(fieldInfo.name) ? Status.YES : Status.NO;
+                                    }
+
+                                    @Override
+                                    public void binaryField(org.apache.lucene.index.FieldInfo fieldInfo, byte[] value) {
+                                        values.add(new BytesRef(value).utf8ToString());
+                                    }
+
+                                    @Override
+                                    public void stringField(org.apache.lucene.index.FieldInfo fieldInfo, String value) {
+                                        values.add(value);
+                                    }
+                                });
+                                if (values.isEmpty() == false) {
+                                    if (fields.isEmpty()) {
+                                        fields = new java.util.HashMap<>(1);
+                                    } else {
+                                        fields = new java.util.HashMap<>(fields);
+                                    }
+                                    fields.put(SLICE_FIELD, new DocumentField(SLICE_FIELD, values));
+                                }
+                            }
+                        }
+                    }
+                }
                 hitContext.hit().addDocumentFields(fields, metadataFields);
             }
         };
