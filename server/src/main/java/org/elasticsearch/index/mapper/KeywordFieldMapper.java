@@ -27,6 +27,7 @@ import org.apache.lucene.index.MultiTerms;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
+import org.apache.lucene.search.AutomatonQuery;
 import org.apache.lucene.search.FuzzyQuery;
 import org.apache.lucene.search.MultiTermQuery;
 import org.apache.lucene.search.PrefixQuery;
@@ -419,6 +420,8 @@ public final class KeywordFieldMapper extends FieldMapper {
         private IndexType buildIndexType(FieldType fieldType) {
             var docValuesParameters = docValuesParameters();
             if (docValuesParameters.enabled() && docValuesParameters.cardinality() == DocValuesParameter.Values.Cardinality.HIGH) {
+                // Binary doc values are not reflected on the KeywordField's FieldType (see resolveFieldType); still advertise doc values
+                // on the mapped field so queries, fielddata, and aggregations use the docvalues path
                 return IndexType.terms(fieldType.indexOptions() != IndexOptions.NONE, true);
             }
 
@@ -477,7 +480,7 @@ public final class KeywordFieldMapper extends FieldMapper {
             String offsetsFieldName = getOffsetsFieldName(
                 context,
                 indexSettings.sourceKeepMode(),
-                fieldtype.docValuesType() == DocValuesType.SORTED_SET,
+                docValuesParameters().enabled(),
                 stored.getValue(),
                 this,
                 indexCreatedVersion,
@@ -508,6 +511,10 @@ public final class KeywordFieldMapper extends FieldMapper {
             if (docValuesParameters.enabled() && docValuesParameters.cardinality() == DocValuesParameter.Values.Cardinality.LOW) {
                 fieldtype.setDocValuesType(DocValuesType.SORTED_SET);
             } else {
+                // NOTE: we still set DocValuesType.NONE on the fieldtype even when using binary doc values (cardinality == HIGH).
+                // Values are written to a separate MultiValuedBinaryDocValuesField, so we must set this fieldtype to DocValuesType.NONE
+                // to prevent the field constructed in KeywordFieldMapper#buildKeywordField (which uses this fieldType) from conflicting
+                // with the separate MultiValuedBinaryDocValuesField.
                 fieldtype.setDocValuesType(DocValuesType.NONE);
                 fieldtype.setDocValuesSkipIndexType(DocValuesSkipIndexType.NONE);
             }
@@ -1126,6 +1133,10 @@ public final class KeywordFieldMapper extends FieldMapper {
 
                 if (caseInsensitive == false) {
                     Term term = new Term(name(), value);
+                    if (context.getCircuitBreaker() != null) {
+                        Automaton dfa = AutomatonQueries.toWildcardAutomaton(term, context.getCircuitBreaker());
+                        return new AutomatonQuery(term, dfa, false, MultiTermQuery.DOC_VALUES_REWRITE);
+                    }
                     return new WildcardQuery(term, Operations.DEFAULT_DETERMINIZE_WORK_LIMIT, MultiTermQuery.DOC_VALUES_REWRITE);
                 }
 
@@ -1156,6 +1167,10 @@ public final class KeywordFieldMapper extends FieldMapper {
                     );
                 } else {
                     Term term = new Term(name(), value);
+                    if (context.getCircuitBreaker() != null) {
+                        Automaton dfa = AutomatonQueries.toWildcardAutomaton(term, context.getCircuitBreaker());
+                        return new AutomatonQuery(term, dfa, false, MultiTermQuery.DOC_VALUES_REWRITE);
+                    }
                     return new WildcardQuery(term, Operations.DEFAULT_DETERMINIZE_WORK_LIMIT, MultiTermQuery.DOC_VALUES_REWRITE);
                 }
             }
@@ -1174,6 +1189,7 @@ public final class KeywordFieldMapper extends FieldMapper {
             if (indexType.hasTerms()) {
                 return super.regexpQuery(value, syntaxFlags, matchFlags, maxDeterminizedStates, method, context);
             } else {
+                value = AutomatonQueries.collapseConsecutiveQuantifiers(value);
                 if (matchFlags != 0) {
                     throw new IllegalArgumentException("Match flags not yet implemented [" + matchFlags + "]");
                 }
@@ -1189,6 +1205,17 @@ public final class KeywordFieldMapper extends FieldMapper {
                         maxDeterminizedStates
                     );
                 } else {
+                    if (context.getCircuitBreaker() != null) {
+                        Term term = new Term(name(), indexedValueForSearch(value));
+                        Automaton dfa = AutomatonQueries.toRegexpAutomaton(
+                            term,
+                            syntaxFlags,
+                            matchFlags,
+                            maxDeterminizedStates,
+                            context.getCircuitBreaker()
+                        );
+                        return new AutomatonQuery(term, dfa, false, MultiTermQuery.DOC_VALUES_REWRITE);
+                    }
                     return new RegexpQuery(
                         new Term(name(), indexedValueForSearch(value)),
                         syntaxFlags,
@@ -1364,13 +1391,15 @@ public final class KeywordFieldMapper extends FieldMapper {
                 final String fieldName = fieldType().syntheticSourceFallbackFieldName();
 
                 if (storeIgnoredFieldsInBinaryDocValues) {
-                    // store the value in a binary doc values field, create one if it doesn't exist
-                    MultiValuedBinaryDocValuesField field = (MultiValuedBinaryDocValuesField) context.doc().getByKey(fieldName);
-                    if (field == null) {
-                        field = new MultiValuedBinaryDocValuesField.IntegratedCount(fieldName, keepDuplicatesInBinaryDocValues());
-                        context.doc().addWithKey(fieldName, field);
-                    }
-                    field.add(bytesRef);
+                    MultiValuedBinaryDocValuesField.addToBinaryFieldInDoc(
+                        context.doc(),
+                        fieldName,
+                        bytesRef,
+                        keepDuplicatesInBinaryDocValues()
+                            ? MultiValuedBinaryDocValuesField.ValueOrdering.SORTED
+                            : MultiValuedBinaryDocValuesField.ValueOrdering.SORTED_UNIQUE,
+                        indexCreatedVersion
+                    );
                 } else {
                     // otherwise for bwc, store the value in a stored fields like we used to
                     context.doc().add(new StoredField(fieldName, bytesRef));
@@ -1412,11 +1441,13 @@ public final class KeywordFieldMapper extends FieldMapper {
         }
 
         if (fieldType().usesBinaryDocValues()) {
+            // KeywordField is built with a FieldType that omits Lucene doc values; binary values are accumulated on a parallel field.
             assert fieldType.docValuesType() == DocValuesType.NONE;
-            MultiValuedBinaryDocValuesField.SeparateCount.addToSeparateCountMultiBinaryFieldInDoc(
+            MultiValuedBinaryDocValuesField.addToBinaryFieldInDoc(
                 context.doc(),
                 fieldType().name(),
-                binaryValue
+                binaryValue,
+                MultiValuedBinaryDocValuesField.ValueOrdering.SORTED_UNIQUE
             );
         }
 
@@ -1494,6 +1525,8 @@ public final class KeywordFieldMapper extends FieldMapper {
         ).dimension(fieldType().isDimension()).init(this);
     }
 
+    // Uses this mapper's frozen FieldType; for high-cardinality doc values that type has DocValuesType.NONE because binary doc values
+    // are indexed via MultiValuedBinaryDocValuesField in indexValue, not on this Lucene Field instance.
     public Field buildKeywordField(BytesRef binaryValue) {
         return new KeywordField(fieldType().name(), binaryValue, fieldType);
     }
@@ -1518,9 +1551,7 @@ public final class KeywordFieldMapper extends FieldMapper {
             return SyntheticSourceSupport.FALLBACK;
         }
 
-        boolean docValuesSupportNativeSyntheticSource = fieldType().usesBinaryDocValues() == false || sourceKeepMode == SourceKeepMode.NONE;
-
-        if (fieldType.stored() || (docValuesParameters.enabled() && docValuesSupportNativeSyntheticSource)) {
+        if (fieldType.stored() || docValuesParameters.enabled()) {
             return new SyntheticSourceSupport.Native(() -> syntheticFieldLoader(fullPath(), leafName()));
         }
 
@@ -1563,8 +1594,11 @@ public final class KeywordFieldMapper extends FieldMapper {
                     });
                 }
             } else {
-                assert offsetsFieldName == null;
-                layers.add(new BinaryDocValuesSyntheticFieldLoaderLayer(fieldType().name()));
+                if (offsetsFieldName != null) {
+                    layers.add(new BinaryWithOffsetsDocValuesSyntheticFieldLoaderLayer(fullPath(), offsetsFieldName));
+                } else {
+                    layers.add(new BinaryDocValuesSyntheticFieldLoaderLayer(fieldType().name()));
+                }
             }
         }
 
