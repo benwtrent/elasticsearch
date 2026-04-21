@@ -13,6 +13,7 @@ import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.OrdinalMap;
 import org.apache.lucene.index.PointValues;
+import org.apache.lucene.index.Term;
 import org.apache.lucene.search.BooleanClause.Occur;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.BoostQuery;
@@ -21,10 +22,14 @@ import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.MatchNoDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.SortField;
+import org.apache.lucene.search.TermInSetQuery;
+import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TotalHits;
+import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.NumericUtils;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.search.SearchType;
+import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.lucene.search.Queries;
 import org.elasticsearch.core.Nullable;
@@ -32,6 +37,7 @@ import org.elasticsearch.core.Releasables;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.IndexService;
 import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.cache.bitset.BitsetFilterCache;
 import org.elasticsearch.index.engine.Engine;
 import org.elasticsearch.index.fielddata.FieldDataContext;
@@ -43,6 +49,7 @@ import org.elasticsearch.index.mapper.IdLoader;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.mapper.NestedLookup;
+import org.elasticsearch.index.mapper.RoutingFieldMapper;
 import org.elasticsearch.index.mapper.SourceLoader;
 import org.elasticsearch.index.query.AbstractQueryBuilder;
 import org.elasticsearch.index.query.ParsedQuery;
@@ -84,6 +91,7 @@ import org.elasticsearch.tasks.CancellableTask;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -228,6 +236,17 @@ final class DefaultSearchContext extends SearchContext {
                 indexShard.shardSearchStats()
             );
             searchExecutionContext = circuitBreaker != null ? new SearchExecutionContext(baseContext, circuitBreaker) : baseContext;
+            if (searchExecutionContext != null) {
+                final IndexSettings currentIndexSettings = indexService.getIndexSettings();
+                if (currentIndexSettings != null && currentIndexSettings.isSliceEnabled()) {
+                    final String requestSliceRouting = request.sliceRouting();
+                    searchExecutionContext.setSliceRouting(
+                        SliceIndexing.SLICE_ALL_ROUTING_MARKER.equals(requestSliceRouting) ? null : requestSliceRouting
+                    );
+                } else {
+                    searchExecutionContext.setSliceRouting(null);
+                }
+            }
             queryBoost = request.indexBoost();
             this.lowLevelCancellation = lowLevelCancellation;
             success = true;
@@ -474,6 +493,10 @@ final class DefaultSearchContext extends SearchContext {
                 filters.add(slicedQuery);
             }
         }
+        final Query sliceRoutingFilter = buildSliceRoutingFilter(searchExecutionContext.getSliceRouting());
+        if (sliceRoutingFilter != null) {
+            filters.add(sliceRoutingFilter);
+        }
 
         if (filters.isEmpty()) {
             return query;
@@ -485,6 +508,24 @@ final class DefaultSearchContext extends SearchContext {
             }
             return builder.build();
         }
+    }
+
+    @Nullable
+    private static Query buildSliceRoutingFilter(@Nullable String sliceRouting) {
+        if (sliceRouting == null) {
+            return null;
+        }
+        final List<BytesRef> sliceTerms = Arrays.stream(Strings.commaDelimitedListToStringArray(sliceRouting))
+            .map(String::trim)
+            .filter(value -> value.isEmpty() == false)
+            .map(BytesRef::new)
+            .toList();
+        if (sliceTerms.isEmpty()) {
+            return new MatchNoDocsQuery("empty [_slice] routing");
+        }
+        return sliceTerms.size() == 1
+            ? new TermQuery(new Term(RoutingFieldMapper.NAME, sliceTerms.get(0)))
+            : new TermInSetQuery(RoutingFieldMapper.NAME, sliceTerms);
     }
 
     @Override

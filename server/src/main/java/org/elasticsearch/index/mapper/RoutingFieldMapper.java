@@ -16,7 +16,13 @@ import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
+import org.elasticsearch.index.fielddata.FieldData;
+import org.elasticsearch.index.fielddata.FieldDataContext;
+import org.elasticsearch.index.fielddata.IndexFieldData;
+import org.elasticsearch.index.fielddata.plain.SortedOrdinalsIndexFieldData;
 import org.elasticsearch.index.query.SearchExecutionContext;
+import org.elasticsearch.script.field.KeywordDocValuesField;
+import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
 
 import java.util.Collections;
 import java.util.Map;
@@ -94,6 +100,16 @@ public class RoutingFieldMapper extends MetadataFieldMapper {
         @Override
         public ValueFetcher valueFetcher(SearchExecutionContext context, String format) {
             return new StoredValueFetcher(context.lookup(), NAME);
+        }
+
+        @Override
+        public IndexFieldData.Builder fielddataBuilder(FieldDataContext fieldDataContext) {
+            failIfNoDocValues();
+            return new SortedOrdinalsIndexFieldData.Builder(
+                name(),
+                CoreValuesSourceType.KEYWORD,
+                (dv, n) -> new KeywordDocValuesField(FieldData.toString(dv), n)
+            );
         }
     }
 

@@ -33,6 +33,7 @@ import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.IndexVersion;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.analysis.AnalyzerScope;
 import org.elasticsearch.index.analysis.IndexAnalyzers;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
@@ -62,6 +63,7 @@ import org.elasticsearch.index.mapper.NumberFieldMapper;
 import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.index.mapper.RootObjectMapper;
 import org.elasticsearch.index.mapper.RootObjectMapperNamespaceValidator;
+import org.elasticsearch.index.mapper.RoutingFieldMapper;
 import org.elasticsearch.index.mapper.RuntimeField;
 import org.elasticsearch.index.mapper.SourceFieldMapper;
 import org.elasticsearch.index.mapper.TestRuntimeField;
@@ -566,6 +568,26 @@ public class SearchExecutionContextTests extends ESTestCase {
         assertThat(getFieldNames(context.getAllFields()), containsInAnyOrder("pig", "cat", "runtimecat", "runtime"));
     }
 
+    public void testSliceFieldTypeAliasesRoutingWhenSliceModeEnabled() {
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
+        MappingLookup mappingLookup = createMappingLookup(List.of(new MockFieldMapper.FakeFieldType(RoutingFieldMapper.NAME)), List.of());
+        SearchExecutionContext context = createSearchExecutionContext(
+            "uuid",
+            null,
+            mappingLookup,
+            Map.of(),
+            Settings.builder().put(IndexSettings.SLICE_ENABLED.getKey(), true).build()
+        );
+        assertThat(context.getFieldType("_slice"), sameInstance(context.getFieldType(RoutingFieldMapper.NAME)));
+    }
+
+    public void testSliceFieldTypeAliasDisabledWhenSliceModeDisabled() {
+        MappingLookup mappingLookup = createMappingLookup(List.of(new MockFieldMapper.FakeFieldType(RoutingFieldMapper.NAME)), List.of());
+        SearchExecutionContext context = createSearchExecutionContext("uuid", null, mappingLookup, Map.of());
+        assertThat(context.getFieldType("_slice"), nullValue());
+        assertThat(context.getFieldType(RoutingFieldMapper.NAME), notNullValue());
+    }
+
     private static List<String> getFieldNames(Iterable<Map.Entry<String, MappedFieldType>> fields) {
         List<String> fieldNames = new ArrayList<>();
         for (Map.Entry<String, MappedFieldType> field : fields) {
@@ -593,7 +615,17 @@ public class SearchExecutionContextTests extends ESTestCase {
         MappingLookup mappingLookup,
         Map<String, Object> runtimeMappings
     ) {
-        return createSearchExecutionContext(indexUuid, clusterAlias, mappingLookup, runtimeMappings, null);
+        return createSearchExecutionContext(indexUuid, clusterAlias, mappingLookup, runtimeMappings, Settings.EMPTY, null);
+    }
+
+    private static SearchExecutionContext createSearchExecutionContext(
+        String indexUuid,
+        String clusterAlias,
+        MappingLookup mappingLookup,
+        Map<String, Object> runtimeMappings,
+        Settings indexSettingsOverrides
+    ) {
+        return createSearchExecutionContext(indexUuid, clusterAlias, mappingLookup, runtimeMappings, indexSettingsOverrides, null);
     }
 
     private static SearchExecutionContext createSearchExecutionContext(
@@ -603,8 +635,21 @@ public class SearchExecutionContextTests extends ESTestCase {
         Map<String, Object> runtimeMappings,
         RootObjectMapperNamespaceValidator namespaceValidator
     ) {
+        return createSearchExecutionContext(indexUuid, clusterAlias, mappingLookup, runtimeMappings, Settings.EMPTY, namespaceValidator);
+    }
+
+    private static SearchExecutionContext createSearchExecutionContext(
+        String indexUuid,
+        String clusterAlias,
+        MappingLookup mappingLookup,
+        Map<String, Object> runtimeMappings,
+        Settings indexSettingsOverrides,
+        RootObjectMapperNamespaceValidator namespaceValidator
+    ) {
         IndexMetadata.Builder indexMetadataBuilder = new IndexMetadata.Builder("index");
-        indexMetadataBuilder.settings(indexSettings(IndexVersion.current(), 1, 1).put(IndexMetadata.SETTING_INDEX_UUID, indexUuid));
+        indexMetadataBuilder.settings(
+            indexSettings(IndexVersion.current(), 1, 1).put(IndexMetadata.SETTING_INDEX_UUID, indexUuid).put(indexSettingsOverrides)
+        );
         IndexMetadata indexMetadata = indexMetadataBuilder.build();
         IndexSettings indexSettings = new IndexSettings(indexMetadata, Settings.EMPTY);
         MapperService mapperService = createMapperServiceWithNamespaceValidator(indexSettings, mappingLookup, namespaceValidator);

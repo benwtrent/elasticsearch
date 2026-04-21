@@ -12,6 +12,7 @@ package org.elasticsearch.rest.action.document;
 import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.VersionType;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestRequest;
@@ -45,7 +46,15 @@ public class RestGetAction extends BaseRestHandler {
     public RestChannelConsumer prepareRequest(final RestRequest request, final NodeClient client) throws IOException {
         GetRequest getRequest = new GetRequest(request.param("index"), request.param("id"));
         getRequest.refresh(request.paramAsBoolean("refresh", getRequest.refresh()));
-        getRequest.routing(request.param("routing"));
+        final String routing = request.param("routing");
+        final String slice = request.param("_slice");
+        if (slice != null && SliceIndexing.SLICE_FEATURE_FLAG.isEnabled() == false) {
+            throw new IllegalArgumentException("request does not support [_slice]");
+        }
+        if (routing != null && slice != null) {
+            throw new IllegalArgumentException("[routing] is not allowed together with [_slice]");
+        }
+        getRequest.routing(slice != null ? slice : routing);
         getRequest.preference(request.param("preference"));
         getRequest.realtime(request.paramAsBoolean("realtime", getRequest.realtime()));
         if (request.param("fields") != null) {

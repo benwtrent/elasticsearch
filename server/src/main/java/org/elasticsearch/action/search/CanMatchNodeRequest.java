@@ -234,6 +234,7 @@ public class CanMatchNodeRequest extends AbstractTransportRequest implements Ind
             r.shardRequestIndex,
             numberOfShards,
             searchType,
+            null,
             source,
             requestCache,
             r.aliasFilter,

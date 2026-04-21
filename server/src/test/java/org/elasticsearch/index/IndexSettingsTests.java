@@ -26,6 +26,7 @@ import org.elasticsearch.index.codec.bloomfilter.SyntheticIdBloomFilterSettings;
 import org.elasticsearch.index.engine.EngineConfig;
 import org.elasticsearch.index.mapper.MapperMetrics;
 import org.elasticsearch.index.mapper.MapperRegistry;
+import org.elasticsearch.index.mapper.RoutingFieldMapper;
 import org.elasticsearch.index.mapper.SeqNoFieldMapper;
 import org.elasticsearch.index.translog.Translog;
 import org.elasticsearch.plugins.MapperPlugin;
@@ -245,6 +246,16 @@ public class IndexSettingsTests extends ESTestCase {
 
     public void testDenseVectorExperimentalFeaturesDefaultsFromBuildType() {
         assertEquals(Build.current().isSnapshot(), IndexSettings.DENSE_VECTOR_EXPERIMENTAL_FEATURES_SETTING.get(Settings.EMPTY));
+    }
+
+    public void testSliceEnabledAutoAddsRoutingPrimaryIndexSort() {
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
+        IndexSettings indexSettings = new IndexSettings(
+            newIndexMeta("index", Settings.builder().put(IndexSettings.SLICE_ENABLED.getKey(), true).build()),
+            Settings.EMPTY
+        );
+        assertThat(indexSettings.getIndexSortConfig().hasIndexSort(), is(true));
+        assertThat(indexSettings.getIndexSortConfig().hasPrimarySortOnField(RoutingFieldMapper.NAME), is(true));
     }
 
     @TestLogging(reason = "testing warning logging", value = "org.elasticsearch.index.IndexSettings:WARN")

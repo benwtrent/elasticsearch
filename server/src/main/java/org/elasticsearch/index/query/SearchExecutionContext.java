@@ -31,6 +31,7 @@ import org.elasticsearch.index.Index;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.IndexSortConfig;
 import org.elasticsearch.index.IndexVersion;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
 import org.elasticsearch.index.cache.bitset.BitsetFilterCache;
 import org.elasticsearch.index.fielddata.FieldDataContext;
@@ -48,6 +49,7 @@ import org.elasticsearch.index.mapper.MappingLookup;
 import org.elasticsearch.index.mapper.MappingParserContext;
 import org.elasticsearch.index.mapper.NestedLookup;
 import org.elasticsearch.index.mapper.ParsedDocument;
+import org.elasticsearch.index.mapper.RoutingFieldMapper;
 import org.elasticsearch.index.mapper.SourceLoader;
 import org.elasticsearch.index.mapper.SourceToParse;
 import org.elasticsearch.index.query.support.AutoPrefilteringScope;
@@ -98,6 +100,7 @@ import static org.elasticsearch.index.IndexService.parseRuntimeMappings;
  * the context before executing each query.
  */
 public class SearchExecutionContext extends QueryRewriteContext {
+    private static final String SLICE_FIELD = "_slice";
 
     private final SimilarityService similarityService;
     private final BitsetFilterCache bitsetFilterCache;
@@ -120,6 +123,8 @@ public class SearchExecutionContext extends QueryRewriteContext {
     private final Integer requestSize;
     private final MapperMetrics mapperMetrics;
     private final ShardSearchStats shardSearchStats;
+    @Nullable
+    private String sliceRouting;
     @Nullable
     private final CircuitBreaker circuitBreaker;
     private final AtomicLong queryConstructionMemoryUsed = new AtomicLong(0);
@@ -216,6 +221,7 @@ public class SearchExecutionContext extends QueryRewriteContext {
             source.shardSearchStats,
             circuitBreaker
         );
+        this.sliceRouting = source.sliceRouting;
     }
 
     private SearchExecutionContext(
@@ -385,6 +391,14 @@ public class SearchExecutionContext extends QueryRewriteContext {
 
     public boolean isMetadataField(String field) {
         return mapperService.isMetadataField(field);
+    }
+
+    @Override
+    protected MappedFieldType fieldType(String name) {
+        if (SLICE_FIELD.equals(name) && indexSettings.isSliceEnabled() && SliceIndexing.SLICE_FEATURE_FLAG.isEnabled()) {
+            return super.fieldType(RoutingFieldMapper.NAME);
+        }
+        return super.fieldType(name);
     }
 
     public boolean isMultiField(String field) {
@@ -687,6 +701,15 @@ public class SearchExecutionContext extends QueryRewriteContext {
 
     public Integer requestSize() {
         return requestSize;
+    }
+
+    public void setSliceRouting(@Nullable String sliceRouting) {
+        this.sliceRouting = sliceRouting;
+    }
+
+    @Nullable
+    public String getSliceRouting() {
+        return sliceRouting;
     }
 
     /**

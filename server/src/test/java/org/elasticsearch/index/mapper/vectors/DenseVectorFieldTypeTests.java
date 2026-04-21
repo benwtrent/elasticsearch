@@ -28,6 +28,7 @@ import org.elasticsearch.search.vectors.DiversifyingChildrenIVFKnnFloatVectorQue
 import org.elasticsearch.search.vectors.DiversifyingParentBlockQuery;
 import org.elasticsearch.search.vectors.ESKnnByteVectorQuery;
 import org.elasticsearch.search.vectors.ESKnnFloatVectorQuery;
+import org.elasticsearch.search.vectors.IVFKnnFloatSlicedVectorQuery;
 import org.elasticsearch.search.vectors.IVFKnnFloatVectorQuery;
 import org.elasticsearch.search.vectors.RescoreKnnVectorQuery;
 import org.elasticsearch.search.vectors.VectorData;
@@ -405,6 +406,92 @@ public class DenseVectorFieldTypeTests extends FieldTypeTestCase {
                 assertTrue(query instanceof DiversifyingChildrenByteKnnVectorQuery);
             }
         }
+    }
+
+    public void testCreateBBQDiskKnnQueryUsesSlicedQueryForSingleRoutingFilter() {
+        DenseVectorFieldType field = new DenseVectorFieldType(
+            "f",
+            IndexVersion.current(),
+            FLOAT,
+            BBQ_MIN_DIMS,
+            true,
+            VectorSimilarity.COSINE,
+            new DenseVectorFieldMapper.BBQIVFIndexOptions(
+                MIN_VECTORS_PER_CLUSTER,
+                -1,
+                0d,
+                false,
+                null,
+                IndexVersion.current(),
+                false,
+                1,
+                true
+            ),
+            Collections.emptyMap(),
+            false
+        );
+        float[] queryVector = new float[BBQ_MIN_DIMS];
+        for (int i = 0; i < BBQ_MIN_DIMS; i++) {
+            queryVector[i] = randomFloat();
+        }
+        Query query = field.createKnnQuery(
+            VectorData.fromFloats(queryVector),
+            10,
+            50,
+            null,
+            null,
+            null,
+            null,
+            null,
+            randomFrom(DenseVectorFieldMapper.FilterHeuristic.values()),
+            randomBoolean(),
+            "slice-a"
+        );
+
+        assertThat(query, instanceOf(IVFKnnFloatSlicedVectorQuery.class));
+    }
+
+    public void testCreateBBQDiskKnnQueryDoesNotUseSlicedQueryForMultiRoutingFilter() {
+        DenseVectorFieldType field = new DenseVectorFieldType(
+            "f",
+            IndexVersion.current(),
+            FLOAT,
+            BBQ_MIN_DIMS,
+            true,
+            VectorSimilarity.COSINE,
+            new DenseVectorFieldMapper.BBQIVFIndexOptions(
+                MIN_VECTORS_PER_CLUSTER,
+                -1,
+                0d,
+                false,
+                null,
+                IndexVersion.current(),
+                false,
+                1,
+                true
+            ),
+            Collections.emptyMap(),
+            false
+        );
+        float[] queryVector = new float[BBQ_MIN_DIMS];
+        for (int i = 0; i < BBQ_MIN_DIMS; i++) {
+            queryVector[i] = randomFloat();
+        }
+        Query query = field.createKnnQuery(
+            VectorData.fromFloats(queryVector),
+            10,
+            50,
+            null,
+            null,
+            null,
+            null,
+            null,
+            randomFrom(DenseVectorFieldMapper.FilterHeuristic.values()),
+            randomBoolean(),
+            "slice-a,slice-b"
+        );
+
+        assertThat(query, instanceOf(IVFKnnFloatVectorQuery.class));
     }
 
     public void testExactKnnQuery() {

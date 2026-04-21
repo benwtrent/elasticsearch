@@ -14,16 +14,20 @@ import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.codec.CodecService;
 import org.elasticsearch.index.codec.LegacyPerFieldMapperCodec;
+import org.elasticsearch.index.codec.vectors.diskbbq.next.ESNextDiskBBQVectorsFormat;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.mapper.MapperServiceTestCase;
+import org.elasticsearch.index.mapper.RoutingFieldMapper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.test.IndexSettingsModule;
 import org.elasticsearch.threadpool.TestThreadPool;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.util.Collection;
 import java.util.List;
 
@@ -82,6 +86,46 @@ public class DiskBBQDenseVectorFieldMapperTests extends MapperServiceTestCase {
         assertNotNull(mapper);
         assertThat(mapper.fieldType().getIndexOptions(), instanceOf(DenseVectorFieldMapper.BBQIVFIndexOptions.class));
         assertEquals(DenseVectorFieldMapper.VectorIndexType.BBQ_DISK, mapper.fieldType().getIndexOptions().getType());
+    }
+
+    public void testSliceFieldDefaultsToRoutingInSliceMode() throws Exception {
+        assumeTrue("test only applies to snapshot diskbbq format", Build.current().isSnapshot());
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
+        final Settings pluginSettings = Settings.builder().put(DiscoveryNode.STATELESS_ENABLED_SETTING_NAME, true).build();
+        final TrialLicenseStateDiskBBQPlugin plugin = new TrialLicenseStateDiskBBQPlugin(pluginSettings);
+        final IndexSettings indexSettings = IndexSettingsModule.newIndexSettings(
+            "foo",
+            Settings.builder().put(IndexSettings.SLICE_ENABLED.getKey(), true).build()
+        );
+        final DenseVectorFieldMapper.BBQIVFIndexOptions options = new DenseVectorFieldMapper.BBQIVFIndexOptions(
+            ESNextDiskBBQVectorsFormat.DEFAULT_VECTORS_PER_CLUSTER,
+            -1,
+            0d,
+            false,
+            null,
+            indexSettings.getIndexVersionCreated(),
+            false,
+            1,
+            true
+        );
+        final KnnVectorsFormat knnVectorsFormat = plugin.getVectorsFormatProvider()
+            .getKnnVectorsFormat(
+                indexSettings,
+                options,
+                DenseVectorFieldMapper.VectorSimilarity.DOT_PRODUCT,
+                DenseVectorFieldMapper.ElementType.FLOAT,
+                null,
+                1
+            );
+
+        assertThat(knnVectorsFormat, instanceOf(ESNextDiskBBQVectorsFormat.class));
+        assertEquals(RoutingFieldMapper.NAME, getSliceField((ESNextDiskBBQVectorsFormat) knnVectorsFormat));
+    }
+
+    private static String getSliceField(ESNextDiskBBQVectorsFormat format) throws ReflectiveOperationException {
+        Field field = ESNextDiskBBQVectorsFormat.class.getDeclaredField("sliceField");
+        field.setAccessible(true);
+        return (String) field.get(format);
     }
 
 }

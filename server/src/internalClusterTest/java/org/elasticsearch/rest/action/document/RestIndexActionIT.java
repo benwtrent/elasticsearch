@@ -18,6 +18,8 @@ import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.rest.ObjectPath;
 
 import java.io.InputStreamReader;
+import java.util.List;
+import java.util.Map;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.hamcrest.Matchers.both;
@@ -188,6 +190,64 @@ public class RestIndexActionIT extends ESIntegTestCase {
         searchMulti.addParameter("filter_path", "hits.total.value");
         var multi = ObjectPath.createFromResponse(getRestClient().performRequest(searchMulti));
         assertThat(multi.evaluate("hits.total.value"), equalTo(2));
+    }
+
+    public void testTermsAggregationOnSliceAlias() throws Exception {
+        assumeTrue("slice indexing feature flag must be enabled", SliceIndexing.SLICE_FEATURE_FLAG.isEnabled());
+
+        final String index = "test-slice-terms-agg";
+        var create = new Request("PUT", "/" + index);
+        create.setJsonEntity("""
+            {
+              "settings": {
+                "index.slice.enabled": true
+              },
+              "mappings": {
+                "properties": { "field": { "type": "keyword" } }
+              }
+            }""");
+        getRestClient().performRequest(create);
+
+        var indexS1Doc1 = new Request("POST", "/" + index + "/_doc/1");
+        indexS1Doc1.addParameter("_slice", "s1");
+        indexS1Doc1.setJsonEntity("{\"field\":\"v1\"}");
+        getRestClient().performRequest(indexS1Doc1);
+
+        var indexS1Doc2 = new Request("POST", "/" + index + "/_doc/2");
+        indexS1Doc2.addParameter("_slice", "s1");
+        indexS1Doc2.setJsonEntity("{\"field\":\"v2\"}");
+        getRestClient().performRequest(indexS1Doc2);
+
+        var indexS2Doc = new Request("POST", "/" + index + "/_doc/3");
+        indexS2Doc.addParameter("_slice", "s2");
+        indexS2Doc.setJsonEntity("{\"field\":\"v3\"}");
+        getRestClient().performRequest(indexS2Doc);
+
+        var refresh = new Request("POST", "/" + index + "/_refresh");
+        getRestClient().performRequest(refresh);
+
+        var searchAgg = new Request("GET", "/" + index + "/_search");
+        searchAgg.addParameter("_slice", "_all");
+        searchAgg.setJsonEntity("""
+            {
+              "size": 0,
+              "aggs": {
+                "by_slice": {
+                  "terms": {
+                    "field": "_slice",
+                    "order": { "_key": "asc" }
+                  }
+                }
+              }
+            }""");
+        var aggResponse = ObjectPath.createFromResponse(getRestClient().performRequest(searchAgg));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> buckets = aggResponse.evaluate("aggregations.by_slice.buckets");
+        assertThat(buckets.size(), equalTo(2));
+        assertThat(buckets.get(0).get("key"), equalTo("s1"));
+        assertThat(((Number) buckets.get(0).get("doc_count")).intValue(), equalTo(2));
+        assertThat(buckets.get(1).get("key"), equalTo("s2"));
+        assertThat(((Number) buckets.get(1).get("doc_count")).intValue(), equalTo(1));
     }
 
     public void testSliceProvidedWhenDisabledFails() throws Exception {

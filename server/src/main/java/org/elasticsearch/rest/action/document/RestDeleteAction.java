@@ -13,6 +13,7 @@ import org.elasticsearch.action.delete.DeleteRequest;
 import org.elasticsearch.action.delete.DeleteResponse;
 import org.elasticsearch.action.support.ActiveShardCount;
 import org.elasticsearch.client.internal.node.NodeClient;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.VersionType;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestRequest;
@@ -42,7 +43,15 @@ public class RestDeleteAction extends BaseRestHandler {
     @Override
     public RestChannelConsumer prepareRequest(final RestRequest request, final NodeClient client) throws IOException {
         DeleteRequest deleteRequest = new DeleteRequest(request.param("index"), request.param("id"));
-        deleteRequest.routing(request.param("routing"));
+        final String routing = request.param("routing");
+        final String slice = request.param("_slice");
+        if (slice != null && SliceIndexing.SLICE_FEATURE_FLAG.isEnabled() == false) {
+            throw new IllegalArgumentException("request does not support [_slice]");
+        }
+        if (routing != null && slice != null) {
+            throw new IllegalArgumentException("[routing] is not allowed together with [_slice]");
+        }
+        deleteRequest.routing(slice != null ? slice : routing);
         deleteRequest.timeout(request.paramAsTime("timeout", DeleteRequest.DEFAULT_TIMEOUT));
         deleteRequest.setRefreshPolicy(request.param("refresh"));
         deleteRequest.version(RestActions.parseVersion(request));

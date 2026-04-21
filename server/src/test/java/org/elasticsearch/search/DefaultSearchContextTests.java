@@ -19,11 +19,14 @@ import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchNoDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
+import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.apache.lucene.tests.store.BaseDirectoryWrapper;
@@ -1026,6 +1029,33 @@ public class DefaultSearchContextTests extends MapperServiceTestCase {
             assertThat(context.checkCircuitBreaker(1024 * 1800, "test"), is(true));
             // allocated less than the 1MiB buffer
             assertThat(context.checkCircuitBreaker(1024 * 5, "test"), is(false));
+        } finally {
+            if (indexShard != null) {
+                indexShard.getThreadPool().shutdown();
+            }
+        }
+    }
+
+    public void testPreProcessAppliesSliceRoutingFilter() throws Exception {
+        IndexShard indexShard = null;
+        try (DefaultSearchContext context = createDefaultSearchContext(Settings.EMPTY)) {
+            indexShard = context.indexShard();
+            when(context.request().getAliasFilter()).thenReturn(AliasFilter.EMPTY);
+            when(context.request().indexBoost()).thenReturn(AbstractQueryBuilder.DEFAULT_BOOST);
+            when(context.getSearchExecutionContext().getSliceRouting()).thenReturn("s1");
+
+            context.parsedQuery(ParsedQuery.parsedMatchAllQuery()).preProcess();
+
+            assertThat(context.query(), instanceOf(BooleanQuery.class));
+            final var filterClauses = ((BooleanQuery) context.query()).clauses()
+                .stream()
+                .filter(clause -> clause.occur() == BooleanClause.Occur.FILTER)
+                .toList();
+            assertThat(
+                filterClauses.stream()
+                    .anyMatch(clause -> clause.query() instanceof TermQuery && clause.query().toString().equals("_routing:s1")),
+                is(true)
+            );
         } finally {
             if (indexShard != null) {
                 indexShard.getThreadPool().shutdown();

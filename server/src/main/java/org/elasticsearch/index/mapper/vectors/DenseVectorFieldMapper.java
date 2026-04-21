@@ -28,6 +28,7 @@ import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.NumericDocValues;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.SegmentWriteState;
+import org.apache.lucene.index.Term;
 import org.apache.lucene.index.VectorEncoding;
 import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.search.BooleanClause;
@@ -70,6 +71,7 @@ import org.elasticsearch.index.mapper.MapperBuilderContext;
 import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.MappingParser;
 import org.elasticsearch.index.mapper.NumberFieldMapper;
+import org.elasticsearch.index.mapper.RoutingFieldMapper;
 import org.elasticsearch.index.mapper.SimpleMappedFieldType;
 import org.elasticsearch.index.mapper.SourceLoader;
 import org.elasticsearch.index.mapper.SourceValueFetcher;
@@ -91,6 +93,7 @@ import org.elasticsearch.search.vectors.ESDiversifyingChildrenByteKnnVectorQuery
 import org.elasticsearch.search.vectors.ESDiversifyingChildrenFloatKnnVectorQuery;
 import org.elasticsearch.search.vectors.ESKnnByteVectorQuery;
 import org.elasticsearch.search.vectors.ESKnnFloatVectorQuery;
+import org.elasticsearch.search.vectors.IVFKnnFloatSlicedVectorQuery;
 import org.elasticsearch.search.vectors.IVFKnnFloatVectorQuery;
 import org.elasticsearch.search.vectors.RescoreKnnVectorQuery;
 import org.elasticsearch.search.vectors.VectorData;
@@ -2978,6 +2981,34 @@ public class DenseVectorFieldMapper extends FieldMapper {
             FilterHeuristic heuristic,
             boolean hnswEarlyTermination
         ) {
+            return createKnnQuery(
+                queryVector,
+                k,
+                numCands,
+                visitPercentage,
+                oversample,
+                filter,
+                similarityThreshold,
+                parentFilter,
+                heuristic,
+                hnswEarlyTermination,
+                null
+            );
+        }
+
+        public Query createKnnQuery(
+            VectorData queryVector,
+            int k,
+            int numCands,
+            Float visitPercentage,
+            Float oversample,
+            Query filter,
+            Float similarityThreshold,
+            BitSetProducer parentFilter,
+            FilterHeuristic heuristic,
+            boolean hnswEarlyTermination,
+            String sliceRouting
+        ) {
             if (indexType.hasVectors() == false) {
                 throw new IllegalArgumentException(
                     "to perform knn search on field [" + name() + "], its mapping must have [index] set to [true]"
@@ -3010,7 +3041,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
                     similarityThreshold,
                     parentFilter,
                     knnSearchStrategy,
-                    hnswEarlyTermination
+                    hnswEarlyTermination,
+                    sliceRouting
                 );
                 case BIT -> createKnnBitQuery(
                     resolvedQueryVector.asByteVector(),
@@ -3145,7 +3177,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
             Float similarityThreshold,
             BitSetProducer parentFilter,
             KnnSearchStrategy knnSearchStrategy,
-            boolean hnswEarlyTermination
+            boolean hnswEarlyTermination,
+            String sliceRouting
         ) {
             element.checkDimensions(dims, queryVector.length);
             element.checkVectorBounds(queryVector);
@@ -3189,6 +3222,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             } else if (indexOptions instanceof BBQIVFIndexOptions bbqIndexOptions) {
                 float defaultVisitRatio = (float) (bbqIndexOptions.defaultVisitPercentage / 100d);
                 float visitRatio = visitPercentage == null ? defaultVisitRatio : (float) (visitPercentage / 100d);
+                final BytesRef sliceValue = parentFilter == null ? parseSingleSliceRouting(sliceRouting) : null;
                 knnQuery = parentFilter != null
                     ? new DiversifyingChildrenIVFKnnFloatVectorQuery(
                         name(),
@@ -3200,6 +3234,18 @@ public class DenseVectorFieldMapper extends FieldMapper {
                         visitRatio,
                         bbqIndexOptions.doPrecondition()
                     )
+                    : sliceValue != null
+                        ? new IVFKnnFloatSlicedVectorQuery(
+                            name(),
+                            queryVector,
+                            adjustedK,
+                            numCands,
+                            filter,
+                            visitRatio,
+                            bbqIndexOptions.doPrecondition(),
+                            RoutingFieldMapper.NAME,
+                            sliceValue
+                        )
                     : new IVFKnnFloatVectorQuery(
                         name(),
                         queryVector,
@@ -3240,6 +3286,14 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 );
             }
             return knnQuery;
+        }
+
+        private static BytesRef parseSingleSliceRouting(String sliceRouting) {
+            if (sliceRouting == null || sliceRouting.contains(",")) {
+                return null;
+            }
+            final Term sliceTerm = new Term(RoutingFieldMapper.NAME, sliceRouting);
+            return BytesRef.deepCopyOf(sliceTerm.bytes());
         }
 
         public VectorSimilarity getSimilarity() {

@@ -72,6 +72,7 @@ public class ShardSearchRequest extends AbstractTransportRequest implements Indi
     private final long waitForCheckpoint;
     private final TimeValue waitForCheckpointsTimeout;
     private final SearchType searchType;
+    private final String sliceRouting;
     private final TimeValue scroll;
     private final float indexBoost;
     private Boolean requestCache;
@@ -157,6 +158,7 @@ public class ShardSearchRequest extends AbstractTransportRequest implements Indi
             shardRequestIndex,
             numberOfShards,
             searchRequest.searchType(),
+            searchRequest.routing(),
             searchRequest.source(),
             searchRequest.requestCache(),
             aliasFilter,
@@ -214,6 +216,7 @@ public class ShardSearchRequest extends AbstractTransportRequest implements Indi
             SearchType.QUERY_THEN_FETCH,
             null,
             null,
+            null,
             aliasFilter,
             1.0f,
             true,
@@ -236,6 +239,7 @@ public class ShardSearchRequest extends AbstractTransportRequest implements Indi
         int shardRequestIndex,
         int numberOfShards,
         SearchType searchType,
+        String sliceRouting,
         SearchSourceBuilder source,
         Boolean requestCache,
         AliasFilter aliasFilter,
@@ -255,6 +259,7 @@ public class ShardSearchRequest extends AbstractTransportRequest implements Indi
         this.shardRequestIndex = shardRequestIndex;
         this.numberOfShards = numberOfShards;
         this.searchType = searchType;
+        this.sliceRouting = sliceRouting;
         this.source(source);
         this.requestCache = requestCache;
         this.aliasFilter = aliasFilter;
@@ -279,6 +284,7 @@ public class ShardSearchRequest extends AbstractTransportRequest implements Indi
         this.shardId = clone.shardId;
         this.shardRequestIndex = clone.shardRequestIndex;
         this.searchType = clone.searchType;
+        this.sliceRouting = clone.sliceRouting;
         this.numberOfShards = clone.numberOfShards;
         this.scroll = clone.scroll;
         this.source(clone.source);
@@ -304,6 +310,7 @@ public class ShardSearchRequest extends AbstractTransportRequest implements Indi
         super(in);
         shardId = new ShardId(in);
         searchType = SearchType.fromId(in.readByte());
+        sliceRouting = in.readOptionalString();
         shardRequestIndex = in.readVInt();
         numberOfShards = in.readVInt();
         scroll = in.readOptionalTimeValue();
@@ -350,6 +357,7 @@ public class ShardSearchRequest extends AbstractTransportRequest implements Indi
     protected final void innerWriteTo(StreamOutput out, boolean asKey) throws IOException {
         shardId.writeTo(out);
         out.writeByte(searchType.id());
+        out.writeOptionalString(sliceRouting);
         if (asKey == false) {
             out.writeVInt(shardRequestIndex);
             out.writeVInt(numberOfShards);
@@ -436,6 +444,11 @@ public class ShardSearchRequest extends AbstractTransportRequest implements Indi
 
     public SearchType searchType() {
         return searchType;
+    }
+
+    @Nullable
+    public String sliceRouting() {
+        return sliceRouting;
     }
 
     public float indexBoost() {
