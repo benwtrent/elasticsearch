@@ -119,7 +119,8 @@ public class DenseVectorStatsTests extends AbstractWireSerializingTestCase<Dense
                   "total_veq_size_bytes" : 0,
                   "total_vex_size_bytes" : 1,
                   "total_cenivf_size_bytes" : 7,
-                  "total_clivf_size_bytes" : 2
+                  "total_clivf_size_bytes" : 2,
+                  "total_cex_size_bytes" : 0
                 }
               }
             }""";
@@ -141,6 +142,7 @@ public class DenseVectorStatsTests extends AbstractWireSerializingTestCase<Dense
                   "total_vex_size_bytes" : 1,
                   "total_cenivf_size_bytes" : 7,
                   "total_clivf_size_bytes" : 2,
+                  "total_cex_size_bytes" : 0,
                   "fielddata" : {
                     "bar" : {
                       "cenivf_size_bytes" : 7,
@@ -179,7 +181,8 @@ public class DenseVectorStatsTests extends AbstractWireSerializingTestCase<Dense
                           "total_veq_size_bytes" : 0,
                           "total_vex_size_bytes" : 0,
                           "total_cenivf_size_bytes" : 0,
-                          "total_clivf_size_bytes" : 0
+                          "total_clivf_size_bytes" : 0,
+                          "total_cex_size_bytes" : 0
                         }
                       }
                     }""";
@@ -217,6 +220,8 @@ public class DenseVectorStatsTests extends AbstractWireSerializingTestCase<Dense
                   "total_cenivf_size_bytes" : 0,
                   "total_clivf_size" : "0b",
                   "total_clivf_size_bytes" : 0,
+                  "total_cex_size" : "0b",
+                  "total_cex_size_bytes" : 0,
                   "fielddata" : {
                     "bar" : {
                       "veb_size" : "1kb",

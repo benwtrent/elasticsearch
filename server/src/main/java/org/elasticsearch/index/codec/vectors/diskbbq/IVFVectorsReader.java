@@ -67,6 +67,7 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
     static final float DEFAULT_TARGET_RECALL = 0.9f;
 
     protected final IndexInput ivfCentroids, ivfClusters;
+    protected final IndexInput ivfAuxiliary;
     private final SegmentReadState state;
     private final FieldInfos fieldInfos;
     protected final IntObjectHashMap<E> fields;
@@ -89,6 +90,37 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
         int versionCurrent,
         int versionDirectIo,
         float dynamicVisitRatio
+    ) throws IOException {
+        this(
+            state,
+            loadReader,
+            codecName,
+            centroidExtension,
+            clusterExtension,
+            metaExtension,
+            versionStart,
+            versionCurrent,
+            versionDirectIo,
+            dynamicVisitRatio,
+            null,
+            Integer.MAX_VALUE
+        );
+    }
+
+    @SuppressWarnings("this-escape")
+    protected IVFVectorsReader(
+        SegmentReadState state,
+        GenericFlatVectorReaders.LoadFlatVectorsReader loadReader,
+        String codecName,
+        String centroidExtension,
+        String clusterExtension,
+        String metaExtension,
+        int versionStart,
+        int versionCurrent,
+        int versionDirectIo,
+        float dynamicVisitRatio,
+        String auxiliaryExtension,
+        int auxiliaryStartVersion
     ) throws IOException {
         this.state = state;
         this.fieldInfos = state.fieldInfos;
@@ -121,10 +153,19 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
             }
             ivfCentroids = openDataInput(state, versionMeta, centroidExtension, codecName, versionStart, versionCurrent, state.context);
             ivfClusters = openDataInput(state, versionMeta, clusterExtension, codecName, versionStart, versionCurrent, state.context);
+            if (auxiliaryExtension != null && versionMeta >= auxiliaryStartVersion) {
+                ivfAuxiliary = openDataInput(state, versionMeta, auxiliaryExtension, codecName, versionStart, versionCurrent, state.context);
+            } else {
+                ivfAuxiliary = null;
+            }
         } catch (Throwable t) {
             IOUtils.closeWhileHandlingException(this);
             throw t;
         }
+    }
+
+    protected final IndexInput getAuxiliaryInput() {
+        return ivfAuxiliary;
     }
 
     public abstract CentroidIterator getCentroidIterator(
@@ -281,6 +322,9 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
         }
         CodecUtil.checksumEntireFile(ivfCentroids);
         CodecUtil.checksumEntireFile(ivfClusters);
+        if (ivfAuxiliary != null) {
+            CodecUtil.checksumEntireFile(ivfAuxiliary);
+        }
     }
 
     protected FlatVectorsReader getReaderForField(String field) {
@@ -477,6 +521,9 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
     public void close() throws IOException {
         List<Closeable> closeables = new ArrayList<>(genericReaders.allReaders());
         Collections.addAll(closeables, ivfCentroids, ivfClusters);
+        if (ivfAuxiliary != null) {
+            closeables.add(ivfAuxiliary);
+        }
         IOUtils.close(closeables);
     }
 

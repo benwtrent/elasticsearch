@@ -63,6 +63,7 @@ import org.apache.lucene.util.VectorUtil;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.PathUtils;
+import org.elasticsearch.index.codec.vectors.diskbbq.next.ESNextDiskBBQVectorsReader;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.search.profile.query.QueryProfiler;
 import org.elasticsearch.search.vectors.ESKnnByteVectorQuery;
@@ -411,6 +412,7 @@ public class KnnSearcher {
         TopDocs[] results = new TopDocs[totalSearches];
         int[][] resultIds = new int[totalSearches][];
         long elapsed, totalCpuTimeMS, totalVisited = 0;
+        Map<String, String> previousCentroidGraphTuning = applyCentroidGraphTuning(searchParameters);
         try (
             ExecutorService executorService = Executors.newFixedThreadPool(
                 searchParameters.searchThreads(),
@@ -541,6 +543,9 @@ public class KnnSearcher {
                 );
             }
         }
+        finally {
+            restoreCentroidGraphTuning(previousCentroidGraphTuning);
+        }
 
         resultsConsumer.accept(resultIds, finalResults, searchParameters);
         finalResults.visitPercentage = indexType == KnnIndexTester.IndexType.IVF ? searchParameters.visitPercentage() : 0;
@@ -587,6 +592,46 @@ public class KnnSearcher {
             dir.listAll().length,
             elapsedMS
         );
+    }
+
+    private static Map<String, String> applyCentroidGraphTuning(SearchParameters searchParameters) {
+        Map<String, String> previousValues = new LinkedHashMap<>();
+        setSystemProperty(
+            previousValues,
+            ESNextDiskBBQVectorsReader.SYSTEM_PROPERTY_GRAPH_BEAM_SCALING,
+            searchParameters.ivfCentroidGraphBeamScaling()
+        );
+        setSystemProperty(
+            previousValues,
+            ESNextDiskBBQVectorsReader.SYSTEM_PROPERTY_GRAPH_BEAM_MULTIPLIER,
+            Float.toString(searchParameters.ivfCentroidGraphBeamMultiplier())
+        );
+        setSystemProperty(
+            previousValues,
+            ESNextDiskBBQVectorsReader.SYSTEM_PROPERTY_GRAPH_MIN_BEAM_WIDTH,
+            Integer.toString(searchParameters.ivfCentroidGraphMinBeamWidth())
+        );
+        setSystemProperty(
+            previousValues,
+            ESNextDiskBBQVectorsReader.SYSTEM_PROPERTY_GRAPH_VISIT_LIMIT_MULTIPLIER,
+            Integer.toString(searchParameters.ivfCentroidGraphVisitLimitMultiplier())
+        );
+        return previousValues;
+    }
+
+    private static void setSystemProperty(Map<String, String> previousValues, String key, String value) {
+        previousValues.put(key, System.getProperty(key));
+        System.setProperty(key, value);
+    }
+
+    private static void restoreCentroidGraphTuning(Map<String, String> previousValues) {
+        for (Map.Entry<String, String> entry : previousValues.entrySet()) {
+            if (entry.getValue() == null) {
+                System.clearProperty(entry.getKey());
+            } else {
+                System.setProperty(entry.getKey(), entry.getValue());
+            }
+        }
     }
 
     private static Query combineFilters(Query primary, Query secondary) {

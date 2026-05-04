@@ -11,6 +11,7 @@ package org.elasticsearch.test.knn;
 
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.core.PathUtils;
+import org.elasticsearch.index.codec.vectors.diskbbq.next.ESNextDiskBBQVectorsFormat;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.knn.data.DatasetConfig;
 import org.elasticsearch.xcontent.XContentParser;
@@ -30,10 +31,15 @@ public class TestConfigurationTests extends ESTestCase {
               "doc_vectors": ["/path/to/docs"],
               "query_vectors": "/path/to/queries",
               "dimensions": 128,
+              "ivf_centroid_search_mode": "hnsw_4bit",
               "num_candidates": [10, 20],
               "k": [5, 10],
               "visit_percentage": [0.5],
               "over_sampling_factor": [2.0],
+              "ivf_centroid_graph_beam_scaling": ["log2"],
+              "ivf_centroid_graph_beam_multiplier": [12.0],
+              "ivf_centroid_graph_min_beam_width": [24],
+              "ivf_centroid_graph_visit_limit_multiplier": [8],
               "search_threads": [1],
               "num_searchers": [1],
               "filter_selectivity": [0.8],
@@ -49,6 +55,7 @@ public class TestConfigurationTests extends ESTestCase {
             assertEquals(1, config.docVectors().size());
             assertTrue(config.docVectors().get(0).equals(PathUtils.get("/path/to/docs")));
             assertTrue(config.queryVectors().equals(PathUtils.get("/path/to/queries")));
+            assertEquals(ESNextDiskBBQVectorsFormat.CentroidSearchMode.HNSW_4BIT, config.ivfCentroidSearchMode());
 
             List<SearchParameters> params = config.searchParams();
             assertEquals(4, params.size());
@@ -68,6 +75,10 @@ public class TestConfigurationTests extends ESTestCase {
 
             assertEquals(20, params.get(3).numCandidates());
             assertEquals(10, params.get(3).topK());
+            assertEquals("log2", params.get(0).ivfCentroidGraphBeamScaling());
+            assertEquals(12.0f, params.get(0).ivfCentroidGraphBeamMultiplier(), 0.0f);
+            assertEquals(24, params.get(0).ivfCentroidGraphMinBeamWidth());
+            assertEquals(8, params.get(0).ivfCentroidGraphVisitLimitMultiplier());
         }
     }
 

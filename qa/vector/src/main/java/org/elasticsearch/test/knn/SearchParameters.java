@@ -27,7 +27,11 @@ public record SearchParameters(
     float filterSelectivity,
     boolean filterCached,
     boolean earlyTermination,
-    long seed
+    long seed,
+    String ivfCentroidGraphBeamScaling,
+    float ivfCentroidGraphBeamMultiplier,
+    int ivfCentroidGraphMinBeamWidth,
+    int ivfCentroidGraphVisitLimitMultiplier
 ) {
 
     static final ObjectParser<SearchParameters.Builder, Void> PARSER = new ObjectParser<>(
@@ -47,6 +51,13 @@ public record SearchParameters(
         PARSER.declareBoolean(Builder::setFilterCached, TestConfiguration.FILTER_CACHED);
         PARSER.declareFloat(Builder::setFilterSelectivity, TestConfiguration.FILTER_SELECTIVITY_FIELD);
         PARSER.declareLong(Builder::setSeed, TestConfiguration.SEED_FIELD);
+        PARSER.declareString(Builder::setIvfCentroidGraphBeamScaling, TestConfiguration.IVF_CENTROID_GRAPH_BEAM_SCALING_FIELD);
+        PARSER.declareFloat(Builder::setIvfCentroidGraphBeamMultiplier, TestConfiguration.IVF_CENTROID_GRAPH_BEAM_MULTIPLIER_FIELD);
+        PARSER.declareInt(Builder::setIvfCentroidGraphMinBeamWidth, TestConfiguration.IVF_CENTROID_GRAPH_MIN_BEAM_WIDTH_FIELD);
+        PARSER.declareInt(
+            Builder::setIvfCentroidGraphVisitLimitMultiplier,
+            TestConfiguration.IVF_CENTROID_GRAPH_VISIT_LIMIT_MULTIPLIER_FIELD
+        );
     }
 
     static SearchParameters.Builder fromXContent(XContentParser parser) {
@@ -68,6 +79,10 @@ public record SearchParameters(
         private Boolean filterCached;
         private Boolean earlyTermination;
         private Long seed;
+        private String ivfCentroidGraphBeamScaling;
+        private Float ivfCentroidGraphBeamMultiplier;
+        private Integer ivfCentroidGraphMinBeamWidth;
+        private Integer ivfCentroidGraphVisitLimitMultiplier;
 
         public Builder setNumCandidates(int numCandidates) {
             this.numCandidates = numCandidates;
@@ -119,6 +134,26 @@ public record SearchParameters(
             return this;
         }
 
+        public Builder setIvfCentroidGraphBeamScaling(String ivfCentroidGraphBeamScaling) {
+            this.ivfCentroidGraphBeamScaling = ivfCentroidGraphBeamScaling;
+            return this;
+        }
+
+        public Builder setIvfCentroidGraphBeamMultiplier(float ivfCentroidGraphBeamMultiplier) {
+            this.ivfCentroidGraphBeamMultiplier = ivfCentroidGraphBeamMultiplier;
+            return this;
+        }
+
+        public Builder setIvfCentroidGraphMinBeamWidth(int ivfCentroidGraphMinBeamWidth) {
+            this.ivfCentroidGraphMinBeamWidth = ivfCentroidGraphMinBeamWidth;
+            return this;
+        }
+
+        public Builder setIvfCentroidGraphVisitLimitMultiplier(int ivfCentroidGraphVisitLimitMultiplier) {
+            this.ivfCentroidGraphVisitLimitMultiplier = ivfCentroidGraphVisitLimitMultiplier;
+            return this;
+        }
+
         private Builder setNullValues(SearchParameters params) {
             // Only set the null members, don't overwrite the set values
             this.numCandidates = Optional.ofNullable(numCandidates).orElse(params.numCandidates());
@@ -131,6 +166,13 @@ public record SearchParameters(
             this.filterSelectivity = Optional.ofNullable(filterSelectivity).orElse(params.filterSelectivity());
             this.earlyTermination = Optional.ofNullable(earlyTermination).orElse(params.earlyTermination());
             this.seed = Optional.ofNullable(seed).orElse(params.seed());
+            this.ivfCentroidGraphBeamScaling = Optional.ofNullable(ivfCentroidGraphBeamScaling).orElse(params.ivfCentroidGraphBeamScaling());
+            this.ivfCentroidGraphBeamMultiplier = Optional.ofNullable(ivfCentroidGraphBeamMultiplier)
+                .orElse(params.ivfCentroidGraphBeamMultiplier());
+            this.ivfCentroidGraphMinBeamWidth = Optional.ofNullable(ivfCentroidGraphMinBeamWidth)
+                .orElse(params.ivfCentroidGraphMinBeamWidth());
+            this.ivfCentroidGraphVisitLimitMultiplier = Optional.ofNullable(ivfCentroidGraphVisitLimitMultiplier)
+                .orElse(params.ivfCentroidGraphVisitLimitMultiplier());
             return this;
         }
 
@@ -158,7 +200,11 @@ public record SearchParameters(
                 filterSelectivity,
                 filterCached,
                 earlyTermination,
-                seed
+                seed,
+                ivfCentroidGraphBeamScaling,
+                ivfCentroidGraphBeamMultiplier,
+                ivfCentroidGraphMinBeamWidth,
+                ivfCentroidGraphVisitLimitMultiplier
             );
         }
 
@@ -194,6 +240,27 @@ public record SearchParameters(
             }
             if (seed != null) {
                 builder.field(TestConfiguration.SEED_FIELD.getPreferredName(), seed);
+            }
+            if (ivfCentroidGraphBeamScaling != null) {
+                builder.field(TestConfiguration.IVF_CENTROID_GRAPH_BEAM_SCALING_FIELD.getPreferredName(), ivfCentroidGraphBeamScaling);
+            }
+            if (ivfCentroidGraphBeamMultiplier != null) {
+                builder.field(
+                    TestConfiguration.IVF_CENTROID_GRAPH_BEAM_MULTIPLIER_FIELD.getPreferredName(),
+                    ivfCentroidGraphBeamMultiplier
+                );
+            }
+            if (ivfCentroidGraphMinBeamWidth != null) {
+                builder.field(
+                    TestConfiguration.IVF_CENTROID_GRAPH_MIN_BEAM_WIDTH_FIELD.getPreferredName(),
+                    ivfCentroidGraphMinBeamWidth
+                );
+            }
+            if (ivfCentroidGraphVisitLimitMultiplier != null) {
+                builder.field(
+                    TestConfiguration.IVF_CENTROID_GRAPH_VISIT_LIMIT_MULTIPLIER_FIELD.getPreferredName(),
+                    ivfCentroidGraphVisitLimitMultiplier
+                );
             }
             return builder.endObject();
         }

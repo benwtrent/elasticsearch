@@ -44,6 +44,11 @@ public class ES94ScalarQuantizedVectorsFormat extends FlatVectorsFormat {
     static final Lucene104ScalarQuantizedVectorScorer flatVectorScorer = new ESQuantizedFlatVectorsScorer(
         ES93GenericFlatVectorScorer.INSTANCE
     );
+
+    public static Lucene104ScalarQuantizedVectorScorer getFlatVectorScorer() {
+        return flatVectorScorer;
+    }
+
     private final FlatVectorsFormat rawVectorFormat;
     private final Lucene104ScalarQuantizedVectorsFormat.ScalarEncoding encoding;
 

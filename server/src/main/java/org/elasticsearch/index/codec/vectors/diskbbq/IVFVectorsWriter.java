@@ -54,6 +54,7 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
     private final List<FieldWriter> fieldWriters = new ArrayList<>();
     private final IndexOutput ivfCentroids, ivfClusters;
     private final IndexOutput ivfMeta;
+    private final IndexOutput ivfAuxiliary;
     private final String rawVectorFormatName;
     private final Boolean useDirectIOReads;
     private final FlatVectorsWriter rawVectorDelegate;
@@ -74,6 +75,37 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         boolean shouldWriteDirectIoReads,
         int flatVectorThreshold
     ) throws IOException {
+        this(
+            state,
+            rawVectorFormatName,
+            useDirectIOReads,
+            rawVectorDelegate,
+            writeVersion,
+            codecName,
+            metaExtension,
+            centroidExtension,
+            clusterExtension,
+            null,
+            shouldWriteDirectIoReads,
+            flatVectorThreshold
+        );
+    }
+
+    @SuppressWarnings("this-escape")
+    protected IVFVectorsWriter(
+        SegmentWriteState state,
+        String rawVectorFormatName,
+        Boolean useDirectIOReads,
+        FlatVectorsWriter rawVectorDelegate,
+        int writeVersion,
+        String codecName,
+        String metaExtension,
+        String centroidExtension,
+        String clusterExtension,
+        String auxiliaryExtension,
+        boolean shouldWriteDirectIoReads,
+        int flatVectorThreshold
+    ) throws IOException {
         this.rawVectorFormatName = rawVectorFormatName;
         this.useDirectIOReads = useDirectIOReads;
         this.rawVectorDelegate = rawVectorDelegate;
@@ -82,6 +114,9 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         final String metaFileName = IndexFileNames.segmentFileName(state.segmentInfo.name, state.segmentSuffix, metaExtension);
         final String ivfCentroidsFileName = IndexFileNames.segmentFileName(state.segmentInfo.name, state.segmentSuffix, centroidExtension);
         final String ivfClustersFileName = IndexFileNames.segmentFileName(state.segmentInfo.name, state.segmentSuffix, clusterExtension);
+        final String ivfAuxiliaryFileName = auxiliaryExtension == null
+            ? null
+            : IndexFileNames.segmentFileName(state.segmentInfo.name, state.segmentSuffix, auxiliaryExtension);
         try {
             ivfMeta = state.directory.createOutput(metaFileName, state.context);
             CodecUtil.writeIndexHeader(ivfMeta, codecName, writeVersion, state.segmentInfo.getId(), state.segmentSuffix);
@@ -89,10 +124,20 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
             CodecUtil.writeIndexHeader(ivfCentroids, codecName, writeVersion, state.segmentInfo.getId(), state.segmentSuffix);
             ivfClusters = state.directory.createOutput(ivfClustersFileName, state.context);
             CodecUtil.writeIndexHeader(ivfClusters, codecName, writeVersion, state.segmentInfo.getId(), state.segmentSuffix);
+            if (ivfAuxiliaryFileName == null) {
+                ivfAuxiliary = null;
+            } else {
+                ivfAuxiliary = state.directory.createOutput(ivfAuxiliaryFileName, state.context);
+                CodecUtil.writeIndexHeader(ivfAuxiliary, codecName, writeVersion, state.segmentInfo.getId(), state.segmentSuffix);
+            }
         } catch (Throwable t) {
             IOUtils.closeWhileHandlingException(this);
             throw t;
         }
+    }
+
+    protected final IndexOutput getAuxiliaryOutput() {
+        return ivfAuxiliary;
     }
 
     @Override
@@ -622,11 +667,14 @@ public abstract class IVFVectorsWriter extends KnnVectorsWriter {
         if (ivfClusters != null) {
             CodecUtil.writeFooter(ivfClusters);
         }
+        if (ivfAuxiliary != null) {
+            CodecUtil.writeFooter(ivfAuxiliary);
+        }
     }
 
     @Override
     public final void close() throws IOException {
-        IOUtils.close(rawVectorDelegate, ivfMeta, ivfCentroids, ivfClusters);
+        IOUtils.close(rawVectorDelegate, ivfMeta, ivfCentroids, ivfClusters, ivfAuxiliary);
     }
 
     @Override

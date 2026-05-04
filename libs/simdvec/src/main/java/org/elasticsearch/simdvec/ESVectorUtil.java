@@ -14,9 +14,11 @@ import org.apache.lucene.util.BitUtil;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.Constants;
 import org.apache.lucene.util.UnicodeUtil;
+import org.elasticsearch.simdvec.internal.IndexInputUtils;
 import org.elasticsearch.simdvec.internal.vectorization.ESVectorUtilSupport;
 import org.elasticsearch.simdvec.internal.vectorization.ESVectorizationProvider;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -45,6 +47,27 @@ public class ESVectorUtil {
     }
 
     private static final ESVectorUtilSupport IMPL = ESVectorizationProvider.getInstance().getVectorUtilSupport();
+
+    /**
+     * Reusable thread-local arena pool for native address-array scratch space used by SIMD scorer gather paths.
+     * Intended to be created/owned by a higher-level lifecycle (for example a vectors reader) and closed with it.
+     */
+    public static final class SliceAddressArenaPool implements Closeable {
+        private final IndexInputUtils.ThreadLocalSliceAddressArenaPool delegate = new IndexInputUtils.ThreadLocalSliceAddressArenaPool();
+
+        @Override
+        public void close() {
+            delegate.close();
+        }
+    }
+
+    /**
+     * Activates a reusable slice-address arena pool on the current thread for nested SIMD gather operations.
+     * The returned closeable restores the previous activation state when closed.
+     */
+    public static Closeable activateSliceAddressArenaPool(SliceAddressArenaPool pool) {
+        return IndexInputUtils.activateSliceAddressArenaPool(pool.delegate);
+    }
 
     public static ES91OSQVectorsScorer getES91OSQVectorsScorer(IndexInput input, int dimension, int bulkSize) throws IOException {
         return ESVectorizationProvider.getInstance().newES91OSQVectorsScorer(input, dimension, bulkSize);

@@ -30,6 +30,11 @@ import org.apache.lucene.store.ByteBuffersDataOutput;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
+import org.apache.lucene.util.hnsw.HnswGraphBuilder;
+import org.apache.lucene.util.hnsw.NeighborArray;
+import org.apache.lucene.util.hnsw.OnHeapHnswGraph;
+import org.apache.lucene.util.hnsw.RandomVectorScorerSupplier;
+import org.apache.lucene.util.hnsw.UpdateableRandomVectorScorer;
 import org.apache.lucene.util.hnsw.IntToIntFunction;
 import org.apache.lucene.util.packed.DirectWriter;
 import org.apache.lucene.util.packed.PackedInts;
@@ -49,6 +54,7 @@ import org.elasticsearch.index.codec.vectors.diskbbq.DocIdsWriter;
 import org.elasticsearch.index.codec.vectors.diskbbq.IVFVectorsWriter;
 import org.elasticsearch.index.codec.vectors.diskbbq.IntSorter;
 import org.elasticsearch.index.codec.vectors.diskbbq.IntToBooleanFunction;
+import org.elasticsearch.index.codec.vectors.diskbbq.PostingMetadata;
 import org.elasticsearch.index.codec.vectors.diskbbq.Preconditioner;
 import org.elasticsearch.index.codec.vectors.diskbbq.QuantizedVectorValues;
 import org.elasticsearch.index.codec.vectors.diskbbq.VectorPreconditioner;
@@ -62,7 +68,9 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.IntUnaryOperator;
 
@@ -76,14 +84,18 @@ import static org.elasticsearch.simdvec.ES940OSQVectorsScorer.BULK_SIZE;
  */
 public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
     private static final Logger logger = LogManager.getLogger(ESNextDiskBBQVectorsWriter.class);
+    private static final int CENTROID_GRAPH_HNSW_M = 16;
+    private static final int CENTROID_GRAPH_HNSW_BEAM_WIDTH = 250;
 
     private final int vectorPerCluster;
     private final int centroidsPerParentCluster;
     private final ESNextDiskBBQVectorsFormat.QuantEncoding quantEncoding;
+    private final ESNextDiskBBQVectorsFormat.CentroidSearchMode centroidSearchMode;
     private final TaskExecutor mergeExec;
     private final int numMergeWorkers;
     private final int blockDimension;
     private final boolean doPrecondition;
+    private final Map<Integer, GraphSection> graphSections = new HashMap<>();
     // field for slicing, null for no slicing
     private final String sliceField;
 
@@ -100,7 +112,8 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         int blockDimension,
         boolean doPrecondition,
         int flatVectorThreshold,
-        String sliceField
+        String sliceField,
+        ESNextDiskBBQVectorsFormat.CentroidSearchMode centroidSearchMode
     ) throws IOException {
         super(
             state,
@@ -112,12 +125,14 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             ESNextDiskBBQVectorsFormat.IVF_META_EXTENSION,
             ESNextDiskBBQVectorsFormat.CENTROID_EXTENSION,
             ESNextDiskBBQVectorsFormat.CLUSTER_EXTENSION,
+            ESNextDiskBBQVectorsFormat.CENTROID_GRAPH_EXTENSION,
             true,
             flatVectorThreshold
         );
         this.vectorPerCluster = vectorPerCluster;
         this.centroidsPerParentCluster = centroidsPerParentCluster;
         this.quantEncoding = encoding;
+        this.centroidSearchMode = centroidSearchMode;
         this.mergeExec = mergeExec;
         this.numMergeWorkers = numMergeWorkers;
         this.blockDimension = blockDimension;
@@ -625,6 +640,15 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
                 metaOutput.writeVInt(maxSliceSize);
             }
         }
+        GraphSection graphSection = graphSections.remove(field.number);
+        metaOutput.writeInt(centroidSearchMode.id());
+        if (graphSection == null) {
+            metaOutput.writeLong(-1L);
+            metaOutput.writeLong(0L);
+        } else {
+            metaOutput.writeLong(graphSection.offset());
+            metaOutput.writeLong(graphSection.length());
+        }
     }
 
     @Override
@@ -654,6 +678,10 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
 
     private record CentroidGroups(float[][] centroids, int[][] vectors, int maxVectorsPerCentroidLength) {}
 
+    private record OrderedCentroidData(int[] centroidOrdinals, int[] parentOrdinals) {}
+
+    private record GraphSection(long offset, long length) {}
+
     private void doWriteCentroids(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
@@ -673,6 +701,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             }
             writer.finish();
         }
+        final OrderedCentroidData orderedCentroidData;
         if (centroidSupplier.secondLevelClusters().centroidsSupplier().size() > 1) {
             final CentroidGroups centroidGroups = buildCentroidGroups(centroidSupplier.secondLevelClusters());
             {
@@ -688,10 +717,33 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
                 assert idx == centroidSupplier.size() : "Expected [" + centroidSupplier.size() + "], got [" + idx + "]";
                 writeCentroidLookup(centroidOutput, centroidAssignments, i -> centroidOrdinalMap[i], centroidSupplier.size());
             }
-            writeCentroidsWithParents(fieldInfo, centroidSupplier, globalCentroid, centroidOffsetAndLength, centroidOutput, centroidGroups);
+            orderedCentroidData = writeCentroidsWithParents(
+                fieldInfo,
+                centroidSupplier,
+                globalCentroid,
+                centroidOffsetAndLength,
+                centroidOutput,
+                centroidGroups
+            );
         } else {
             writeCentroidLookup(centroidOutput, centroidAssignments, IntUnaryOperator.identity(), centroidSupplier.size());
-            writeCentroidsWithoutParents(fieldInfo, centroidSupplier, globalCentroid, centroidOffsetAndLength, centroidOutput);
+            orderedCentroidData = writeCentroidsWithoutParents(
+                fieldInfo,
+                centroidSupplier,
+                globalCentroid,
+                centroidOffsetAndLength,
+                centroidOutput
+            );
+        }
+        if (centroidSearchMode == ESNextDiskBBQVectorsFormat.CentroidSearchMode.HNSW_4BIT) {
+            IndexOutput graphOutput = getAuxiliaryOutput();
+            if (graphOutput == null) {
+                throw new IllegalStateException("centroid graph mode enabled without auxiliary graph output");
+            }
+            long graphOffset = graphOutput.getFilePointer();
+            writeCentroidGraphSection(fieldInfo, centroidSupplier, globalCentroid, centroidOffsetAndLength, orderedCentroidData, graphOutput);
+            long graphLength = graphOutput.getFilePointer() - graphOffset;
+            graphSections.put(fieldInfo.number, new GraphSection(graphOffset, graphLength));
         }
     }
 
@@ -718,7 +770,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         }
     }
 
-    private void writeCentroidsWithParents(
+    private OrderedCentroidData writeCentroidsWithParents(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
         float[] globalCentroid,
@@ -764,17 +816,23 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         }
         // write the centroid offsets at the end of the file
         int parentOrd = 0;
+        int[] orderedCentroidOrds = new int[centroidSupplier.size()];
+        int[] parentOrds = new int[centroidSupplier.size()];
+        int orderedOrdinal = 0;
         for (int[] centroidVectors : centroidGroups.vectors()) {
             for (int assignment : centroidVectors) {
                 centroidOutput.writeLong(centroidOffsetAndLength.offsets().get(assignment));
                 centroidOutput.writeLong(centroidOffsetAndLength.lengths().get(assignment));
                 centroidOutput.writeInt(parentOrd);
+                orderedCentroidOrds[orderedOrdinal] = assignment;
+                parentOrds[orderedOrdinal++] = parentOrd;
             }
             parentOrd++;
         }
+        return new OrderedCentroidData(orderedCentroidOrds, parentOrds);
     }
 
-    private void writeCentroidsWithoutParents(
+    private OrderedCentroidData writeCentroidsWithoutParents(
         FieldInfo fieldInfo,
         CentroidSupplier centroidSupplier,
         float[] globalCentroid,
@@ -793,9 +851,131 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         );
         bulkWriter.writeVectors(quantizedCentroids, null);
         // write the centroid offsets at the end of the file
+        int[] orderedCentroidOrds = new int[centroidSupplier.size()];
+        int[] parentOrds = new int[centroidSupplier.size()];
+        Arrays.fill(parentOrds, PostingMetadata.NO_ORDINAL);
         for (int i = 0; i < centroidSupplier.size(); i++) {
             centroidOutput.writeLong(centroidOffsetAndLength.offsets().get(i));
             centroidOutput.writeLong(centroidOffsetAndLength.lengths().get(i));
+            orderedCentroidOrds[i] = i;
+        }
+        return new OrderedCentroidData(orderedCentroidOrds, parentOrds);
+    }
+
+    private void writeCentroidGraphSection(
+        FieldInfo fieldInfo,
+        CentroidSupplier centroidSupplier,
+        float[] globalCentroid,
+        CentroidOffsetAndLength centroidOffsetAndLength,
+        OrderedCentroidData orderedCentroidData,
+        IndexOutput centroidOutput
+    ) throws IOException {
+        int numCentroids = orderedCentroidData.centroidOrdinals().length;
+        centroidOutput.writeVInt(numCentroids);
+        int dimension = fieldInfo.getVectorDimension();
+        ESNextDiskBBQVectorsFormat.QuantEncoding graphEncoding = ESNextDiskBBQVectorsFormat.QuantEncoding.FOUR_BIT_SYMMETRIC;
+        int vectorByteLength = graphEncoding.getDocPackedLength(dimension);
+        centroidOutput.writeVInt(vectorByteLength);
+        OptimizedScalarQuantizer quantizer = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction());
+        int[] quantizedScratch = new int[graphEncoding.discretizedDimensions(dimension)];
+        float[] transformedScratch = new float[dimension];
+        byte[] packed = new byte[vectorByteLength];
+        float[][] orderedCentroids = new float[numCentroids][dimension];
+        for (int i = 0; i < numCentroids; i++) {
+            int originalOrd = orderedCentroidData.centroidOrdinals()[i];
+            float[] centroid = centroidSupplier.centroid(originalOrd);
+            orderedCentroids[i] = Arrays.copyOf(centroid, centroid.length);
+            OptimizedScalarQuantizer.QuantizationResult corrections = quantizer.scalarQuantize(
+                centroid,
+                transformedScratch,
+                quantizedScratch,
+                (byte) 4,
+                globalCentroid
+            );
+            graphEncoding.pack(quantizedScratch, packed);
+            centroidOutput.writeBytes(packed, 0, packed.length);
+            centroidOutput.writeInt(Float.floatToIntBits(corrections.lowerInterval()));
+            centroidOutput.writeInt(Float.floatToIntBits(corrections.upperInterval()));
+            centroidOutput.writeInt(Float.floatToIntBits(corrections.additionalCorrection()));
+            centroidOutput.writeInt(corrections.quantizedComponentSum());
+        }
+        for (int i = 0; i < numCentroids; i++) {
+            int originalOrd = orderedCentroidData.centroidOrdinals()[i];
+            centroidOutput.writeLong(centroidOffsetAndLength.offsets().get(originalOrd));
+            centroidOutput.writeLong(centroidOffsetAndLength.lengths().get(originalOrd));
+            centroidOutput.writeInt(orderedCentroidData.parentOrdinals()[i]);
+        }
+        OnHeapHnswGraph graph = HnswGraphBuilder.create(
+            new CentroidScorerSupplier(orderedCentroids, fieldInfo.getVectorSimilarityFunction()),
+            CENTROID_GRAPH_HNSW_M,
+            CENTROID_GRAPH_HNSW_BEAM_WIDTH,
+            42L,
+            numCentroids
+        ).build(numCentroids);
+        centroidOutput.writeVInt(graph.numLevels());
+        centroidOutput.writeVInt(graph.entryNode());
+        centroidOutput.writeVInt(graph.maxConn());
+        for (int level = 0; level < graph.numLevels(); level++) {
+            var nodesIterator = graph.getNodesOnLevel(level);
+            centroidOutput.writeVInt(nodesIterator.size());
+            while (nodesIterator.hasNext()) {
+                int node = nodesIterator.nextInt();
+                centroidOutput.writeVInt(node);
+                NeighborArray neighbors = graph.getNeighbors(level, node);
+                centroidOutput.writeVInt(neighbors.size());
+                int[] neighborNodes = neighbors.nodes();
+                for (int i = 0; i < neighbors.size(); i++) {
+                    centroidOutput.writeVInt(neighborNodes[i]);
+                }
+            }
+        }
+    }
+
+    private static class CentroidScorerSupplier implements RandomVectorScorerSupplier {
+        private final float[][] centroids;
+        private final VectorSimilarityFunction similarityFunction;
+
+        private CentroidScorerSupplier(float[][] centroids, VectorSimilarityFunction similarityFunction) {
+            this.centroids = centroids;
+            this.similarityFunction = similarityFunction;
+        }
+
+        @Override
+        public UpdateableRandomVectorScorer scorer() {
+            return new UpdateableRandomVectorScorer() {
+                private int scoringOrdinal;
+
+                @Override
+                public float score(int node) {
+                    return similarityFunction.compare(centroids[scoringOrdinal], centroids[node]);
+                }
+
+                @Override
+                public float bulkScore(int[] nodes, float[] scores, int numNodes) {
+                    float maxScore = Float.NEGATIVE_INFINITY;
+                    for (int i = 0; i < numNodes; i++) {
+                        float score = score(nodes[i]);
+                        scores[i] = score;
+                        maxScore = Math.max(maxScore, score);
+                    }
+                    return maxScore;
+                }
+
+                @Override
+                public int maxOrd() {
+                    return centroids.length;
+                }
+
+                @Override
+                public void setScoringOrdinal(int scoringOrdinal) {
+                    this.scoringOrdinal = scoringOrdinal;
+                }
+            };
+        }
+
+        @Override
+        public RandomVectorScorerSupplier copy() {
+            return new CentroidScorerSupplier(centroids, similarityFunction);
         }
     }
 

@@ -208,6 +208,7 @@ public class KnnIndexTester {
                             : args.secondaryClusterSize()
                     )
                 );
+                suffix.add(args.ivfCentroidSearchMode().name().toLowerCase(Locale.ROOT));
                 suffix.add(Integer.toString(args.quantizeBits()));
             }
             case HNSW -> {
@@ -246,7 +247,8 @@ public class KnnIndexTester {
                     args.doPrecondition(),
                     args.preconditioningBlockDims(),
                     flatVectorThreshold,
-                    null
+                    null,
+                    args.ivfCentroidSearchMode()
                 );
             }
             case GPU_HNSW -> switch (quantizeBits) {
@@ -977,6 +979,7 @@ public class KnnIndexTester {
         "hnsw_ef_construction",
         "ivf_cluster_size",
         "secondary_cluster_size",
+        "ivf_centroid_search_mode",
         "merge_policy",
         "on_disk_rescore",
         "precondition",
@@ -1087,6 +1090,7 @@ public class KnnIndexTester {
                             Integer.toString(config.hnswEfConstruction()),
                             Integer.toString(config.ivfClusterSize()),
                             Integer.toString(config.secondaryClusterSize()),
+                            config.ivfCentroidSearchMode().name().toLowerCase(Locale.ROOT),
                             config.mergePolicy() != null ? config.mergePolicy().name().toLowerCase(Locale.ROOT) : "",
                             Boolean.toString(config.onDiskRescore()),
                             Boolean.toString(config.doPrecondition()),

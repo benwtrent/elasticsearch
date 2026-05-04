@@ -33,7 +33,7 @@ import java.util.concurrent.ExecutorService;
  * are represented by centroids.
  * The vector quantization format used here is a per-vector optimized scalar quantization. Also see {@link
  * OptimizedScalarQuantizer}. Some of key features are:
- * The format is stored in three files:
+ * The format is stored in four files:
  *
  * <h2>.cenivf (centroid data) file</h2>
  *  <p> Which stores the raw and quantized centroid vectors.
@@ -47,6 +47,10 @@ import java.util.concurrent.ExecutorService;
  *
  * <p> Stores metadata including the number of centroids and their offsets in the clivf file</p>
  *
+ * <h2>.cex (centroid graph index) file</h2>
+ *
+ * <p> Stores centroid HNSW graph data and quantized centroid graph vectors.</p>
+ *
  */
 public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
 
@@ -56,10 +60,14 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
     // offsets contained in cen_ivf, [vector ordinals, actually just docIds](long varint), quantized vectors
     public static final String CLUSTER_EXTENSION = "clivf";
     public static final String IVF_META_EXTENSION = "mivf";
+    public static final String CENTROID_GRAPH_EXTENSION = "cex";
 
     public static final int VERSION_START = 1;
     public static final int VERSION_DIRECT_IO = VERSION_START;
-    public static final int VERSION_CURRENT = VERSION_START;
+    public static final int VERSION_CENTROID_HNSW = 2;
+    public static final int VERSION_CENTROID_HNSW_CEX = 3;
+    public static final int VERSION_CENTROID_HNSW_CEX_GLOBAL_GRAPH = 4;
+    public static final int VERSION_CURRENT = VERSION_CENTROID_HNSW_CEX_GLOBAL_GRAPH;
     public static final float DYNAMIC_VISIT_RATIO = 0.0f;
 
     private static final DirectIOCapableFlatVectorsFormat float32VectorFormat = new DirectIOCapableLucene99FlatVectorsFormat(
@@ -87,7 +95,7 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
         return configuredClusterSize * DEFAULT_FLAT_VECTOR_THRESHOLD_MULTIPLIER;
     }
 
-    public static final int MIN_VECTORS_PER_CLUSTER = 64;
+    public static final int MIN_VECTORS_PER_CLUSTER = 16;
     public static final int MAX_VECTORS_PER_CLUSTER = 1 << 16; // 65536
     public static final int DEFAULT_CENTROIDS_PER_PARENT_CLUSTER = 16;
     public static final int MIN_CENTROIDS_PER_PARENT_CLUSTER = 2;
@@ -282,6 +290,30 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
         }
     }
 
+    public enum CentroidSearchMode {
+        BRUTE_FORCE(0),
+        HNSW_4BIT(1);
+
+        private final int id;
+
+        CentroidSearchMode(int id) {
+            this.id = id;
+        }
+
+        public int id() {
+            return id;
+        }
+
+        public static CentroidSearchMode fromId(int id) {
+            for (CentroidSearchMode mode : values()) {
+                if (mode.id == id) {
+                    return mode;
+                }
+            }
+            throw new IllegalArgumentException("Unknown centroid search mode id: " + id);
+        }
+    }
+
     private final QuantEncoding quantEncoding;
     private final int vectorPerCluster;
     private final int centroidsPerParentCluster;
@@ -293,12 +325,23 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
     private final int preconditioningBlockDimension;
     private final int flatVectorThreshold;
     private final String sliceField;
+    private final CentroidSearchMode centroidSearchMode;
 
     public ESNextDiskBBQVectorsFormat(int vectorPerCluster, int centroidsPerParentCluster, String sliceField) {
-        this(QuantEncoding.ONE_BIT_4BIT_QUERY, vectorPerCluster, centroidsPerParentCluster, sliceField);
+        this(QuantEncoding.ONE_BIT_4BIT_QUERY, vectorPerCluster, centroidsPerParentCluster, sliceField, CentroidSearchMode.BRUTE_FORCE);
     }
 
     public ESNextDiskBBQVectorsFormat(QuantEncoding quantEncoding, int vectorPerCluster, int centroidsPerParentCluster, String sliceField) {
+        this(quantEncoding, vectorPerCluster, centroidsPerParentCluster, sliceField, CentroidSearchMode.BRUTE_FORCE);
+    }
+
+    public ESNextDiskBBQVectorsFormat(
+        QuantEncoding quantEncoding,
+        int vectorPerCluster,
+        int centroidsPerParentCluster,
+        String sliceField,
+        CentroidSearchMode centroidSearchMode
+    ) {
         this(
             quantEncoding,
             vectorPerCluster,
@@ -310,7 +353,8 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
             false,
             DEFAULT_PRECONDITIONING_BLOCK_DIMENSION,
             defaultFlatThreshold(vectorPerCluster),
-            sliceField
+            sliceField,
+            centroidSearchMode
         );
     }
 
@@ -337,7 +381,37 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
             doPrecondition,
             preconditioningBlockDimension,
             defaultFlatThreshold(vectorPerCluster),
-            sliceField
+            sliceField,
+            CentroidSearchMode.BRUTE_FORCE
+        );
+    }
+
+    public ESNextDiskBBQVectorsFormat(
+        QuantEncoding quantEncoding,
+        int vectorPerCluster,
+        int centroidsPerParentCluster,
+        DenseVectorFieldMapper.ElementType elementType,
+        boolean useDirectIO,
+        ExecutorService mergingExecutorService,
+        int maxMergingWorkers,
+        boolean doPrecondition,
+        int preconditioningBlockDimension,
+        String sliceField,
+        CentroidSearchMode centroidSearchMode
+    ) {
+        this(
+            quantEncoding,
+            vectorPerCluster,
+            centroidsPerParentCluster,
+            elementType,
+            useDirectIO,
+            mergingExecutorService,
+            maxMergingWorkers,
+            doPrecondition,
+            preconditioningBlockDimension,
+            defaultFlatThreshold(vectorPerCluster),
+            sliceField,
+            centroidSearchMode
         );
     }
 
@@ -353,6 +427,36 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
         int preconditioningBlockDimension,
         int flatVectorThreshold,
         String sliceField
+    ) {
+        this(
+            quantEncoding,
+            vectorPerCluster,
+            centroidsPerParentCluster,
+            elementType,
+            useDirectIO,
+            mergingExecutorService,
+            maxMergingWorkers,
+            doPrecondition,
+            preconditioningBlockDimension,
+            flatVectorThreshold,
+            sliceField,
+            CentroidSearchMode.BRUTE_FORCE
+        );
+    }
+
+    public ESNextDiskBBQVectorsFormat(
+        QuantEncoding quantEncoding,
+        int vectorPerCluster,
+        int centroidsPerParentCluster,
+        DenseVectorFieldMapper.ElementType elementType,
+        boolean useDirectIO,
+        ExecutorService mergingExecutorService,
+        int maxMergingWorkers,
+        boolean doPrecondition,
+        int preconditioningBlockDimension,
+        int flatVectorThreshold,
+        String sliceField,
+        CentroidSearchMode centroidSearchMode
     ) {
         super(NAME);
         if (vectorPerCluster < MIN_VECTORS_PER_CLUSTER || vectorPerCluster > MAX_VECTORS_PER_CLUSTER) {
@@ -407,6 +511,7 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
         this.doPrecondition = doPrecondition;
         this.flatVectorThreshold = flatVectorThreshold == -1 ? defaultFlatThreshold(vectorPerCluster) : flatVectorThreshold;
         this.sliceField = sliceField;
+        this.centroidSearchMode = centroidSearchMode;
     }
 
     /** Constructs a format using the given graph construction parameters and scalar quantization. */
@@ -429,7 +534,8 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
             preconditioningBlockDimension,
             doPrecondition,
             flatVectorThreshold,
-            sliceField
+            sliceField,
+            centroidSearchMode
         );
     }
 

@@ -21,10 +21,12 @@ import org.elasticsearch.core.DirectAccessInput;
 import org.elasticsearch.nativeaccess.NativeAccess;
 import org.elasticsearch.test.ESTestCase;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.not;
@@ -221,6 +223,51 @@ public class IndexInputUtilsTests extends ESTestCase {
                 assertThat(in, instanceOf(DirectAccessInput.class));
                 verifyWithSliceAddresses(in, data, 64);
             }
+        }
+    }
+
+    public void testWithSliceAddressesThreadLocalArenaPool() throws Exception {
+        byte[] data = randomByteArrayOfLength(1024);
+        try (Directory dir = new MMapDirectory(createTempDir())) {
+            writeData(dir, data);
+            try (
+                IndexInput in = dir.openInput(FILE_NAME, IOContext.DEFAULT);
+                IndexInputUtils.ThreadLocalSliceAddressArenaPool pool = new IndexInputUtils.ThreadLocalSliceAddressArenaPool()
+            ) {
+                try (Closeable ignored = IndexInputUtils.activateSliceAddressArenaPool(pool)) {
+                    verifyWithSliceAddresses(in, data, 64);
+                    in.seek(0L);
+                    verifyWithSliceAddresses(in, data, 64);
+                }
+            }
+        }
+    }
+
+    public void testThreadLocalArenaPoolCloseFromDifferentThread() throws Exception {
+        byte[] data = randomByteArrayOfLength(1024);
+        try (
+            Directory dir = new MMapDirectory(createTempDir());
+            IndexInputUtils.ThreadLocalSliceAddressArenaPool pool = new IndexInputUtils.ThreadLocalSliceAddressArenaPool()
+        ) {
+            writeData(dir, data);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            Thread thread = new Thread(() -> {
+                try (
+                    IndexInput in = dir.openInput(FILE_NAME, IOContext.DEFAULT);
+                    Closeable ignored = IndexInputUtils.activateSliceAddressArenaPool(pool)
+                ) {
+                    long[] offsets = { 0L, 64L, 128L, 192L };
+                    boolean result = IndexInputUtils.withSliceAddresses(in, offsets, 64, 4, addrs -> {
+                        assertTrue(addrs.getAtIndex(ValueLayout.ADDRESS, 0) != MemorySegment.NULL);
+                    });
+                    assertTrue(result);
+                } catch (Throwable t) {
+                    failure.set(t);
+                }
+            });
+            thread.start();
+            thread.join();
+            assertNull("worker failed", failure.get());
         }
     }
 

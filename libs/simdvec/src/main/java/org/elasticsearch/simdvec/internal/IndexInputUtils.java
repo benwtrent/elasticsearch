@@ -15,12 +15,14 @@ import org.elasticsearch.core.CheckedConsumer;
 import org.elasticsearch.core.CheckedFunction;
 import org.elasticsearch.core.DirectAccessInput;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.ref.Reference;
 import java.nio.ByteBuffer;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.IntFunction;
 
 import static org.elasticsearch.simdvec.internal.vectorization.JdkFeatures.SUPPORTS_HEAP_SEGMENTS;
@@ -38,6 +40,7 @@ import static org.elasticsearch.simdvec.internal.vectorization.JdkFeatures.SUPPO
 public final class IndexInputUtils {
 
     private IndexInputUtils() {}
+    private static final ThreadLocal<ThreadLocalSliceAddressArenaPool> ACTIVE_SLICE_ADDRESS_ARENA_POOL = new ThreadLocal<>();
 
     /**
      * Returns {@code true} if {@code MemorySegment} slices can be obtained from the specified {@link IndexInput}.
@@ -207,6 +210,22 @@ public final class IndexInputUtils {
         return false;
     }
 
+    /**
+     * Activates the provided thread-local arena pool for nested {@link #withSliceAddresses} calls
+     * on the current thread. The returned closeable restores the previous active pool when closed.
+     */
+    public static Closeable activateSliceAddressArenaPool(ThreadLocalSliceAddressArenaPool pool) {
+        ThreadLocalSliceAddressArenaPool previous = ACTIVE_SLICE_ADDRESS_ARENA_POOL.get();
+        ACTIVE_SLICE_ADDRESS_ARENA_POOL.set(pool);
+        return () -> {
+            if (previous == null) {
+                ACTIVE_SLICE_ADDRESS_ARENA_POOL.remove();
+            } else {
+                ACTIVE_SLICE_ADDRESS_ARENA_POOL.set(previous);
+            }
+        };
+    }
+
     private static boolean resolveFromMmap(
         MemorySegmentAccessInput msai,
         long[] offsets,
@@ -219,8 +238,9 @@ public final class IndexInputUtils {
             return false;
         }
         assert validateNativeSegment(full, "mmap segment");
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment addrs = allocateAddrs(arena, count);
+        ThreadLocalSliceAddressArenaPool arenaPool = ACTIVE_SLICE_ADDRESS_ARENA_POOL.get();
+        if (arenaPool != null) {
+            MemorySegment addrs = arenaPool.addresses(count);
             for (int i = 0; i < count; i++) {
                 addrs.setAtIndex(ValueLayout.ADDRESS, i, full.asSlice(offsets[i], length));
             }
@@ -229,6 +249,19 @@ public final class IndexInputUtils {
                 action.accept(addrs);
             } finally {
                 Reference.reachabilityFence(full);
+            }
+        } else {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment addrs = allocateAddrs(arena, count);
+                for (int i = 0; i < count; i++) {
+                    addrs.setAtIndex(ValueLayout.ADDRESS, i, full.asSlice(offsets[i], length));
+                }
+                assert validateAddresses(addrs, count);
+                try {
+                    action.accept(addrs);
+                } finally {
+                    Reference.reachabilityFence(full);
+                }
             }
         }
         return true;
@@ -243,8 +276,9 @@ public final class IndexInputUtils {
     ) throws IOException {
         return dai.withByteBufferSlices(offsets, length, count, bbs -> {
             assert validateByteBuffers(bbs, count, length);
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment addrs = allocateAddrs(arena, count);
+            ThreadLocalSliceAddressArenaPool arenaPool = ACTIVE_SLICE_ADDRESS_ARENA_POOL.get();
+            if (arenaPool != null) {
+                MemorySegment addrs = arenaPool.addresses(count);
                 for (int i = 0; i < count; i++) {
                     addrs.setAtIndex(ValueLayout.ADDRESS, i, MemorySegment.ofBuffer(bbs[i]));
                 }
@@ -254,8 +288,90 @@ public final class IndexInputUtils {
                 } finally {
                     Reference.reachabilityFence(bbs);
                 }
+            } else {
+                try (Arena arena = Arena.ofConfined()) {
+                    MemorySegment addrs = allocateAddrs(arena, count);
+                    for (int i = 0; i < count; i++) {
+                        addrs.setAtIndex(ValueLayout.ADDRESS, i, MemorySegment.ofBuffer(bbs[i]));
+                    }
+                    assert validateAddresses(addrs, count);
+                    try {
+                        action.accept(addrs);
+                    } finally {
+                        Reference.reachabilityFence(bbs);
+                    }
+                }
             }
         });
+    }
+
+    /**
+     * Reuses a confined arena per calling thread and exposes temporary address arrays for
+     * {@link #withSliceAddresses} to avoid per-call arena creation/closure overhead.
+     *
+     * <p>Instances should be closed by the owning higher-level lifecycle (for example a vectors reader).
+     */
+    public static final class ThreadLocalSliceAddressArenaPool implements Closeable {
+        private final ConcurrentLinkedQueue<ThreadArena> arenas = new ConcurrentLinkedQueue<>();
+        private volatile ThreadLocal<ThreadArena> threadArenas = ThreadLocal.withInitial(() -> {
+            ThreadArena threadArena = new ThreadArena();
+            arenas.add(threadArena);
+            return threadArena;
+        });
+        private volatile boolean closed = false;
+
+        private MemorySegment addresses(int count) {
+            if (closed) {
+                throw new IllegalStateException("slice address arena pool is closed");
+            }
+            ThreadLocal<ThreadArena> localThreadArenas = threadArenas;
+            if (localThreadArenas == null) {
+                throw new IllegalStateException("slice address arena pool is closed");
+            }
+            return localThreadArenas.get().addresses(count);
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+            ThreadLocal<ThreadArena> localThreadArenas = threadArenas;
+            threadArenas = null;
+            if (localThreadArenas != null) {
+                localThreadArenas.remove();
+            }
+            for (ThreadArena arena : arenas) {
+                arena.tryCloseFromCurrentThread();
+            }
+            arenas.clear();
+        }
+    }
+
+    private static final class ThreadArena {
+        private final Thread ownerThread = Thread.currentThread();
+        private final Arena arena = Arena.ofConfined();
+        private MemorySegment addresses;
+        private int capacity = 0;
+        private boolean closed = false;
+
+        private MemorySegment addresses(int count) {
+            assert Thread.currentThread() == ownerThread : "Thread-local arena used from a different thread";
+            if (closed) {
+                throw new IllegalStateException("thread arena is closed");
+            }
+            if (count > capacity) {
+                capacity = Math.max(1, Integer.highestOneBit(count - 1) << 1);
+                addresses = allocateAddrs(arena, capacity);
+            }
+            return addresses.asSlice(0, (long) count * ValueLayout.ADDRESS.byteSize());
+        }
+
+        private void tryCloseFromCurrentThread() {
+            if (closed || Thread.currentThread() != ownerThread) {
+                return;
+            }
+            closed = true;
+            arena.close();
+        }
     }
 
     private static MemorySegment allocateAddrs(Arena arena, int count) {

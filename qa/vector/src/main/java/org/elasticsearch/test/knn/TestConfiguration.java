@@ -18,6 +18,7 @@ import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.index.VectorSimilarityFunction;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.core.PathUtils;
+import org.elasticsearch.index.codec.vectors.diskbbq.next.ESNextDiskBBQVectorsReader;
 import org.elasticsearch.index.codec.vectors.diskbbq.next.ESNextDiskBBQVectorsFormat;
 import org.elasticsearch.monitor.jvm.JvmInfo;
 import org.elasticsearch.test.knn.data.DatasetConfig;
@@ -78,6 +79,7 @@ public record TestConfiguration(
     int preconditioningBlockDims,
     int flatVectorThreshold,
     int secondaryClusterSize,
+    ESNextDiskBBQVectorsFormat.CentroidSearchMode ivfCentroidSearchMode,
     String directoryType,
     DatasetConfig datasetConfig
 ) {
@@ -120,6 +122,13 @@ public record TestConfiguration(
     static final ParseField FILTER_CACHED = new ParseField("filter_cache");
     static final ParseField SEARCH_PARAMS = new ParseField("search_params");
     static final ParseField FLAT_VECTOR_THRESHOLD = new ParseField("flat_vector_threshold");
+    static final ParseField IVF_CENTROID_SEARCH_MODE_FIELD = new ParseField("ivf_centroid_search_mode");
+    static final ParseField IVF_CENTROID_GRAPH_BEAM_SCALING_FIELD = new ParseField("ivf_centroid_graph_beam_scaling");
+    static final ParseField IVF_CENTROID_GRAPH_BEAM_MULTIPLIER_FIELD = new ParseField("ivf_centroid_graph_beam_multiplier");
+    static final ParseField IVF_CENTROID_GRAPH_MIN_BEAM_WIDTH_FIELD = new ParseField("ivf_centroid_graph_min_beam_width");
+    static final ParseField IVF_CENTROID_GRAPH_VISIT_LIMIT_MULTIPLIER_FIELD = new ParseField(
+        "ivf_centroid_graph_visit_limit_multiplier"
+    );
     static final ParseField DIRECTORY_TYPE_FIELD = new ParseField("directory_type");
 
     /** By default, in ES the default writer buffer size is 10% of the heap space
@@ -185,6 +194,14 @@ public record TestConfiguration(
         PARSER.declareInt(Builder::setMergeWorkers, MERGE_WORKERS_FIELD);
         PARSER.declareInt(Builder::setFlatVectorThreshold, FLAT_VECTOR_THRESHOLD);
         PARSER.declareInt(Builder::setSecondaryClusterSize, SECONDARY_CLUSTER_SIZE);
+        PARSER.declareString(Builder::setIvfCentroidSearchMode, IVF_CENTROID_SEARCH_MODE_FIELD);
+        PARSER.declareStringArray(Builder::setIvfCentroidGraphBeamScaling, IVF_CENTROID_GRAPH_BEAM_SCALING_FIELD);
+        PARSER.declareFloatArray(Builder::setIvfCentroidGraphBeamMultiplier, IVF_CENTROID_GRAPH_BEAM_MULTIPLIER_FIELD);
+        PARSER.declareIntArray(Builder::setIvfCentroidGraphMinBeamWidth, IVF_CENTROID_GRAPH_MIN_BEAM_WIDTH_FIELD);
+        PARSER.declareIntArray(
+            Builder::setIvfCentroidGraphVisitLimitMultiplier,
+            IVF_CENTROID_GRAPH_VISIT_LIMIT_MULTIPLIER_FIELD
+        );
         PARSER.declareString(Builder::setDirectoryType, DIRECTORY_TYPE_FIELD);
     }
 
@@ -219,6 +236,31 @@ public record TestConfiguration(
             new ParameterHelp("index_type", "string", "Index type: hnsw, flat, ivf, or gpu_hnsw."),
             new ParameterHelp("ivf_cluster_size", "int", "IVF: number of clusters."),
             new ParameterHelp("secondary_cluster_size", "int", "IVF: centroids per parent cluster; -1 uses the format default."),
+            new ParameterHelp(
+                "ivf_centroid_search_mode",
+                "string",
+                "IVF: centroid candidate selection mode: brute_force or hnsw_4bit."
+            ),
+            new ParameterHelp(
+                "ivf_centroid_graph_beam_scaling",
+                "array[string]",
+                "IVF+hnsw_4bit: beam scaling mode for centroid graph traversal: linear or log2."
+            ),
+            new ParameterHelp(
+                "ivf_centroid_graph_beam_multiplier",
+                "array[float]",
+                "IVF+hnsw_4bit: multiplier applied to scaled desired centroid count for beam width."
+            ),
+            new ParameterHelp(
+                "ivf_centroid_graph_min_beam_width",
+                "array[int]",
+                "IVF+hnsw_4bit: lower bound on initial centroid graph beam width."
+            ),
+            new ParameterHelp(
+                "ivf_centroid_graph_visit_limit_multiplier",
+                "array[int]",
+                "IVF+hnsw_4bit: multiplier for HNSW collector visit limit relative to beam width."
+            ),
             new ParameterHelp("hnsw_m", "int", "HNSW: M parameter (graph degree)."),
             new ParameterHelp("hnsw_ef_construction", "int", "HNSW: efConstruction parameter."),
             new ParameterHelp("index_threads", "int", "Number of threads used for indexing."),
@@ -403,6 +445,14 @@ public record TestConfiguration(
         private int numMergeWorkers = 1;
         private int flatVectorThreshold = -1; // -1 mean use default (vectorPerCluster * 3)
         private int secondaryClusterSize = -1;
+        private ESNextDiskBBQVectorsFormat.CentroidSearchMode ivfCentroidSearchMode =
+            ESNextDiskBBQVectorsFormat.CentroidSearchMode.BRUTE_FORCE;
+        private List<String> ivfCentroidGraphBeamScaling = List.of(ESNextDiskBBQVectorsReader.DEFAULT_GRAPH_BEAM_SCALING);
+        private List<Float> ivfCentroidGraphBeamMultiplier = List.of(ESNextDiskBBQVectorsReader.DEFAULT_GRAPH_INITIAL_BEAM_MULTIPLIER);
+        private List<Integer> ivfCentroidGraphMinBeamWidth = List.of(ESNextDiskBBQVectorsReader.DEFAULT_GRAPH_MIN_BEAM_WIDTH);
+        private List<Integer> ivfCentroidGraphVisitLimitMultiplier = List.of(
+            ESNextDiskBBQVectorsReader.DEFAULT_GRAPH_VISIT_LIMIT_MULTIPLIER
+        );
         private int flatIndexThreshold = -1; // use format's default threshold
         private String directoryType = "default";
 
@@ -612,6 +662,31 @@ public record TestConfiguration(
 
         public Builder setSecondaryClusterSize(int secondaryClusterSize) {
             this.secondaryClusterSize = secondaryClusterSize;
+            return this;
+        }
+
+        public Builder setIvfCentroidSearchMode(String ivfCentroidSearchMode) {
+            this.ivfCentroidSearchMode = ESNextDiskBBQVectorsFormat.CentroidSearchMode.valueOf(ivfCentroidSearchMode.toUpperCase(Locale.ROOT));
+            return this;
+        }
+
+        public Builder setIvfCentroidGraphBeamScaling(List<String> ivfCentroidGraphBeamScaling) {
+            this.ivfCentroidGraphBeamScaling = ivfCentroidGraphBeamScaling;
+            return this;
+        }
+
+        public Builder setIvfCentroidGraphBeamMultiplier(List<Float> ivfCentroidGraphBeamMultiplier) {
+            this.ivfCentroidGraphBeamMultiplier = ivfCentroidGraphBeamMultiplier;
+            return this;
+        }
+
+        public Builder setIvfCentroidGraphMinBeamWidth(List<Integer> ivfCentroidGraphMinBeamWidth) {
+            this.ivfCentroidGraphMinBeamWidth = ivfCentroidGraphMinBeamWidth;
+            return this;
+        }
+
+        public Builder setIvfCentroidGraphVisitLimitMultiplier(List<Integer> ivfCentroidGraphVisitLimitMultiplier) {
+            this.ivfCentroidGraphVisitLimitMultiplier = ivfCentroidGraphVisitLimitMultiplier;
             return this;
         }
 
@@ -835,9 +910,8 @@ public record TestConfiguration(
             if (longestParam > 1 && (searchParams != null && searchParams.isEmpty() == false)) {
                 throw new IllegalArgumentException(
                     Strings.format(
-                        "The %1$s option is incompatible with setting multiple values of %2$s. Use %1$s to control %2$s",
-                        SEARCH_PARAMS,
-                        VISIT_PERCENTAGE_FIELD
+                        "The %s option is incompatible with setting multiple values for top-level search parameter arrays.",
+                        SEARCH_PARAMS
                     )
                 );
             }
@@ -858,7 +932,11 @@ public record TestConfiguration(
                     filterSelectivity.getFirst(),
                     filterCached.getFirst(),
                     earlyTermination.getFirst(),
-                    seed.getFirst()
+                    seed.getFirst(),
+                    ivfCentroidGraphBeamScaling.getFirst(),
+                    ivfCentroidGraphBeamMultiplier.getFirst(),
+                    ivfCentroidGraphMinBeamWidth.getFirst(),
+                    ivfCentroidGraphVisitLimitMultiplier.getFirst()
                 );
 
                 for (var so : searchParams) {
@@ -894,6 +972,7 @@ public record TestConfiguration(
                 preconditioningBlockDims,
                 flatVectorThreshold,
                 secondaryClusterSize,
+                ivfCentroidSearchMode,
                 directoryType,
                 datasetConfig
             );
@@ -953,6 +1032,14 @@ public record TestConfiguration(
                 builder.field(SEARCH_PARAMS.getPreferredName(), searchParams);
             }
             builder.field(FLAT_VECTOR_THRESHOLD.getPreferredName(), flatVectorThreshold);
+            builder.field(IVF_CENTROID_SEARCH_MODE_FIELD.getPreferredName(), ivfCentroidSearchMode.name().toLowerCase(Locale.ROOT));
+            builder.field(IVF_CENTROID_GRAPH_BEAM_SCALING_FIELD.getPreferredName(), ivfCentroidGraphBeamScaling);
+            builder.field(IVF_CENTROID_GRAPH_BEAM_MULTIPLIER_FIELD.getPreferredName(), ivfCentroidGraphBeamMultiplier);
+            builder.field(IVF_CENTROID_GRAPH_MIN_BEAM_WIDTH_FIELD.getPreferredName(), ivfCentroidGraphMinBeamWidth);
+            builder.field(
+                IVF_CENTROID_GRAPH_VISIT_LIMIT_MULTIPLIER_FIELD.getPreferredName(),
+                ivfCentroidGraphVisitLimitMultiplier
+            );
             builder.field(DIRECTORY_TYPE_FIELD.getPreferredName(), directoryType);
             return builder.endObject();
         }
@@ -968,7 +1055,11 @@ public record TestConfiguration(
                 filterSelectivity.size(),
                 filterCached.size(),
                 earlyTermination.size(),
-                seed.size()
+                seed.size(),
+                ivfCentroidGraphBeamScaling.size(),
+                ivfCentroidGraphBeamMultiplier.size(),
+                ivfCentroidGraphMinBeamWidth.size(),
+                ivfCentroidGraphVisitLimitMultiplier.size()
             );
             return lengths.stream().max(Integer::compareTo).get();
         }
@@ -985,7 +1076,11 @@ public record TestConfiguration(
                     filterSelectivity,
                     filterCached,
                     earlyTermination,
-                    seed
+                    seed,
+                    ivfCentroidGraphBeamScaling,
+                    ivfCentroidGraphBeamMultiplier,
+                    ivfCentroidGraphMinBeamWidth,
+                    ivfCentroidGraphVisitLimitMultiplier
                 )
             ).stream()
                 .map(
@@ -999,7 +1094,11 @@ public record TestConfiguration(
                         (Float) params.get(6),
                         (Boolean) params.get(7),
                         (Boolean) params.get(8),
-                        (Long) params.get(9)
+                        (Long) params.get(9),
+                        (String) params.get(10),
+                        (Float) params.get(11),
+                        (Integer) params.get(12),
+                        (Integer) params.get(13)
                     )
                 )
                 .toList();
