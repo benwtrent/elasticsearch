@@ -362,7 +362,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             targetQuery
         );
         ScoreDoc[] results;
-        if (parseBooleanProperty(SYSTEM_PROPERTY_GRAPH_BRUTE_FORCE, true)) {
+        if (parseBooleanProperty(SYSTEM_PROPERTY_GRAPH_BRUTE_FORCE, false)) {
             try (Closeable ignored = ESVectorUtil.activateSliceAddressArenaPool(sliceAddressArenaPool)) {
                 results = scoreAcceptedCentroids(remainingAcceptOrds, scorer);
             }
