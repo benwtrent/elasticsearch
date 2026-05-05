@@ -83,7 +83,7 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
         bfloat16VectorFormat
     );
 
-    public static final int DEFAULT_VECTORS_PER_CLUSTER = 384;
+    public static final int DEFAULT_VECTORS_PER_CLUSTER = 128;
     private static final int DEFAULT_FLAT_VECTOR_THRESHOLD_MULTIPLIER = 3;
 
     /**
@@ -97,7 +97,7 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
 
     public static final int MIN_VECTORS_PER_CLUSTER = 16;
     public static final int MAX_VECTORS_PER_CLUSTER = 1 << 16; // 65536
-    public static final int DEFAULT_CENTROIDS_PER_PARENT_CLUSTER = 16;
+    public static final int DEFAULT_CENTROIDS_PER_PARENT_CLUSTER = 64;
     public static final int MIN_CENTROIDS_PER_PARENT_CLUSTER = 2;
     public static final int MAX_CENTROIDS_PER_PARENT_CLUSTER = DEFAULT_VECTORS_PER_CLUSTER; // 384
     public static final int DEFAULT_PRECONDITIONING_BLOCK_DIMENSION = 32;
@@ -328,11 +328,11 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
     private final CentroidSearchMode centroidSearchMode;
 
     public ESNextDiskBBQVectorsFormat(int vectorPerCluster, int centroidsPerParentCluster, String sliceField) {
-        this(QuantEncoding.ONE_BIT_4BIT_QUERY, vectorPerCluster, centroidsPerParentCluster, sliceField, CentroidSearchMode.BRUTE_FORCE);
+        this(QuantEncoding.ONE_BIT_4BIT_QUERY, vectorPerCluster, centroidsPerParentCluster, sliceField, CentroidSearchMode.HNSW_4BIT);
     }
 
     public ESNextDiskBBQVectorsFormat(QuantEncoding quantEncoding, int vectorPerCluster, int centroidsPerParentCluster, String sliceField) {
-        this(quantEncoding, vectorPerCluster, centroidsPerParentCluster, sliceField, CentroidSearchMode.BRUTE_FORCE);
+        this(quantEncoding, vectorPerCluster, centroidsPerParentCluster, sliceField, CentroidSearchMode.HNSW_4BIT);
     }
 
     public ESNextDiskBBQVectorsFormat(
@@ -382,7 +382,7 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
             preconditioningBlockDimension,
             defaultFlatThreshold(vectorPerCluster),
             sliceField,
-            CentroidSearchMode.BRUTE_FORCE
+            CentroidSearchMode.HNSW_4BIT
         );
     }
 
@@ -440,7 +440,7 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
             preconditioningBlockDimension,
             flatVectorThreshold,
             sliceField,
-            CentroidSearchMode.BRUTE_FORCE
+            CentroidSearchMode.HNSW_4BIT
         );
     }
 

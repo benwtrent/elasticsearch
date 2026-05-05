@@ -76,7 +76,7 @@ public class ES940DiskBBQVectorsFormat extends KnnVectorsFormat {
         bfloat16VectorFormat
     );
 
-    public static final int DEFAULT_VECTORS_PER_CLUSTER = 384;
+    public static final int DEFAULT_VECTORS_PER_CLUSTER = 128;
     private static final int DEFAULT_FLAT_VECTOR_THRESHOLD_MULTIPLIER = 3;
 
     /**

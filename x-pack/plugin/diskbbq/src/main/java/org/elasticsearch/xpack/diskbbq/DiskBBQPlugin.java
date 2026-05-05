@@ -78,8 +78,8 @@ public class DiskBBQPlugin extends Plugin implements InternalVectorFormatProvide
                     if (Build.current().isSnapshot()) {
                         return new ESNextDiskBBQVectorsFormat(
                             ESNextDiskBBQVectorsFormat.QuantEncoding.fromBits((byte) diskbbq.getBits()),
-                            clusterSize,
-                            ES920DiskBBQVectorsFormat.DEFAULT_CENTROIDS_PER_PARENT_CLUSTER,
+                            128,
+                            64,
                             elementType,
                             onDiskRescore,
                             mergingExecutorService,
