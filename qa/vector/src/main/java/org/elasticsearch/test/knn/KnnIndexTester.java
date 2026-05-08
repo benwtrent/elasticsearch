@@ -435,9 +435,11 @@ public class KnnIndexTester {
         GitInfo gitInfo = captureGitInfo();
         Path dumpFile = writeResultsDump(jsonConfigPath, rawConfigJson, formattedResults, gitInfo, runStart);
         Path csvFile = appendResultsCsv(jsonConfigPath, testConfigurationList, formattedResults, gitInfo, runStart);
+        Path vectorTimingFile = writeVectorPhaseTimingDump(jsonConfigPath, formattedResults, runStart);
         List<String> outputPaths = new ArrayList<>();
         if (dumpFile != null) outputPaths.add(dumpFile.toString());
         if (csvFile != null) outputPaths.add(csvFile.toString());
+        if (vectorTimingFile != null) outputPaths.add(vectorTimingFile.toString());
         if (outputPaths.isEmpty() == false) {
             logger.info("Output files written:\n  {}", String.join("\n  ", outputPaths));
         }
@@ -799,6 +801,7 @@ public class KnnIndexTester {
 
             return widths;
         }
+
     }
 
     static class Results {
@@ -824,6 +827,7 @@ public class KnnIndexTester {
         int numCandidates;
         int topK;
         Map<String, Float> perPartitionRecall;
+        Map<String, Long> vectorPhaseTimingsNanos;
 
         Results(String indexName, String indexType, int numDocs) {
             this.indexName = indexName;
@@ -1096,6 +1100,66 @@ public class KnnIndexTester {
             return csvFile.toAbsolutePath();
         } catch (IOException e) {
             logger.warn("Failed to append results to CSV: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static Path writeVectorPhaseTimingDump(Path configFilePath, FormattedResults formattedResults, LocalDateTime timestamp) {
+        boolean hasVectorTimings = formattedResults.queryResults.stream()
+            .anyMatch(r -> r.vectorPhaseTimingsNanos != null && r.vectorPhaseTimingsNanos.isEmpty() == false);
+        if (hasVectorTimings == false) {
+            return null;
+        }
+        try {
+            Path outDir = PathUtils.get("target/knn_results");
+            Files.createDirectories(outDir);
+            String configFileName = configFilePath.getFileName().toString();
+            int dotIdx = configFileName.lastIndexOf('.');
+            String configBaseName = dotIdx > 0 ? configFileName.substring(0, dotIdx) : configFileName;
+            String fileTs = timestamp.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+            Path outFile = outDir.resolve(fileTs + "_" + configBaseName + "_vector_phase_timings.txt");
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("=".repeat(80)).append("\n");
+            sb.append("  KNN Vector Phase Timings\n");
+            sb.append("=".repeat(80)).append("\n");
+            sb.append("Timestamp:   ").append(timestamp.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)).append("\n");
+            sb.append("Config file: ").append(configFilePath.toAbsolutePath()).append("\n\n");
+
+            int run = 1;
+            for (Results result : formattedResults.queryResults) {
+                Map<String, Long> phaseTimings = result.vectorPhaseTimingsNanos;
+                if (phaseTimings == null || phaseTimings.isEmpty()) {
+                    run++;
+                    continue;
+                }
+                long totalNs = phaseTimings.values().stream().mapToLong(Long::longValue).sum();
+                sb.append("--- Search run ").append(run).append(" ").append("-".repeat(63)).append("\n");
+                sb.append("index_name:      ").append(result.indexName).append("\n");
+                sb.append("index_type:      ").append(result.indexType).append("\n");
+                sb.append("top_k:           ").append(result.topK).append("\n");
+                sb.append("num_candidates:  ").append(result.numCandidates).append("\n");
+                sb.append("total_time_ns:   ").append(totalNs).append("\n\n");
+                sb.append(String.format(Locale.ROOT, "%-32s %18s %10s%n", "phase", "time_ns", "percent"));
+                sb.append(String.format(Locale.ROOT, "%-32s %18s %10s%n", "-".repeat(32), "-".repeat(18), "-".repeat(10)));
+                phaseTimings.entrySet()
+                    .stream()
+                    .sorted((a, b) -> Long.compare(b.getValue(), a.getValue()))
+                    .forEach(entry -> {
+                        double percent = totalNs > 0 ? (entry.getValue() * 100.0) / totalNs : 0.0;
+                        sb.append(
+                            String.format(Locale.ROOT, "%-32s %18d %9.2f%%%n", entry.getKey(), entry.getValue(), percent)
+                        );
+                    });
+                sb.append("\n");
+                run++;
+            }
+            sb.append("=".repeat(80)).append("\n");
+
+            Files.writeString(outFile, sb.toString());
+            return outFile.toAbsolutePath();
+        } catch (IOException e) {
+            logger.warn("Failed to write vector phase timing dump: {}", e.getMessage());
             return null;
         }
     }

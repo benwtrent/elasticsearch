@@ -37,6 +37,8 @@ import org.elasticsearch.index.codec.vectors.diskbbq.PrefetchingCentroidIterator
 import org.elasticsearch.index.codec.vectors.diskbbq.VectorPreconditioner;
 import org.elasticsearch.search.vectors.BulkKnnCollector;
 import org.elasticsearch.search.vectors.ESAcceptDocs;
+import org.elasticsearch.search.vectors.VectorQueryPhaseTimings;
+import org.elasticsearch.search.vectors.VectorQueryPhaseTimings.Phase;
 import org.elasticsearch.simdvec.ES92Int7VectorsScorer;
 import org.elasticsearch.simdvec.ES940OSQVectorsScorer;
 import org.elasticsearch.simdvec.ESVectorUtil;
@@ -116,8 +118,13 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         float visitRatio
     ) throws IOException {
         final NextFieldEntry fieldEntry = fields.get(fieldInfo.number);
+        final VectorQueryPhaseTimings phaseTimings = VectorQueryPhaseTimings.current();
         // build optmization filters if possible
+        long startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
         final FixedBitSet acceptCentroids = getCentroidFilter(centroids, numCentroids, values, acceptDocs, approximateCost);
+        if (phaseTimings != null) {
+            phaseTimings.stop(Phase.CENTROID_FILTER, startNanos);
+        }
         final int numParents = centroids.readVInt();
         final FixedBitSet acceptParents = getParentCentroidFilter(centroids, numParents, numCentroids, acceptDocs, fieldEntry.numSlices);
         // build centroid search helpers
@@ -623,10 +630,12 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         FixedBitSet acceptCentroids,
         int bulkSize
     ) throws IOException {
+        final VectorQueryPhaseTimings phaseTimings = VectorQueryPhaseTimings.current();
         int limit = size - bulkSize + 1;
         int i = 0;
         for (; i < limit; i += bulkSize) {
             if (acceptCentroids == null || acceptCentroids.cardinality(scoresOffset + i, scoresOffset + i + bulkSize) > 0) {
+                long startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                 scorer.scoreBulk(
                     quantizeQuery,
                     queryCorrections.lowerInterval(),
@@ -638,6 +647,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     scores,
                     bulkSize
                 );
+                if (phaseTimings != null) {
+                    phaseTimings.stop(Phase.CENTROID_BULK_SCORE, startNanos);
+                }
                 for (int j = 0; j < bulkSize; j++) {
                     int centroidOrd = scoresOffset + i + j;
                     if (acceptCentroids == null || acceptCentroids.get(centroidOrd)) {
@@ -652,6 +664,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         int tailBulkSize = size - i;
         if (tailBulkSize > 0) {
             if (acceptCentroids == null || acceptCentroids.cardinality(scoresOffset + i, scoresOffset + i + tailBulkSize) > 0) {
+                long startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                 scorer.scoreBulk(
                     quantizeQuery,
                     queryCorrections.lowerInterval(),
@@ -663,6 +676,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     scores,
                     tailBulkSize
                 );
+                if (phaseTimings != null) {
+                    phaseTimings.stop(Phase.CENTROID_BULK_SCORE, startNanos);
+                }
                 for (int j = 0; j < tailBulkSize; j++) {
                     int centroidOrd = scoresOffset + i + j;
                     if (acceptCentroids == null || acceptCentroids.get(centroidOrd)) {
@@ -816,6 +832,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     assert nextCentroidOrdinal == NO_ORDINAL;
                     queryCentroid = globalCentroid;
                 }
+                final VectorQueryPhaseTimings phaseTimings = VectorQueryPhaseTimings.current();
+                final long startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                 OptimizedScalarQuantizer.QuantizationResult queryCorrections = quantizer.scalarQuantize(
                     target,
                     scratch,
@@ -823,6 +841,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     quantEncoding.queryBits(),
                     queryCentroid
                 );
+                if (phaseTimings != null) {
+                    phaseTimings.stop(Phase.QUERY_QUANTIZE, startNanos);
+                }
                 quantEncoding.packQuery(quantizationScratch, quantizedQuery);
                 currentCentroidOrdinal = nextCentroidOrdinal;
                 result = new QueryQuantizerResult(queryCorrections, quantizedQuery);
@@ -982,6 +1003,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
 
         @Override
         public int resetPostingsScorer(PostingMetadata metadata) throws IOException {
+            final VectorQueryPhaseTimings phaseTimings = VectorQueryPhaseTimings.current();
+            final long startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
             float score = metadata.documentCentroidScore();
             indexInput.seek(metadata.offset());
             centroidToParentSqDist = Float.intBitsToFloat(indexInput.readInt());
@@ -998,10 +1021,15 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                 case MAXIMUM_INNER_PRODUCT -> score - 1;
             };
             queryQuantizer.reset(metadata.queryCentroidOrdinal());
+            if (phaseTimings != null) {
+                phaseTimings.stop(Phase.POSTING_RESET, startNanos);
+            }
             return vectors;
         }
 
         private float scoreIndividually(int bulkSize) throws IOException {
+            final VectorQueryPhaseTimings phaseTimings = VectorQueryPhaseTimings.current();
+            long phaseStartNanos = phaseTimings != null ? phaseTimings.start() : 0L;
             float maxScore = Float.NEGATIVE_INFINITY;
             // score individually, first the quantized byte chunk
             for (int j = 0; j < bulkSize; j++) {
@@ -1013,6 +1041,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     indexInput.skipBytes(quantizedVectorByteSize);
                 }
             }
+            if (phaseTimings != null) {
+                phaseTimings.stop(Phase.SCORE_INDIVIDUAL, phaseStartNanos);
+            }
             // read in all corrections
             indexInput.readFloats(correctionsLower, 0, bulkSize);
             indexInput.readFloats(correctionsUpper, 0, bulkSize);
@@ -1021,6 +1052,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             }
             indexInput.readFloats(correctionsAdd, 0, bulkSize);
             // Now apply corrections
+            phaseStartNanos = phaseTimings != null ? phaseTimings.start() : 0L;
             for (int j = 0; j < bulkSize; j++) {
                 int doc = docIdsScratch[j];
                 if (doc != -1) {
@@ -1042,6 +1074,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     }
                 }
             }
+            if (phaseTimings != null) {
+                phaseTimings.stop(Phase.APPLY_CORRECTIONS, phaseStartNanos);
+            }
             return maxScore;
         }
 
@@ -1062,9 +1097,14 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         }
 
         protected void collectBulk(KnnCollector knnCollector, float[] scores, int bulkSize, int docsToBulkScore, float maxScore) {
+            final VectorQueryPhaseTimings phaseTimings = VectorQueryPhaseTimings.current();
+            final long startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
             if (knnCollector instanceof BulkKnnCollector bulkCollector) {
                 if (docsToBulkScore == bulkSize) {
                     bulkCollector.bulkCollect(docIdsScratch, scores, bulkSize, maxScore);
+                    if (phaseTimings != null) {
+                        phaseTimings.stop(Phase.COLLECT_BULK, startNanos);
+                    }
                     return;
                 }
                 for (int i = 0; i < docsToBulkScore; i++) {
@@ -1073,6 +1113,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     scores[i] = scores[offset];
                 }
                 bulkCollector.bulkCollect(docIdsScratch, scores, docsToBulkScore, maxScore);
+                if (phaseTimings != null) {
+                    phaseTimings.stop(Phase.COLLECT_BULK, startNanos);
+                }
                 return;
             }
             for (int i = 0; i < bulkSize; i++) {
@@ -1080,6 +1123,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                 if (doc != -1) {
                     knnCollector.collect(doc, scores[i]);
                 }
+            }
+            if (phaseTimings != null) {
+                phaseTimings.stop(Phase.COLLECT_BULK, startNanos);
             }
         }
 
@@ -1094,6 +1140,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
 
         @Override
         public int visit(KnnCollector knnCollector) throws IOException {
+            final VectorQueryPhaseTimings phaseTimings = VectorQueryPhaseTimings.current();
             indexInput.seek(slicePos);
             // block processing
             int scoredDocs = 0;
@@ -1102,7 +1149,11 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             // read Docs
             for (; i < limit; i += BULK_SIZE) {
                 // read the doc ids
+                long phaseStartNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                 readDocIds(BULK_SIZE);
+                if (phaseTimings != null) {
+                    phaseTimings.stop(Phase.DOCID_READ, phaseStartNanos);
+                }
                 final int docsToBulkScore = docToBulkScore(docIdsScratch, offsetsScratch, acceptDocs, BULK_SIZE);
                 if (docsToBulkScore == 0) {
                     indexInput.skipBytes(quantizedByteLength * BULK_SIZE);
@@ -1113,6 +1164,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                 if (docsToBulkScore == 1) {
                     maxScore = scoreIndividually(BULK_SIZE);
                 } else if (docsToBulkScore < BULK_SIZE) {
+                    phaseStartNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                     maxScore = osqVectorsScorer.scoreBulkOffsets(
                         queryQuantizer.getQuantizedTarget(),
                         queryQuantizer.getQueryCorrections().lowerInterval(),
@@ -1126,7 +1178,11 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                         scores,
                         BULK_SIZE
                     );
+                    if (phaseTimings != null) {
+                        phaseTimings.stop(Phase.SCORE_BULK_OFFSETS, phaseStartNanos);
+                    }
                 } else {
+                    phaseStartNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                     maxScore = osqVectorsScorer.scoreBulk(
                         queryQuantizer.getQuantizedTarget(),
                         queryQuantizer.getQueryCorrections().lowerInterval(),
@@ -1137,6 +1193,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                         0f,
                         scores
                     );
+                    if (phaseTimings != null) {
+                        phaseTimings.stop(Phase.SCORE_BULK, phaseStartNanos);
+                    }
                 }
                 if (knnCollector.minCompetitiveSimilarity() < maxScore) {
                     collectBulk(knnCollector, scores, BULK_SIZE, docsToBulkScore, maxScore);
@@ -1146,7 +1205,11 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             // bulk process tail
             if (i < vectors) {
                 int tailSize = vectors - i;
+                long phaseStartNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                 readDocIds(tailSize);
+                if (phaseTimings != null) {
+                    phaseTimings.stop(Phase.DOCID_READ, phaseStartNanos);
+                }
                 final int docsToBulkScore = docToBulkScore(docIdsScratch, offsetsScratch, acceptDocs, tailSize);
                 if (docsToBulkScore == 0) {
                     indexInput.skipBytes(quantizedByteLength * tailSize);
@@ -1156,6 +1219,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     if (docsToBulkScore == 1) {
                         maxScore = scoreIndividually(tailSize);
                     } else if (docsToBulkScore < tailSize) {
+                        phaseStartNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                         maxScore = osqVectorsScorer.scoreBulkOffsets(
                             queryQuantizer.getQuantizedTarget(),
                             queryQuantizer.getQueryCorrections().lowerInterval(),
@@ -1169,7 +1233,11 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                             scores,
                             tailSize
                         );
+                        if (phaseTimings != null) {
+                            phaseTimings.stop(Phase.SCORE_BULK_OFFSETS, phaseStartNanos);
+                        }
                     } else {
+                        phaseStartNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                         maxScore = osqVectorsScorer.scoreBulk(
                             queryQuantizer.getQuantizedTarget(),
                             queryQuantizer.getQueryCorrections().lowerInterval(),
@@ -1181,6 +1249,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                             scores,
                             tailSize
                         );
+                        if (phaseTimings != null) {
+                            phaseTimings.stop(Phase.SCORE_BULK, phaseStartNanos);
+                        }
                     }
                     if (knnCollector.minCompetitiveSimilarity() < maxScore) {
                         collectBulk(knnCollector, scores, tailSize, docsToBulkScore, maxScore);

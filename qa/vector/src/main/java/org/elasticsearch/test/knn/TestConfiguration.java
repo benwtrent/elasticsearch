@@ -118,6 +118,7 @@ public record TestConfiguration(
     static final ParseField DO_PRECONDITION = new ParseField("precondition");
     static final ParseField PRECONDITIONING_BLOCK_DIMS = new ParseField("preconditioning_block_dims");
     static final ParseField FILTER_CACHED = new ParseField("filter_cache");
+    static final ParseField VECTOR_PHASE_TIMING = new ParseField("vector_phase_timing");
     static final ParseField SEARCH_PARAMS = new ParseField("search_params");
     static final ParseField FLAT_VECTOR_THRESHOLD = new ParseField("flat_vector_threshold");
     static final ParseField DIRECTORY_TYPE_FIELD = new ParseField("directory_type");
@@ -181,6 +182,12 @@ public record TestConfiguration(
         PARSER.declareBoolean(Builder::setDoPrecondition, DO_PRECONDITION);
         PARSER.declareInt(Builder::setPreconditioningBlockDims, PRECONDITIONING_BLOCK_DIMS);
         PARSER.declareFieldArray(Builder::setFilterCached, (p, c) -> p.booleanValue(), FILTER_CACHED, ObjectParser.ValueType.VALUE_ARRAY);
+        PARSER.declareFieldArray(
+            Builder::setVectorPhaseTiming,
+            (p, c) -> p.booleanValue(),
+            VECTOR_PHASE_TIMING,
+            ObjectParser.ValueType.VALUE_ARRAY
+        );
         PARSER.declareObjectArray(Builder::setSearchParams, (p, c) -> SearchParameters.fromXContent(p), SEARCH_PARAMS);
         PARSER.declareInt(Builder::setMergeWorkers, MERGE_WORKERS_FIELD);
         PARSER.declareInt(Builder::setFlatVectorThreshold, FLAT_VECTOR_THRESHOLD);
@@ -249,6 +256,7 @@ public record TestConfiguration(
             new ParameterHelp("num_searchers", "array[int]", "Search: number of parallel searchers."),
             new ParameterHelp("filter_selectivity", "array[float]", "Search: filter selectivity (0.0-1.0)."),
             new ParameterHelp("filter_cache", "array[boolean]", "Search: whether filters are cached."),
+            new ParameterHelp("vector_phase_timing", "array[boolean]", "Search: collect vector phase wall-time timings in nanoseconds."),
             new ParameterHelp("early_termination", "array[boolean]", "Search: allow early termination when possible."),
             new ParameterHelp("seed", "array[long]", "Search: random seed used random filters."),
             new ParameterHelp(
@@ -393,6 +401,7 @@ public record TestConfiguration(
         private List<Boolean> earlyTermination = List.of(Boolean.FALSE);
         private List<Float> filterSelectivity = List.of(1f);
         private List<Long> seed = List.of(1751900822751L);
+        private List<Boolean> vectorPhaseTiming = List.of(Boolean.FALSE);
         private KnnIndexTester.MergePolicyType mergePolicy = null;
         private double writerBufferSizeInMb = DEFAULT_WRITER_BUFFER_MB;
         private boolean onDiskRescore = false;
@@ -602,6 +611,11 @@ public record TestConfiguration(
 
         public Builder setFilterCached(List<Boolean> filterCached) {
             this.filterCached = filterCached;
+            return this;
+        }
+
+        public Builder setVectorPhaseTiming(List<Boolean> vectorPhaseTiming) {
+            this.vectorPhaseTiming = vectorPhaseTiming;
             return this;
         }
 
@@ -857,6 +871,7 @@ public record TestConfiguration(
                     numSearchers.getFirst(),
                     filterSelectivity.getFirst(),
                     filterCached.getFirst(),
+                    vectorPhaseTiming.getFirst(),
                     earlyTermination.getFirst(),
                     seed.getFirst()
                 );
@@ -946,6 +961,7 @@ public record TestConfiguration(
             builder.field(FORCE_MERGE_MAX_NUM_SEGMENTS_FIELD.getPreferredName(), forceMergeMaxNumSegments);
             builder.field(ON_DISK_RESCORE_FIELD.getPreferredName(), onDiskRescore);
             builder.field(FILTER_CACHED.getPreferredName(), filterCached);
+            builder.field(VECTOR_PHASE_TIMING.getPreferredName(), vectorPhaseTiming);
             if (mergePolicy != null) {
                 builder.field(MERGE_POLICY_FIELD.getPreferredName(), mergePolicy.name().toLowerCase(Locale.ROOT));
             }
@@ -967,6 +983,7 @@ public record TestConfiguration(
                 numSearchers.size(),
                 filterSelectivity.size(),
                 filterCached.size(),
+                vectorPhaseTiming.size(),
                 earlyTermination.size(),
                 seed.size()
             );
@@ -984,6 +1001,7 @@ public record TestConfiguration(
                     numSearchers,
                     filterSelectivity,
                     filterCached,
+                    vectorPhaseTiming,
                     earlyTermination,
                     seed
                 )
@@ -999,7 +1017,8 @@ public record TestConfiguration(
                         (Float) params.get(6),
                         (Boolean) params.get(7),
                         (Boolean) params.get(8),
-                        (Long) params.get(9)
+                        (Boolean) params.get(9),
+                        (Long) params.get(10)
                     )
                 )
                 .toList();

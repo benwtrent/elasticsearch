@@ -31,6 +31,8 @@ import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.util.Bits;
 import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.index.codec.vectors.GenericFlatVectorReaders;
+import org.elasticsearch.search.vectors.VectorQueryPhaseTimings;
+import org.elasticsearch.search.vectors.VectorQueryPhaseTimings.Phase;
 import org.elasticsearch.search.vectors.ESAcceptDocs;
 import org.elasticsearch.search.vectors.IVFKnnSearchStrategy;
 
@@ -355,17 +357,26 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
         // we account for soar vectors here. We can potentially visit a vector twice so we multiply by 2 here.
         long maxVectorVisited = (long) (2.0 * visitRatio * numVectors);
         IndexInput postListSlice = entry.postingListSlice(ivfClusters);
-        CentroidIterator centroidPrefetchingIterator = getCentroidIterator(
-            fieldInfo,
-            entry.numCentroids,
-            centroids,
-            target,
-            postListSlice,
-            acceptDocs,
-            approximateCost,
-            values,
-            visitRatio
-        );
+        VectorQueryPhaseTimings phaseTimings = VectorQueryPhaseTimings.current();
+        long startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
+        CentroidIterator centroidPrefetchingIterator;
+        try {
+            centroidPrefetchingIterator = getCentroidIterator(
+                fieldInfo,
+                entry.numCentroids,
+                centroids,
+                target,
+                postListSlice,
+                acceptDocs,
+                approximateCost,
+                values,
+                visitRatio
+            );
+        } finally {
+            if (phaseTimings != null) {
+                phaseTimings.stop(Phase.CENTROID_ITERATOR_BUILD, startNanos);
+            }
+        }
         Bits acceptDocsBits = acceptDocs.bits();
         PostingVisitor scorer = getPostingVisitor(
             fieldInfo,
@@ -385,8 +396,16 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
         while (centroidPrefetchingIterator.hasNext()
             && (maxVectorVisited > expectedDocs || knnCollector.minCompetitiveSimilarity() == Float.NEGATIVE_INFINITY)) {
             PostingMetadata postingMetadata = centroidPrefetchingIterator.nextPosting();
+            startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
             expectedDocs += scorer.resetPostingsScorer(postingMetadata);
+            if (phaseTimings != null) {
+                phaseTimings.stop(Phase.POSTING_RESET, startNanos);
+            }
+            startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
             actualDocs += scorer.visit(knnCollector);
+            if (phaseTimings != null) {
+                phaseTimings.stop(Phase.POSTING_VISIT, startNanos);
+            }
             if (knnCollector.getSearchStrategy() != null) {
                 knnCollector.getSearchStrategy().nextVectorsBlock();
             }
@@ -398,8 +417,16 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
             float expectedScored = Math.min(2 * filteredVectors * unfilteredRatioVisited, expectedDocs / 2f);
             while (centroidPrefetchingIterator.hasNext() && (actualDocs < expectedScored || actualDocs < knnCollector.k())) {
                 PostingMetadata postingMetadata = centroidPrefetchingIterator.nextPosting();
+                startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                 scorer.resetPostingsScorer(postingMetadata);
+                if (phaseTimings != null) {
+                    phaseTimings.stop(Phase.POSTING_RESET, startNanos);
+                }
+                startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                 actualDocs += scorer.visit(knnCollector);
+                if (phaseTimings != null) {
+                    phaseTimings.stop(Phase.FILTERED_FOLLOWUP, startNanos);
+                }
                 if (knnCollector.getSearchStrategy() != null) {
                     knnCollector.getSearchStrategy().nextVectorsBlock();
                 }

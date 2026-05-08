@@ -35,6 +35,7 @@ import org.apache.lucene.util.Bits;
 import org.elasticsearch.common.lucene.search.Queries;
 import org.elasticsearch.index.codec.vectors.cluster.BulkNeighborQueue;
 import org.elasticsearch.search.profile.query.QueryProfiler;
+import org.elasticsearch.search.vectors.VectorQueryPhaseTimings.Phase;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -56,8 +57,17 @@ abstract class AbstractIVFKnnVectorQuery extends Query implements QueryProfilerP
     protected final Query filter;
     protected int vectorOpsCount;
     protected boolean doPrecondition;
+    protected final VectorQueryPhaseTimings phaseTimings;
 
-    protected AbstractIVFKnnVectorQuery(String field, float visitRatio, int k, int numCands, Query filter, boolean doPrecondition) {
+    protected AbstractIVFKnnVectorQuery(
+        String field,
+        float visitRatio,
+        int k,
+        int numCands,
+        Query filter,
+        boolean doPrecondition,
+        boolean vectorPhaseTiming
+    ) {
         if (k < 1) {
             throw new IllegalArgumentException("k must be at least 1, got: " + k);
         }
@@ -73,6 +83,7 @@ abstract class AbstractIVFKnnVectorQuery extends Query implements QueryProfilerP
         this.filter = filter;
         this.numCands = numCands;
         this.doPrecondition = doPrecondition;
+        this.phaseTimings = new VectorQueryPhaseTimings(vectorPhaseTiming);
     }
 
     @Override
@@ -185,7 +196,15 @@ abstract class AbstractIVFKnnVectorQuery extends Query implements QueryProfilerP
 
     private TopDocs searchLeaf(LeafReaderContext ctx, Weight filterWeight, IVFCollectorManager knnCollectorManager, float visitRatio)
         throws IOException {
-        TopDocs results = getLeafResults(ctx, filterWeight, knnCollectorManager, visitRatio);
+        VectorQueryPhaseTimings previous = VectorQueryPhaseTimings.setCurrent(phaseTimings);
+        TopDocs results;
+        try {
+            long startNanos = phaseTimings.start();
+            results = getLeafResults(ctx, filterWeight, knnCollectorManager, visitRatio);
+            phaseTimings.stop(Phase.LEAF_SEARCH, startNanos);
+        } finally {
+            VectorQueryPhaseTimings.restore(previous);
+        }
         IntObjectHashMap<ScoreDoc> dedupByDoc = new IntObjectHashMap<>(results.scoreDocs.length * 4 / 3);
         for (ScoreDoc scoreDoc : results.scoreDocs) {
             int globalDoc = scoreDoc.doc + ctx.docBase;
@@ -249,6 +268,7 @@ abstract class AbstractIVFKnnVectorQuery extends Query implements QueryProfilerP
     @Override
     public final void profile(QueryProfiler queryProfiler) {
         queryProfiler.addVectorOpsCount(vectorOpsCount);
+        queryProfiler.addVectorPhaseTimings(phaseTimings.snapshot());
     }
 
     static class IVFCollectorManager implements KnnCollectorManager {

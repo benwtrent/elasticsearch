@@ -30,6 +30,7 @@ import org.apache.lucene.search.VectorScorer;
 import org.elasticsearch.common.lucene.search.Queries;
 import org.elasticsearch.core.CheckedRunnable;
 import org.elasticsearch.search.profile.query.QueryProfiler;
+import org.elasticsearch.search.vectors.VectorQueryPhaseTimings.Phase;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -58,12 +59,14 @@ public abstract class RescoreKnnVectorQuery extends Query implements QueryProfil
     protected final int k;
     protected final Query innerQuery;
     protected long vectorOperations = 0;
+    protected final VectorQueryPhaseTimings phaseTimings;
 
     private RescoreKnnVectorQuery(String fieldName, float[] floatTarget, int k, Query innerQuery) {
         this.fieldName = fieldName;
         this.floatTarget = floatTarget;
         this.k = k;
         this.innerQuery = innerQuery;
+        this.phaseTimings = new VectorQueryPhaseTimings(hasVectorPhaseTimingEnabled(innerQuery));
     }
 
     /**
@@ -100,6 +103,20 @@ public abstract class RescoreKnnVectorQuery extends Query implements QueryProfil
         }
 
         queryProfiler.addVectorOpsCount(vectorOperations);
+        queryProfiler.addVectorPhaseTimings(phaseTimings.snapshot());
+    }
+
+    private static boolean hasVectorPhaseTimingEnabled(Query query) {
+        if (query instanceof AbstractIVFKnnVectorQuery ivfQuery) {
+            return ivfQuery.phaseTimings.enabled();
+        }
+        if (query instanceof VectorSimilarityQuery vectorSimilarityQuery) {
+            return hasVectorPhaseTimingEnabled(vectorSimilarityQuery.getInnerKnnQuery());
+        }
+        if (query instanceof RescoreKnnVectorQuery rescoreKnnVectorQuery) {
+            return rescoreKnnVectorQuery.phaseTimings.enabled();
+        }
+        return false;
     }
 
     @Override
@@ -147,7 +164,7 @@ public abstract class RescoreKnnVectorQuery extends Query implements QueryProfil
 
         @Override
         public Query rewrite(IndexSearcher searcher) throws IOException {
-            var rescoreQuery = new DirectRescoreKnnVectorQuery(fieldName, floatTarget, innerQuery);
+            var rescoreQuery = new DirectRescoreKnnVectorQuery(fieldName, floatTarget, innerQuery, phaseTimings);
             var topDocs = searcher.search(rescoreQuery, k);
             vectorOperations = topDocs.totalHits.value();
             return new KnnScoreDocQuery(topDocs.scoreDocs, searcher.getIndexReader());
@@ -183,7 +200,7 @@ public abstract class RescoreKnnVectorQuery extends Query implements QueryProfil
 
             // Retrieve top `k` documents from the top `rescoreK` query
             var topDocsQuery = new KnnScoreDocQuery(topDocs.scoreDocs, searcher.getIndexReader());
-            var rescoreQuery = new DirectRescoreKnnVectorQuery(fieldName, floatTarget, topDocsQuery);
+            var rescoreQuery = new DirectRescoreKnnVectorQuery(fieldName, floatTarget, topDocsQuery, phaseTimings);
             var rescoreTopDocs = searcher.search(rescoreQuery.rewrite(searcher), k);
             return new KnnScoreDocQuery(rescoreTopDocs.scoreDocs, searcher.getIndexReader());
         }
@@ -208,11 +225,13 @@ public abstract class RescoreKnnVectorQuery extends Query implements QueryProfil
         private final float[] floatTarget;
         private final String fieldName;
         private final Query innerQuery;
+        private final VectorQueryPhaseTimings phaseTimings;
 
-        DirectRescoreKnnVectorQuery(String fieldName, float[] floatTarget, Query innerQuery) {
+        DirectRescoreKnnVectorQuery(String fieldName, float[] floatTarget, Query innerQuery, VectorQueryPhaseTimings phaseTimings) {
             this.fieldName = fieldName;
             this.floatTarget = floatTarget;
             this.innerQuery = innerQuery;
+            this.phaseTimings = phaseTimings;
         }
 
         @Override
@@ -314,9 +333,11 @@ public abstract class RescoreKnnVectorQuery extends Query implements QueryProfil
                     input.prefetch((long) ord * vectorByteSize, vectorByteSize);
                 }
                 buffer.add(() -> {
+                    long startNanos = phaseTimings.start();
                     int target = scorer.iterator().advance(docID);
                     assert target == docID;
                     float score = scorer.score();
+                    phaseTimings.stop(Phase.RESCORE_VECTOR_SCORE, startNanos);
                     if (Float.isNaN(score) == false) {
                         queue.add(new ScoreDoc(docID + docBase, score));
                     }

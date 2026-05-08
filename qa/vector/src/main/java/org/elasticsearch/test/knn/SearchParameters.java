@@ -26,6 +26,7 @@ public record SearchParameters(
     int numSearchers,
     float filterSelectivity,
     boolean filterCached,
+    boolean vectorPhaseTiming,
     boolean earlyTermination,
     long seed
 ) {
@@ -45,6 +46,7 @@ public record SearchParameters(
         PARSER.declareInt(Builder::setNumSearchers, TestConfiguration.NUM_SEARCHERS_FIELD);
         PARSER.declareBoolean(Builder::setEarlyTermination, TestConfiguration.EARLY_TERMINATION_FIELD);
         PARSER.declareBoolean(Builder::setFilterCached, TestConfiguration.FILTER_CACHED);
+        PARSER.declareBoolean(Builder::setVectorPhaseTiming, TestConfiguration.VECTOR_PHASE_TIMING);
         PARSER.declareFloat(Builder::setFilterSelectivity, TestConfiguration.FILTER_SELECTIVITY_FIELD);
         PARSER.declareLong(Builder::setSeed, TestConfiguration.SEED_FIELD);
     }
@@ -66,6 +68,7 @@ public record SearchParameters(
         private Integer numSearchers;
         private Float filterSelectivity;
         private Boolean filterCached;
+        private Boolean vectorPhaseTiming;
         private Boolean earlyTermination;
         private Long seed;
 
@@ -109,6 +112,11 @@ public record SearchParameters(
             return this;
         }
 
+        public Builder setVectorPhaseTiming(boolean vectorPhaseTiming) {
+            this.vectorPhaseTiming = vectorPhaseTiming;
+            return this;
+        }
+
         public Builder setEarlyTermination(boolean earlyTermination) {
             this.earlyTermination = earlyTermination;
             return this;
@@ -129,6 +137,7 @@ public record SearchParameters(
             this.numSearchers = Optional.ofNullable(numSearchers).orElse(params.numSearchers());
             this.filterCached = Optional.ofNullable(filterCached).orElse(params.filterCached());
             this.filterSelectivity = Optional.ofNullable(filterSelectivity).orElse(params.filterSelectivity());
+            this.vectorPhaseTiming = Optional.ofNullable(vectorPhaseTiming).orElse(params.vectorPhaseTiming());
             this.earlyTermination = Optional.ofNullable(earlyTermination).orElse(params.earlyTermination());
             this.seed = Optional.ofNullable(seed).orElse(params.seed());
             return this;
@@ -157,6 +166,7 @@ public record SearchParameters(
                 numSearchers,
                 filterSelectivity,
                 filterCached,
+                vectorPhaseTiming,
                 earlyTermination,
                 seed
             );
@@ -188,6 +198,9 @@ public record SearchParameters(
             }
             if (filterSelectivity != null) {
                 builder.field(TestConfiguration.FILTER_SELECTIVITY_FIELD.getPreferredName(), filterSelectivity);
+            }
+            if (vectorPhaseTiming != null) {
+                builder.field(TestConfiguration.VECTOR_PHASE_TIMING.getPreferredName(), vectorPhaseTiming);
             }
             if (earlyTermination != null) {
                 builder.field(TestConfiguration.EARLY_TERMINATION_FIELD.getPreferredName(), earlyTermination);

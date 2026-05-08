@@ -13,6 +13,9 @@ import org.apache.lucene.search.Query;
 import org.elasticsearch.search.profile.AbstractProfiler;
 import org.elasticsearch.search.profile.Timer;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -34,6 +37,7 @@ public final class QueryProfiler extends AbstractProfiler<QueryProfileBreakdown,
     private CollectorResult collectorResult;
 
     private long vectorOpsCount;
+    private final Map<String, Long> vectorPhaseTimings = new LinkedHashMap<>();
 
     public QueryProfiler() {
         super(new InternalQueryProfileTree());
@@ -53,6 +57,30 @@ public final class QueryProfiler extends AbstractProfiler<QueryProfileBreakdown,
      */
     public long getVectorOpsCount() {
         return this.vectorOpsCount;
+    }
+
+    /**
+     * Adds a measured vector phase time in nanoseconds.
+     */
+    public void addVectorPhaseTiming(String phase, long nanos) {
+        if (nanos <= 0) {
+            return;
+        }
+        vectorPhaseTimings.merge(phase, nanos, Long::sum);
+    }
+
+    /**
+     * Adds all measured vector phase times in nanoseconds.
+     */
+    public void addVectorPhaseTimings(Map<String, Long> timings) {
+        timings.forEach(this::addVectorPhaseTiming);
+    }
+
+    /**
+     * Returns vector phase times in nanoseconds.
+     */
+    public Map<String, Long> getVectorPhaseTimings() {
+        return Map.copyOf(vectorPhaseTimings);
     }
 
     /** Set the collector result that is associated with this profiler. */
