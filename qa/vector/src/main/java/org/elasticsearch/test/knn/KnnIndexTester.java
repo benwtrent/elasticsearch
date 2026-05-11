@@ -1263,13 +1263,13 @@ public class KnnIndexTester {
                             new PhaseNode("score_bulk_offsets", "score_bulk_offsets", List.of()),
                             new PhaseNode("score_individual", "score_individual", List.of()),
                             new PhaseNode("apply_corrections", "apply_corrections", List.of()),
-                            new PhaseNode("collect_bulk", "collect_bulk", List.of()),
-                            new PhaseNode("rescore_vector_score", "rescore_vector_score", List.of())
+                            new PhaseNode("collect_bulk", "collect_bulk", List.of())
                         )
                     ),
                     new PhaseNode("filtered_followup", "filtered_followup", List.of())
                 )
-            )
+            ),
+            new PhaseNode("rescore_vector_score", "rescore_vector_score", List.of())
         );
     }
 
