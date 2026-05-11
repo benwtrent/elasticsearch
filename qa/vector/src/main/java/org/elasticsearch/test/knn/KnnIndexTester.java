@@ -1140,17 +1140,9 @@ public class KnnIndexTester {
                 sb.append("top_k:           ").append(result.topK).append("\n");
                 sb.append("num_candidates:  ").append(result.numCandidates).append("\n");
                 sb.append("total_time_ns:   ").append(totalNs).append("\n\n");
-                sb.append(String.format(Locale.ROOT, "%-32s %18s %10s%n", "phase", "time_ns", "percent"));
-                sb.append(String.format(Locale.ROOT, "%-32s %18s %10s%n", "-".repeat(32), "-".repeat(18), "-".repeat(10)));
-                phaseTimings.entrySet()
-                    .stream()
-                    .sorted((a, b) -> Long.compare(b.getValue(), a.getValue()))
-                    .forEach(entry -> {
-                        double percent = totalNs > 0 ? (entry.getValue() * 100.0) / totalNs : 0.0;
-                        sb.append(
-                            String.format(Locale.ROOT, "%-32s %18d %9.2f%%%n", entry.getKey(), entry.getValue(), percent)
-                        );
-                    });
+                sb.append(String.format(Locale.ROOT, "%-38s %18s %18s %10s%n", "phase", "inclusive_ns", "exclusive_ns", "percent"));
+                sb.append(String.format(Locale.ROOT, "%-38s %18s %18s %10s%n", "-".repeat(38), "-".repeat(18), "-".repeat(18), "-".repeat(10)));
+                appendPhaseTreeRows(sb, phaseTimings, totalNs);
                 sb.append("\n");
                 run++;
             }
@@ -1179,4 +1171,129 @@ public class KnnIndexTester {
         }
         return value;
     }
+
+    private static void appendPhaseTreeRows(StringBuilder sb, Map<String, Long> phaseTimings, long totalNs) {
+        for (PhaseNode root : phaseTreeRoots()) {
+            appendPhaseTreeRow(sb, root, phaseTimings, totalNs, 0);
+        }
+        phaseTimings.entrySet()
+            .stream()
+            .filter(e -> knownPhaseNames().contains(e.getKey()) == false)
+            .sorted(Map.Entry.comparingByKey())
+            .forEach(e -> appendUnknownPhaseRow(sb, e.getKey(), e.getValue(), totalNs));
+    }
+
+    private static void appendPhaseTreeRow(StringBuilder sb, PhaseNode node, Map<String, Long> phaseTimings, long totalNs, int depth) {
+        long inclusiveNs = phaseTimings.getOrDefault(node.name(), 0L);
+        long childInclusiveNs = 0L;
+        for (PhaseNode child : node.children()) {
+            childInclusiveNs += phaseTimings.getOrDefault(child.name(), 0L);
+        }
+        long exclusiveNs = Math.max(0L, inclusiveNs - childInclusiveNs);
+        if (inclusiveNs > 0 || hasAnyChildTiming(node, phaseTimings)) {
+            double percent = totalNs > 0 ? (inclusiveNs * 100.0) / totalNs : 0.0;
+            String indent = "  ".repeat(depth);
+            sb.append(
+                String.format(
+                    Locale.ROOT,
+                    "%-38s %18d %18d %9.2f%%%n",
+                    indent + node.displayName(),
+                    inclusiveNs,
+                    exclusiveNs,
+                    percent
+                )
+            );
+            for (PhaseNode child : node.children()) {
+                appendPhaseTreeRow(sb, child, phaseTimings, totalNs, depth + 1);
+            }
+        }
+    }
+
+    private static boolean hasAnyChildTiming(PhaseNode node, Map<String, Long> phaseTimings) {
+        for (PhaseNode child : node.children()) {
+            if (phaseTimings.getOrDefault(child.name(), 0L) > 0 || hasAnyChildTiming(child, phaseTimings)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void appendUnknownPhaseRow(StringBuilder sb, String phaseName, long inclusiveNs, long totalNs) {
+        long exclusiveNs = inclusiveNs;
+        double percent = totalNs > 0 ? (inclusiveNs * 100.0) / totalNs : 0.0;
+        sb.append(
+            String.format(
+                Locale.ROOT,
+                "%-38s %18d %18d %9.2f%%%n",
+                phaseName,
+                inclusiveNs,
+                exclusiveNs,
+                percent
+            )
+        );
+    }
+
+    private static List<PhaseNode> phaseTreeRoots() {
+        return List.of(
+            new PhaseNode(
+                "leaf_search",
+                "leaf_search",
+                List.of(
+                    new PhaseNode(
+                        "centroid_iterator_build",
+                        "centroid_iterator_build",
+                        List.of(
+                            new PhaseNode("centroid_filter", "centroid_filter", List.of()),
+                            new PhaseNode("centroid_query_quantize", "centroid_query_quantize", List.of()),
+                            new PhaseNode(
+                                "centroid_bulk_score",
+                                "centroid_bulk_score",
+                                List.of(new PhaseNode("centroid_apply_corrections", "centroid_apply_corrections", List.of()))
+                            )
+                        )
+                    ),
+                    new PhaseNode(
+                        "posting_visit",
+                        "posting_visit",
+                        List.of(
+                            new PhaseNode("posting_reset", "posting_reset", List.of()),
+                            new PhaseNode("docid_read", "docid_read", List.of()),
+                            new PhaseNode("query_quantize", "query_quantize", List.of()),
+                            new PhaseNode("score_bulk", "score_bulk", List.of()),
+                            new PhaseNode("score_bulk_offsets", "score_bulk_offsets", List.of()),
+                            new PhaseNode("score_individual", "score_individual", List.of()),
+                            new PhaseNode("apply_corrections", "apply_corrections", List.of()),
+                            new PhaseNode("collect_bulk", "collect_bulk", List.of()),
+                            new PhaseNode("rescore_vector_score", "rescore_vector_score", List.of())
+                        )
+                    ),
+                    new PhaseNode("filtered_followup", "filtered_followup", List.of())
+                )
+            )
+        );
+    }
+
+    private static Set<String> knownPhaseNames() {
+        return Set.of(
+            "leaf_search",
+            "centroid_iterator_build",
+            "centroid_filter",
+            "centroid_query_quantize",
+            "centroid_bulk_score",
+            "centroid_apply_corrections",
+            "posting_visit",
+            "posting_reset",
+            "docid_read",
+            "query_quantize",
+            "score_bulk",
+            "score_bulk_offsets",
+            "score_individual",
+            "apply_corrections",
+            "collect_bulk",
+            "filtered_followup",
+            "rescore_vector_score"
+        );
+    }
+
+    private record PhaseNode(String name, String displayName, List<PhaseNode> children) {}
 }

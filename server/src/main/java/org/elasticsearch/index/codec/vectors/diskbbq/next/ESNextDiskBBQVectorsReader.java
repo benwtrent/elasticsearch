@@ -120,10 +120,10 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         final NextFieldEntry fieldEntry = fields.get(fieldInfo.number);
         final VectorQueryPhaseTimings phaseTimings = VectorQueryPhaseTimings.current();
         // build optmization filters if possible
-        long startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
+        long filterStartNanos = phaseTimings != null ? phaseTimings.start() : 0L;
         final FixedBitSet acceptCentroids = getCentroidFilter(centroids, numCentroids, values, acceptDocs, approximateCost);
         if (phaseTimings != null) {
-            phaseTimings.stop(Phase.CENTROID_FILTER, startNanos);
+            phaseTimings.stop(Phase.CENTROID_FILTER, filterStartNanos);
         }
         final int numParents = centroids.readVInt();
         final FixedBitSet acceptParents = getParentCentroidFilter(centroids, numParents, numCentroids, acceptDocs, fieldEntry.numSlices);
@@ -131,6 +131,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         final int bulkSize = fieldEntry.getBulkSize();
         final OptimizedScalarQuantizer scalarQuantizer = new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction());
         final int[] scratch = new int[targetQuery.length];
+        long queryQuantizeStartNanos = phaseTimings != null ? phaseTimings.start() : 0L;
         final OptimizedScalarQuantizer.QuantizationResult queryParams = scalarQuantizer.scalarQuantize(
             targetQuery,
             new float[targetQuery.length],
@@ -138,6 +139,9 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             (byte) 7,
             fieldEntry.globalCentroid()
         );
+        if (phaseTimings != null) {
+            phaseTimings.stop(Phase.CENTROID_QUERY_QUANTIZE, queryQuantizeStartNanos);
+        }
         final byte[] quantized = new byte[targetQuery.length];
         for (int i = 0; i < quantized.length; i++) {
             quantized[i] = (byte) scratch[i];
@@ -636,7 +640,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         for (; i < limit; i += bulkSize) {
             if (acceptCentroids == null || acceptCentroids.cardinality(scoresOffset + i, scoresOffset + i + bulkSize) > 0) {
                 long startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
-                scorer.scoreBulk(
+                long[] breakdownNanos = phaseTimings != null ? new long[2] : null;
+                scorer.scoreBulkWithBreakdown(
                     quantizeQuery,
                     queryCorrections.lowerInterval(),
                     queryCorrections.upperInterval(),
@@ -645,10 +650,12 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     similarityFunction,
                     centroidDp,
                     scores,
-                    bulkSize
+                    bulkSize,
+                    breakdownNanos
                 );
                 if (phaseTimings != null) {
                     phaseTimings.stop(Phase.CENTROID_BULK_SCORE, startNanos);
+                    phaseTimings.addNanos(Phase.CENTROID_APPLY_CORRECTIONS, breakdownNanos[1]);
                 }
                 for (int j = 0; j < bulkSize; j++) {
                     int centroidOrd = scoresOffset + i + j;
@@ -665,7 +672,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         if (tailBulkSize > 0) {
             if (acceptCentroids == null || acceptCentroids.cardinality(scoresOffset + i, scoresOffset + i + tailBulkSize) > 0) {
                 long startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
-                scorer.scoreBulk(
+                long[] breakdownNanos = phaseTimings != null ? new long[2] : null;
+                scorer.scoreBulkWithBreakdown(
                     quantizeQuery,
                     queryCorrections.lowerInterval(),
                     queryCorrections.upperInterval(),
@@ -674,10 +682,12 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     similarityFunction,
                     centroidDp,
                     scores,
-                    tailBulkSize
+                    tailBulkSize,
+                    breakdownNanos
                 );
                 if (phaseTimings != null) {
                     phaseTimings.stop(Phase.CENTROID_BULK_SCORE, startNanos);
+                    phaseTimings.addNanos(Phase.CENTROID_APPLY_CORRECTIONS, breakdownNanos[1]);
                 }
                 for (int j = 0; j < tailBulkSize; j++) {
                     int centroidOrd = scoresOffset + i + j;

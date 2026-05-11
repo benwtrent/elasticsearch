@@ -396,11 +396,7 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
         while (centroidPrefetchingIterator.hasNext()
             && (maxVectorVisited > expectedDocs || knnCollector.minCompetitiveSimilarity() == Float.NEGATIVE_INFINITY)) {
             PostingMetadata postingMetadata = centroidPrefetchingIterator.nextPosting();
-            startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
             expectedDocs += scorer.resetPostingsScorer(postingMetadata);
-            if (phaseTimings != null) {
-                phaseTimings.stop(Phase.POSTING_RESET, startNanos);
-            }
             startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
             actualDocs += scorer.visit(knnCollector);
             if (phaseTimings != null) {
@@ -417,11 +413,7 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
             float expectedScored = Math.min(2 * filteredVectors * unfilteredRatioVisited, expectedDocs / 2f);
             while (centroidPrefetchingIterator.hasNext() && (actualDocs < expectedScored || actualDocs < knnCollector.k())) {
                 PostingMetadata postingMetadata = centroidPrefetchingIterator.nextPosting();
-                startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                 scorer.resetPostingsScorer(postingMetadata);
-                if (phaseTimings != null) {
-                    phaseTimings.stop(Phase.POSTING_RESET, startNanos);
-                }
                 startNanos = phaseTimings != null ? phaseTimings.start() : 0L;
                 actualDocs += scorer.visit(knnCollector);
                 if (phaseTimings != null) {

@@ -126,11 +126,45 @@ public class ES92Int7VectorsScorer {
         float[] scores,
         int bulkSize
     ) throws IOException {
+        scoreBulkWithBreakdown(
+            q,
+            queryLowerInterval,
+            queryUpperInterval,
+            queryComponentSum,
+            queryAdditionalCorrection,
+            similarityFunction,
+            centroidDp,
+            scores,
+            bulkSize,
+            null
+        );
+    }
+
+    /**
+     * Same as {@link #scoreBulk(byte[], float, float, int, float, VectorSimilarityFunction, float, float[], int)},
+     * but optionally returns breakdown timings in nanoseconds:
+     * index 0 = quantized dot product bulk time, index 1 = correction-application loop time.
+     */
+    public void scoreBulkWithBreakdown(
+        byte[] q,
+        float queryLowerInterval,
+        float queryUpperInterval,
+        int queryComponentSum,
+        float queryAdditionalCorrection,
+        VectorSimilarityFunction similarityFunction,
+        float centroidDp,
+        float[] scores,
+        int bulkSize,
+        long[] breakdownNanos
+    ) throws IOException {
+        long startNanos = System.nanoTime();
         int7DotProductBulk(q, bulkSize, scores);
+        long dotProductNanos = System.nanoTime() - startNanos;
         in.readFloats(lowerIntervals, 0, bulkSize);
         in.readFloats(upperIntervals, 0, bulkSize);
         in.readInts(targetComponentSums, 0, bulkSize);
         in.readFloats(additionalCorrections, 0, bulkSize);
+        startNanos = System.nanoTime();
         for (int i = 0; i < bulkSize; i++) {
             scores[i] = applyCorrections(
                 queryLowerInterval,
@@ -145,6 +179,11 @@ public class ES92Int7VectorsScorer {
                 additionalCorrections[i],
                 scores[i]
             );
+        }
+        long correctionNanos = System.nanoTime() - startNanos;
+        if (breakdownNanos != null && breakdownNanos.length >= 2) {
+            breakdownNanos[0] += dotProductNanos;
+            breakdownNanos[1] += correctionNanos;
         }
     }
 
