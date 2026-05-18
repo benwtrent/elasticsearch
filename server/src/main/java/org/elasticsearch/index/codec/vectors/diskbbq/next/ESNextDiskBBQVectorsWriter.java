@@ -31,11 +31,11 @@ import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
 import org.apache.lucene.util.hnsw.HnswGraphBuilder;
+import org.apache.lucene.util.hnsw.IntToIntFunction;
 import org.apache.lucene.util.hnsw.NeighborArray;
 import org.apache.lucene.util.hnsw.OnHeapHnswGraph;
 import org.apache.lucene.util.hnsw.RandomVectorScorerSupplier;
 import org.apache.lucene.util.hnsw.UpdateableRandomVectorScorer;
-import org.apache.lucene.util.hnsw.IntToIntFunction;
 import org.apache.lucene.util.packed.DirectWriter;
 import org.apache.lucene.util.packed.PackedInts;
 import org.apache.lucene.util.packed.PackedLongValues;
@@ -46,6 +46,7 @@ import org.elasticsearch.index.codec.vectors.cluster.ClusteringFloatVectorValues
 import org.elasticsearch.index.codec.vectors.cluster.HierarchicalKMeans;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansFloatVectorValues;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansResult;
+import org.elasticsearch.index.codec.vectors.cluster.NeighborHood;
 import org.elasticsearch.index.codec.vectors.diskbbq.CentroidAssignments;
 import org.elasticsearch.index.codec.vectors.diskbbq.CentroidSlices;
 import org.elasticsearch.index.codec.vectors.diskbbq.CentroidSupplier;
@@ -86,6 +87,11 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
     private static final Logger logger = LogManager.getLogger(ESNextDiskBBQVectorsWriter.class);
     private static final int CENTROID_GRAPH_HNSW_M = 16;
     private static final int CENTROID_GRAPH_HNSW_BEAM_WIDTH = 250;
+    private static final String SYSTEM_PROPERTY_IVF_REPLICA_LIMIT = "es.diskbbq.ivf.replica_limit";
+    private static final int HNSW_REPLICA_LIMIT = 8;
+    private static final int REGULAR_IVF_REPLICA_LIMIT_ABLATION = 8;
+    private static final int HNSW_REPLICA_CANDIDATE_LIMIT = 64;
+    private static final float HNSW_REPLICA_RNG_FACTOR = 1.0f;
 
     private final int vectorPerCluster;
     private final int centroidsPerParentCluster;
@@ -266,6 +272,18 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         int[] assignments,
         int[] overspillAssignments
     ) throws IOException {
+        int replicaLimit = resolveReplicaLimit();
+        if (replicaLimit > 1) {
+            return buildAndWritePostingsListsWithNeighborhoodReplicas(
+                fieldInfo,
+                centroidSupplier,
+                floatVectorValues,
+                postingsOutput,
+                fileOffset,
+                assignments,
+                replicaLimit
+            );
+        }
         KMeansResult centroidClusters = centroidSupplier.secondLevelClusters();
         int[] centroidVectorCount = new int[centroidSupplier.size()];
         for (int i = 0; i < assignments.length; i++) {
@@ -354,6 +372,97 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         return new CentroidOffsetAndLength(offsets.build(), lengths.build());
     }
 
+    private CentroidOffsetAndLength buildAndWritePostingsListsWithNeighborhoodReplicas(
+        FieldInfo fieldInfo,
+        CentroidSupplier centroidSupplier,
+        FloatVectorValues floatVectorValues,
+        IndexOutput postingsOutput,
+        long fileOffset,
+        int[] assignments,
+        int replicaLimit
+    ) throws IOException {
+        KMeansResult centroidClusters = centroidSupplier.secondLevelClusters();
+        float[][] centroids = materializeCentroids(centroidSupplier);
+        int[][] replicasByVector = buildReplicaAssignmentsByNeighborhood(
+            floatVectorValues,
+            fieldInfo.getVectorSimilarityFunction(),
+            assignments,
+            centroids,
+            replicaLimit,
+            HNSW_REPLICA_CANDIDATE_LIMIT,
+            HNSW_REPLICA_RNG_FACTOR
+        );
+        int[] centroidVectorCount = new int[centroidSupplier.size()];
+        for (int i = 0; i < assignments.length; i++) {
+            centroidVectorCount[assignments[i]]++;
+            for (int replica : replicasByVector[i]) {
+                centroidVectorCount[replica]++;
+            }
+        }
+        int maxPostingListSize = 0;
+        int[][] assignmentsByCluster = new int[centroidSupplier.size()][];
+        for (int c = 0; c < centroidSupplier.size(); c++) {
+            int size = centroidVectorCount[c];
+            maxPostingListSize = Math.max(maxPostingListSize, size);
+            assignmentsByCluster[c] = new int[size];
+        }
+        Arrays.fill(centroidVectorCount, 0);
+        for (int i = 0; i < assignments.length; i++) {
+            int primary = assignments[i];
+            assignmentsByCluster[primary][centroidVectorCount[primary]++] = i;
+            for (int replica : replicasByVector[i]) {
+                assignmentsByCluster[replica][centroidVectorCount[replica]++] = i;
+            }
+        }
+        final PackedLongValues.Builder offsets = PackedLongValues.monotonicBuilder(PackedInts.COMPACT);
+        final PackedLongValues.Builder lengths = PackedLongValues.monotonicBuilder(PackedInts.COMPACT);
+        DiskBBQBulkWriter bulkWriter = DiskBBQBulkWriter.fromBitSize(quantEncoding.bits(), BULK_SIZE, postingsOutput, true, true);
+        OnHeapQuantizedVectors onHeapQuantizedVectors = new OnHeapQuantizedVectors(
+            floatVectorValues,
+            fieldInfo.getVectorSimilarityFunction(),
+            quantEncoding,
+            fieldInfo.getVectorDimension(),
+            new OptimizedScalarQuantizer(fieldInfo.getVectorSimilarityFunction())
+        );
+        final int[] docIds = new int[maxPostingListSize];
+        final int[] docDeltas = new int[maxPostingListSize];
+        final int[] clusterOrds = new int[maxPostingListSize];
+        DocIdsWriter idsWriter = new DocIdsWriter();
+        for (int c = 0; c < centroidSupplier.size(); c++) {
+            float[] centroid = centroidSupplier.centroid(c);
+            int[] cluster = assignmentsByCluster[c];
+            long offset = postingsOutput.alignFilePointer(Float.BYTES) - fileOffset;
+            offsets.add(offset);
+            postingsOutput.writeInt(Float.floatToIntBits(ESVectorUtil.squareDistance(centroid, centroidClusters.getCentroid(c))));
+            int size = cluster.length;
+            postingsOutput.writeVInt(size);
+            for (int j = 0; j < size; j++) {
+                docIds[j] = floatVectorValues.ordToDoc(cluster[j]);
+                clusterOrds[j] = j;
+            }
+            new IntSorter(clusterOrds, i -> docIds[i]).sort(0, size);
+            for (int j = 0; j < size; j++) {
+                docDeltas[j] = j == 0 ? docIds[clusterOrds[j]] : docIds[clusterOrds[j]] - docIds[clusterOrds[j - 1]];
+            }
+            onHeapQuantizedVectors.reset(centroid, centroidClusters.getCentroid(c), size, ord -> cluster[clusterOrds[ord]]);
+            byte encoding = idsWriter.calculateBlockEncoding(i -> docDeltas[i], size, BULK_SIZE);
+            postingsOutput.writeByte(encoding);
+            if (sliceField != null) {
+                assert centroidSupplier.size() == 1;
+                bulkWriter.writeVectors(onHeapQuantizedVectors, null);
+            } else {
+                bulkWriter.writeVectors(onHeapQuantizedVectors, i -> {
+                    idsWriter.writeDocIds(d -> docDeltas[i + d], Math.min(BULK_SIZE, size - i), encoding, postingsOutput);
+                });
+            }
+            lengths.add(postingsOutput.getFilePointer() - fileOffset - offset);
+        }
+        if (logger.isDebugEnabled()) {
+            printClusterQualityStatistics(assignmentsByCluster);
+        }
+        return new CentroidOffsetAndLength(offsets.build(), lengths.build());
+    }
+
     @Override
     @SuppressForbidden(reason = "require usage of Lucene's IOUtils#deleteFilesIgnoringExceptions(...)")
     public CentroidOffsetAndLength buildAndWritePostingsLists(
@@ -366,6 +475,18 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         int[] assignments,
         int[] overspillAssignments
     ) throws IOException {
+        int replicaLimit = resolveReplicaLimit();
+        if (replicaLimit > 1) {
+            return buildAndWritePostingsListsWithNeighborhoodReplicas(
+                fieldInfo,
+                centroidSupplier,
+                floatVectorValues,
+                postingsOutput,
+                fileOffset,
+                assignments,
+                replicaLimit
+            );
+        }
         // first, quantize all the vectors into a temporary file
         var vectorSimilarityFunction = fieldInfo.getVectorSimilarityFunction();
         KMeansResult centroidClusters = centroidSupplier.secondLevelClusters();
@@ -741,7 +862,14 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
                 throw new IllegalStateException("centroid graph mode enabled without auxiliary graph output");
             }
             long graphOffset = graphOutput.getFilePointer();
-            writeCentroidGraphSection(fieldInfo, centroidSupplier, globalCentroid, centroidOffsetAndLength, orderedCentroidData, graphOutput);
+            writeCentroidGraphSection(
+                fieldInfo,
+                centroidSupplier,
+                globalCentroid,
+                centroidOffsetAndLength,
+                orderedCentroidData,
+                graphOutput
+            );
             long graphLength = graphOutput.getFilePointer() - graphOffset;
             graphSections.put(fieldInfo.number, new GraphSection(graphOffset, graphLength));
         }
@@ -1031,22 +1159,20 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         // TODO: consider hinting / bootstrapping hierarchical kmeans with the prior segments centroids
         // TODO: for flush we are doing this over the vectors and here centroids which seems duplicative
         // preliminary tests suggest recall is good using only centroids but need to do further evaluation
-        HierarchicalKMeans hierarchicalKMeans;
-        if (mergeExec != null) {
-            hierarchicalKMeans = HierarchicalKMeans.ofConcurrent(floatVectorValues.dimension(), mergeExec, numMergeWorkers);
-        } else {
-            hierarchicalKMeans = HierarchicalKMeans.ofSerial(floatVectorValues.dimension());
-        }
+        HierarchicalKMeans hierarchicalKMeans = buildPrimaryClusters(floatVectorValues.dimension(), mergeExec != null);
         if (sliceField == null) { // no slice
             KMeansResult kMeansResult = calculateCentroids(hierarchicalKMeans, floatVectorValues);
             if (logger.isDebugEnabled()) {
                 logger.debug("final centroid count: {}", kMeansResult.centroids().length);
             }
+            int[] overspillAssignments = centroidSearchMode == ESNextDiskBBQVectorsFormat.CentroidSearchMode.HNSW_4BIT
+                ? new int[0]
+                : kMeansResult.soarAssignments();
             return new CentroidAssignments(
                 fieldInfo.getVectorDimension(),
                 kMeansResult.centroids(),
                 kMeansResult.assignments(),
-                kMeansResult.soarAssignments()
+                overspillAssignments
             );
         } else {
             final FieldInfo slicedFieldInfo = mergeState.mergeFieldInfos.fieldInfo(sliceField);
@@ -1107,11 +1233,14 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
                 logger.debug("final centroid count: {}", merged.centroids().length);
             }
             final CentroidSlices centroidSlices = new CentroidSlices(sliceOffsets, sliceLengths);
+            int[] overspillAssignments = centroidSearchMode == ESNextDiskBBQVectorsFormat.CentroidSearchMode.HNSW_4BIT
+                ? new int[0]
+                : merged.soarAssignments();
             return new CentroidAssignments(
                 floatVectorValues.dimension(),
                 merged.centroids(),
                 merged.assignments(),
-                merged.soarAssignments(),
+                overspillAssignments,
                 centroidSlices
             );
         }
@@ -1174,17 +1303,149 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             // for sliced indexed, we don't cluster the data during flush so we can search our vectors by docId range
             return buildFlatCentroidAssignments(fieldInfo, floatVectorValues);
         }
-        HierarchicalKMeans hierarchicalKMeans = HierarchicalKMeans.ofSerial(floatVectorValues.dimension());
+        HierarchicalKMeans hierarchicalKMeans = buildPrimaryClusters(floatVectorValues.dimension(), false);
         KMeansResult kMeansResult = calculateCentroids(hierarchicalKMeans, floatVectorValues);
         if (logger.isDebugEnabled()) {
             logger.debug("final centroid count: {}", kMeansResult.centroids().length);
         }
+        int[] overspillAssignments = centroidSearchMode == ESNextDiskBBQVectorsFormat.CentroidSearchMode.HNSW_4BIT
+            ? new int[0]
+            : kMeansResult.soarAssignments();
         return new CentroidAssignments(
             fieldInfo.getVectorDimension(),
             kMeansResult.centroids(),
             kMeansResult.assignments(),
-            kMeansResult.soarAssignments()
+            overspillAssignments
         );
+    }
+
+    private HierarchicalKMeans buildPrimaryClusters(int dimension, boolean isMerge) {
+        if (centroidSearchMode == ESNextDiskBBQVectorsFormat.CentroidSearchMode.HNSW_4BIT) {
+            if (isMerge && mergeExec != null) {
+                return HierarchicalKMeans.ofConcurrent(
+                    dimension,
+                    mergeExec,
+                    numMergeWorkers,
+                    HierarchicalKMeans.MAX_ITERATIONS_DEFAULT,
+                    HierarchicalKMeans.SAMPLES_PER_CLUSTER_DEFAULT,
+                    HierarchicalKMeans.MAXK,
+                    -1 // disable SOAR assignments for HNSW centroid indexing mode
+                );
+            }
+            return HierarchicalKMeans.ofSerial(
+                dimension,
+                HierarchicalKMeans.MAX_ITERATIONS_DEFAULT,
+                HierarchicalKMeans.SAMPLES_PER_CLUSTER_DEFAULT,
+                HierarchicalKMeans.MAXK,
+                -1 // disable SOAR assignments for HNSW centroid indexing mode
+            );
+        }
+        if (isMerge && mergeExec != null) {
+            return HierarchicalKMeans.ofConcurrent(dimension, mergeExec, numMergeWorkers);
+        }
+        return HierarchicalKMeans.ofSerial(dimension);
+    }
+
+    private float[][] materializeCentroids(CentroidSupplier centroidSupplier) throws IOException {
+        float[][] centroids = new float[centroidSupplier.size()][];
+        for (int i = 0; i < centroids.length; i++) {
+            centroids[i] = centroidSupplier.centroid(i).clone();
+        }
+        return centroids;
+    }
+
+    private int[][] buildReplicaAssignmentsByNeighborhood(
+        FloatVectorValues vectors,
+        VectorSimilarityFunction similarityFunction,
+        int[] assignments,
+        float[][] centroids,
+        int replicaLimit,
+        int candidateLimit,
+        float rngFactor
+    ) throws IOException {
+        if (centroids.length <= 1 || replicaLimit <= 0) {
+            return new int[assignments.length][0];
+        }
+        int cappedReplicaLimit = Math.min(replicaLimit, centroids.length - 1);
+        int clustersPerNeighborhood = Math.min(candidateLimit, centroids.length - 1);
+        NeighborHood[] neighborhoods = centroids.length > clustersPerNeighborhood
+            ? NeighborHood.computeNeighborhoods(centroids, clustersPerNeighborhood)
+            : null;
+        int[][] replicas = new int[assignments.length][];
+        for (int i = 0; i < assignments.length; i++) {
+            int primaryCentroid = assignments[i];
+            float[] vector = vectors.vectorValue(i);
+            int[] candidates;
+            if (neighborhoods != null) {
+                candidates = neighborhoods[primaryCentroid].neighbors();
+            } else {
+                candidates = new int[centroids.length - 1];
+                int candidateIndex = 0;
+                for (int centroidOrd = 0; centroidOrd < centroids.length; centroidOrd++) {
+                    if (centroidOrd != primaryCentroid) {
+                        candidates[candidateIndex++] = centroidOrd;
+                    }
+                }
+            }
+            int[] orderedCandidates = new int[candidates.length];
+            float[] orderedScores = new float[candidates.length];
+            int orderedSize = 0;
+            for (int candidate : candidates) {
+                if (candidate == primaryCentroid) {
+                    continue;
+                }
+                float candidateScore = similarityFunction.compare(vector, centroids[candidate]);
+                int insertAt = orderedSize;
+                while (insertAt > 0 && orderedScores[insertAt - 1] < candidateScore) {
+                    orderedScores[insertAt] = orderedScores[insertAt - 1];
+                    orderedCandidates[insertAt] = orderedCandidates[insertAt - 1];
+                    insertAt--;
+                }
+                orderedScores[insertAt] = candidateScore;
+                orderedCandidates[insertAt] = candidate;
+                orderedSize++;
+            }
+            int[] selected = new int[Math.min(cappedReplicaLimit, orderedSize)];
+            int selectedSize = 0;
+            for (int j = 0; j < orderedSize && selectedSize < cappedReplicaLimit; j++) {
+                int candidate = orderedCandidates[j];
+                float candidateScore = orderedScores[j];
+                boolean accepted = true;
+                for (int k = 0; k < selectedSize; k++) {
+                    float interClusterScore = similarityFunction.compare(centroids[candidate], centroids[selected[k]]);
+                    if (rngFactor * interClusterScore > candidateScore) {
+                        accepted = false;
+                        break;
+                    }
+                }
+                if (accepted) {
+                    selected[selectedSize++] = candidate;
+                }
+            }
+            replicas[i] = selectedSize == selected.length ? selected : Arrays.copyOf(selected, selectedSize);
+        }
+        return replicas;
+    }
+
+    private int resolveReplicaLimit() {
+        int defaultReplicaLimit = centroidSearchMode == ESNextDiskBBQVectorsFormat.CentroidSearchMode.HNSW_4BIT
+            ? HNSW_REPLICA_LIMIT
+            : REGULAR_IVF_REPLICA_LIMIT_ABLATION;
+        String configuredValue = System.getProperty(SYSTEM_PROPERTY_IVF_REPLICA_LIMIT);
+        if (configuredValue == null) {
+            return defaultReplicaLimit;
+        }
+        try {
+            return Math.max(0, Integer.parseInt(configuredValue));
+        } catch (NumberFormatException e) {
+            logger.warn(
+                "Ignoring invalid value [{}] for system property [{}]; using default [{}]",
+                configuredValue,
+                SYSTEM_PROPERTY_IVF_REPLICA_LIMIT,
+                defaultReplicaLimit
+            );
+            return defaultReplicaLimit;
+        }
     }
 
     private KMeansResult calculateCentroids(HierarchicalKMeans hierarchicalKMeans, ClusteringFloatVectorValues floatVectorValues)

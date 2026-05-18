@@ -18,8 +18,8 @@ import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.index.VectorSimilarityFunction;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.core.PathUtils;
-import org.elasticsearch.index.codec.vectors.diskbbq.next.ESNextDiskBBQVectorsReader;
 import org.elasticsearch.index.codec.vectors.diskbbq.next.ESNextDiskBBQVectorsFormat;
+import org.elasticsearch.index.codec.vectors.diskbbq.next.ESNextDiskBBQVectorsReader;
 import org.elasticsearch.monitor.jvm.JvmInfo;
 import org.elasticsearch.test.knn.data.DatasetConfig;
 import org.elasticsearch.xcontent.ObjectParser;
@@ -126,9 +126,7 @@ public record TestConfiguration(
     static final ParseField IVF_CENTROID_GRAPH_BEAM_SCALING_FIELD = new ParseField("ivf_centroid_graph_beam_scaling");
     static final ParseField IVF_CENTROID_GRAPH_BEAM_MULTIPLIER_FIELD = new ParseField("ivf_centroid_graph_beam_multiplier");
     static final ParseField IVF_CENTROID_GRAPH_MIN_BEAM_WIDTH_FIELD = new ParseField("ivf_centroid_graph_min_beam_width");
-    static final ParseField IVF_CENTROID_GRAPH_VISIT_LIMIT_MULTIPLIER_FIELD = new ParseField(
-        "ivf_centroid_graph_visit_limit_multiplier"
-    );
+    static final ParseField IVF_CENTROID_GRAPH_VISIT_LIMIT_MULTIPLIER_FIELD = new ParseField("ivf_centroid_graph_visit_limit_multiplier");
     static final ParseField DIRECTORY_TYPE_FIELD = new ParseField("directory_type");
 
     /** By default, in ES the default writer buffer size is 10% of the heap space
@@ -198,10 +196,7 @@ public record TestConfiguration(
         PARSER.declareStringArray(Builder::setIvfCentroidGraphBeamScaling, IVF_CENTROID_GRAPH_BEAM_SCALING_FIELD);
         PARSER.declareFloatArray(Builder::setIvfCentroidGraphBeamMultiplier, IVF_CENTROID_GRAPH_BEAM_MULTIPLIER_FIELD);
         PARSER.declareIntArray(Builder::setIvfCentroidGraphMinBeamWidth, IVF_CENTROID_GRAPH_MIN_BEAM_WIDTH_FIELD);
-        PARSER.declareIntArray(
-            Builder::setIvfCentroidGraphVisitLimitMultiplier,
-            IVF_CENTROID_GRAPH_VISIT_LIMIT_MULTIPLIER_FIELD
-        );
+        PARSER.declareIntArray(Builder::setIvfCentroidGraphVisitLimitMultiplier, IVF_CENTROID_GRAPH_VISIT_LIMIT_MULTIPLIER_FIELD);
         PARSER.declareString(Builder::setDirectoryType, DIRECTORY_TYPE_FIELD);
     }
 
@@ -236,11 +231,7 @@ public record TestConfiguration(
             new ParameterHelp("index_type", "string", "Index type: hnsw, flat, ivf, or gpu_hnsw."),
             new ParameterHelp("ivf_cluster_size", "int", "IVF: number of clusters."),
             new ParameterHelp("secondary_cluster_size", "int", "IVF: centroids per parent cluster; -1 uses the format default."),
-            new ParameterHelp(
-                "ivf_centroid_search_mode",
-                "string",
-                "IVF: centroid candidate selection mode: brute_force or hnsw_4bit."
-            ),
+            new ParameterHelp("ivf_centroid_search_mode", "string", "IVF: centroid candidate selection mode: brute_force or hnsw_4bit."),
             new ParameterHelp(
                 "ivf_centroid_graph_beam_scaling",
                 "array[string]",
@@ -666,7 +657,9 @@ public record TestConfiguration(
         }
 
         public Builder setIvfCentroidSearchMode(String ivfCentroidSearchMode) {
-            this.ivfCentroidSearchMode = ESNextDiskBBQVectorsFormat.CentroidSearchMode.valueOf(ivfCentroidSearchMode.toUpperCase(Locale.ROOT));
+            this.ivfCentroidSearchMode = ESNextDiskBBQVectorsFormat.CentroidSearchMode.valueOf(
+                ivfCentroidSearchMode.toUpperCase(Locale.ROOT)
+            );
             return this;
         }
 
@@ -1036,10 +1029,7 @@ public record TestConfiguration(
             builder.field(IVF_CENTROID_GRAPH_BEAM_SCALING_FIELD.getPreferredName(), ivfCentroidGraphBeamScaling);
             builder.field(IVF_CENTROID_GRAPH_BEAM_MULTIPLIER_FIELD.getPreferredName(), ivfCentroidGraphBeamMultiplier);
             builder.field(IVF_CENTROID_GRAPH_MIN_BEAM_WIDTH_FIELD.getPreferredName(), ivfCentroidGraphMinBeamWidth);
-            builder.field(
-                IVF_CENTROID_GRAPH_VISIT_LIMIT_MULTIPLIER_FIELD.getPreferredName(),
-                ivfCentroidGraphVisitLimitMultiplier
-            );
+            builder.field(IVF_CENTROID_GRAPH_VISIT_LIMIT_MULTIPLIER_FIELD.getPreferredName(), ivfCentroidGraphVisitLimitMultiplier);
             builder.field(DIRECTORY_TYPE_FIELD.getPreferredName(), directoryType);
             return builder.endObject();
         }

@@ -542,8 +542,7 @@ public class KnnSearcher {
                     totalCpuTimeMS
                 );
             }
-        }
-        finally {
+        } finally {
             restoreCentroidGraphTuning(previousCentroidGraphTuning);
         }
 

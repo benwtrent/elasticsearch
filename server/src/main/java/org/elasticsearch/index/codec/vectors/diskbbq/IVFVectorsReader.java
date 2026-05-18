@@ -154,7 +154,15 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
             ivfCentroids = openDataInput(state, versionMeta, centroidExtension, codecName, versionStart, versionCurrent, state.context);
             ivfClusters = openDataInput(state, versionMeta, clusterExtension, codecName, versionStart, versionCurrent, state.context);
             if (auxiliaryExtension != null && versionMeta >= auxiliaryStartVersion) {
-                ivfAuxiliary = openDataInput(state, versionMeta, auxiliaryExtension, codecName, versionStart, versionCurrent, state.context);
+                ivfAuxiliary = openDataInput(
+                    state,
+                    versionMeta,
+                    auxiliaryExtension,
+                    codecName,
+                    versionStart,
+                    versionCurrent,
+                    state.context
+                );
             } else {
                 ivfAuxiliary = null;
             }
@@ -397,7 +405,7 @@ public abstract class IVFVectorsReader<E extends IVFVectorsReader.FieldEntry> ex
             visitRatio = Math.min(computeDynamicVisitRatio(numCands, k), computeSegmentSizeCap(numVectors));
         }
         // we account for soar vectors here. We can potentially visit a vector twice so we multiply by 2 here.
-        long maxVectorVisited = (long) (2.0 * visitRatio * numVectors);
+        long maxVectorVisited = (long) (visitRatio * numVectors);
         IndexInput postListSlice = entry.postingListSlice(ivfClusters);
         CentroidIterator centroidPrefetchingIterator = getCentroidIterator(
             fieldInfo,

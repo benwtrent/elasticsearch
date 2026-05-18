@@ -40,6 +40,7 @@ import static org.elasticsearch.simdvec.internal.vectorization.JdkFeatures.SUPPO
 public final class IndexInputUtils {
 
     private IndexInputUtils() {}
+
     private static final ThreadLocal<ThreadLocalSliceAddressArenaPool> ACTIVE_SLICE_ADDRESS_ARENA_POOL = new ThreadLocal<>();
 
     /**

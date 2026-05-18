@@ -9,7 +9,6 @@
 
 package org.elasticsearch.index.codec.vectors.diskbbq.next;
 
-import org.elasticsearch.common.logging.LogConfigurator;
 import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorScorer;
 import org.apache.lucene.codecs.lucene104.Lucene104ScalarQuantizedVectorsFormat;
 import org.apache.lucene.codecs.lucene104.QuantizedByteVectorValues;
@@ -48,6 +47,8 @@ import org.elasticsearch.index.codec.vectors.diskbbq.Preconditioner;
 import org.elasticsearch.index.codec.vectors.diskbbq.PrefetchingCentroidIterator;
 import org.elasticsearch.index.codec.vectors.diskbbq.VectorPreconditioner;
 import org.elasticsearch.index.codec.vectors.es94.ES94ScalarQuantizedVectorsFormat;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.search.vectors.BulkKnnCollector;
 import org.elasticsearch.search.vectors.ESAcceptDocs;
 import org.elasticsearch.simdvec.ES92Int7VectorsScorer;
@@ -67,8 +68,6 @@ import java.util.Objects;
 import static org.elasticsearch.index.codec.vectors.OptimizedScalarQuantizer.DEFAULT_LAMBDA;
 import static org.elasticsearch.index.codec.vectors.diskbbq.PostingMetadata.NO_ORDINAL;
 import static org.elasticsearch.simdvec.ES940OSQVectorsScorer.BULK_SIZE;
-import org.elasticsearch.logging.LogManager;
-import org.elasticsearch.logging.Logger;
 
 /**
  * Default implementation of {@link IVFVectorsReader}. It scores the posting lists centroids using
@@ -78,8 +77,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
     implements
         VectorPreconditioner {
     private static final Logger logger = LogManager.getLogger(ESNextDiskBBQVectorsReader.class);
-    private static final Lucene104ScalarQuantizedVectorScorer CENTROID_GRAPH_FLAT_SCORER =
-        ES94ScalarQuantizedVectorsFormat.getFlatVectorScorer();
+    private static final Lucene104ScalarQuantizedVectorScorer CENTROID_GRAPH_FLAT_SCORER = ES94ScalarQuantizedVectorsFormat
+        .getFlatVectorScorer();
     public static final float DEFAULT_GRAPH_INITIAL_BEAM_MULTIPLIER = 5.0f;
     public static final int DEFAULT_GRAPH_MIN_BEAM_WIDTH = 32;
     public static final int DEFAULT_GRAPH_VISIT_LIMIT_MULTIPLIER = 10;
@@ -353,7 +352,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         }
         long targetVisitedVectors = Math.max(1L, (long) Math.ceil(totalAcceptedVectors * visitRatio));
         GraphSearchTuning tuning = GraphSearchTuning.fromSystemProperties();
-        TopKnnCollector collector = new TopKnnCollector((int)(1.5*(visitRatio * graphSectionData.numCentroids)) + 1, Integer.MAX_VALUE);
+        TopKnnCollector collector = new TopKnnCollector((int) (1.5 * (visitRatio * graphSectionData.numCentroids)) + 1, Integer.MAX_VALUE);
         HnswGraph graph = graphSectionData.graphTemplate().newGraph();
         GraphCentroidQuantizedValues quantizedValues = graphSectionData.quantizedValues().copy();
         RandomVectorScorer scorer = CENTROID_GRAPH_FLAT_SCORER.getRandomVectorScorer(
@@ -439,11 +438,17 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         if (fieldEntry.centroidGraphOffset() < 0 || fieldEntry.centroidGraphLength() <= 0) {
             throw new IllegalStateException("centroid graph mode enabled without graph section");
         }
-        IndexInput graphSourceInput = versionMeta >= ESNextDiskBBQVectorsFormat.VERSION_CENTROID_HNSW_CEX ? getAuxiliaryInput() : ivfCentroids;
+        IndexInput graphSourceInput = versionMeta >= ESNextDiskBBQVectorsFormat.VERSION_CENTROID_HNSW_CEX
+            ? getAuxiliaryInput()
+            : ivfCentroids;
         if (graphSourceInput == null) {
             throw new IllegalStateException("centroid graph mode enabled without centroid graph data input");
         }
-        IndexInput graphInput = graphSourceInput.slice("centroid-graph", fieldEntry.centroidGraphOffset(), fieldEntry.centroidGraphLength());
+        IndexInput graphInput = graphSourceInput.slice(
+            "centroid-graph",
+            fieldEntry.centroidGraphOffset(),
+            fieldEntry.centroidGraphLength()
+        );
         int numCentroids = graphInput.readVInt();
         int vectorByteLength = graphInput.readVInt();
         if (versionMeta == ESNextDiskBBQVectorsFormat.VERSION_CENTROID_HNSW_CEX) {
@@ -508,7 +513,15 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         }
         long graphDataLength = input.getFilePointer() - graphDataStart;
         IndexInput graphData = input.slice("centroid-graph-hnsw", graphDataStart, graphDataLength);
-        return new HnswGraphTemplate(numCentroids, maxConn, entryNode, levelNodes, neighborOffsetsByLevel, neighborCountsByLevel, graphData);
+        return new HnswGraphTemplate(
+            numCentroids,
+            maxConn,
+            entryNode,
+            levelNodes,
+            neighborOffsetsByLevel,
+            neighborCountsByLevel,
+            graphData
+        );
     }
 
     private record GraphSectionData(
@@ -630,11 +643,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     }
                     int continueK = Math.max(1, Math.min(10, remainingAcceptedCentroids));
                     int continueVisitLimit = computeGraphVisitLimit(remainingAcceptedCentroids, continueK, visitLimitMultiplier);
-                    TopKnnCollector continueCollector = new TopKnnCollector(
-                        continueK,
-                        continueVisitLimit,
-                        KnnSearchStrategy.Hnsw.DEFAULT
-                    );
+                    TopKnnCollector continueCollector = new TopKnnCollector(continueK, continueVisitLimit, KnnSearchStrategy.Hnsw.DEFAULT);
                     try (Closeable ignored = ESVectorUtil.activateSliceAddressArenaPool(sliceAddressArenaPool)) {
                         HnswGraphSearcher.search(scorer, continueCollector, graph, remainingAcceptOrds, remainingAcceptedCentroids);
                     }
@@ -714,7 +723,10 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             GraphBeamScaling beamScaling = GraphBeamScaling.parse(
                 System.getProperty(SYSTEM_PROPERTY_GRAPH_BEAM_SCALING, DEFAULT_GRAPH_BEAM_SCALING)
             );
-            float beamMultiplier = Math.max(0.1f, parseFloatProperty(SYSTEM_PROPERTY_GRAPH_BEAM_MULTIPLIER, DEFAULT_GRAPH_INITIAL_BEAM_MULTIPLIER));
+            float beamMultiplier = Math.max(
+                0.1f,
+                parseFloatProperty(SYSTEM_PROPERTY_GRAPH_BEAM_MULTIPLIER, DEFAULT_GRAPH_INITIAL_BEAM_MULTIPLIER)
+            );
             int minBeamWidth = Math.max(1, parseIntProperty(SYSTEM_PROPERTY_GRAPH_MIN_BEAM_WIDTH, DEFAULT_GRAPH_MIN_BEAM_WIDTH));
             int visitLimitMultiplier = Math.max(
                 1,

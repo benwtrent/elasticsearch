@@ -166,7 +166,8 @@ public record SearchParameters(
             this.filterSelectivity = Optional.ofNullable(filterSelectivity).orElse(params.filterSelectivity());
             this.earlyTermination = Optional.ofNullable(earlyTermination).orElse(params.earlyTermination());
             this.seed = Optional.ofNullable(seed).orElse(params.seed());
-            this.ivfCentroidGraphBeamScaling = Optional.ofNullable(ivfCentroidGraphBeamScaling).orElse(params.ivfCentroidGraphBeamScaling());
+            this.ivfCentroidGraphBeamScaling = Optional.ofNullable(ivfCentroidGraphBeamScaling)
+                .orElse(params.ivfCentroidGraphBeamScaling());
             this.ivfCentroidGraphBeamMultiplier = Optional.ofNullable(ivfCentroidGraphBeamMultiplier)
                 .orElse(params.ivfCentroidGraphBeamMultiplier());
             this.ivfCentroidGraphMinBeamWidth = Optional.ofNullable(ivfCentroidGraphMinBeamWidth)
@@ -251,10 +252,7 @@ public record SearchParameters(
                 );
             }
             if (ivfCentroidGraphMinBeamWidth != null) {
-                builder.field(
-                    TestConfiguration.IVF_CENTROID_GRAPH_MIN_BEAM_WIDTH_FIELD.getPreferredName(),
-                    ivfCentroidGraphMinBeamWidth
-                );
+                builder.field(TestConfiguration.IVF_CENTROID_GRAPH_MIN_BEAM_WIDTH_FIELD.getPreferredName(), ivfCentroidGraphMinBeamWidth);
             }
             if (ivfCentroidGraphVisitLimitMultiplier != null) {
                 builder.field(
