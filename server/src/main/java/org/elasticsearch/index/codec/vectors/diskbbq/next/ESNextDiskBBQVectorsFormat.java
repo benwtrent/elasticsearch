@@ -67,7 +67,8 @@ public class ESNextDiskBBQVectorsFormat extends KnnVectorsFormat {
     public static final int VERSION_CENTROID_HNSW = 2;
     public static final int VERSION_CENTROID_HNSW_CEX = 3;
     public static final int VERSION_CENTROID_HNSW_CEX_GLOBAL_GRAPH = 4;
-    public static final int VERSION_CURRENT = VERSION_CENTROID_HNSW_CEX_GLOBAL_GRAPH;
+    public static final int VERSION_CENTROID_HNSW_CEX_OFFHEAP_GRAPH = 5;
+    public static final int VERSION_CURRENT = VERSION_CENTROID_HNSW_CEX_OFFHEAP_GRAPH;
     public static final float DYNAMIC_VISIT_RATIO = 0.0f;
 
     private static final DirectIOCapableFlatVectorsFormat float32VectorFormat = new DirectIOCapableLucene99FlatVectorsFormat(

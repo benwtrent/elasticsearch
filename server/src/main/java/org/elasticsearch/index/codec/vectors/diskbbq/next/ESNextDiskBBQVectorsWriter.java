@@ -23,6 +23,7 @@ import org.apache.lucene.index.SegmentWriteState;
 import org.apache.lucene.index.SortedDocValues;
 import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.search.DocIdSetIterator;
+import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.TaskExecutor;
@@ -31,6 +32,7 @@ import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
 import org.apache.lucene.util.hnsw.HnswGraphBuilder;
+import org.apache.lucene.util.hnsw.HnswGraphSearcher;
 import org.apache.lucene.util.hnsw.IntToIntFunction;
 import org.apache.lucene.util.hnsw.NeighborArray;
 import org.apache.lucene.util.hnsw.OnHeapHnswGraph;
@@ -46,7 +48,6 @@ import org.elasticsearch.index.codec.vectors.cluster.ClusteringFloatVectorValues
 import org.elasticsearch.index.codec.vectors.cluster.HierarchicalKMeans;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansFloatVectorValues;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansResult;
-import org.elasticsearch.index.codec.vectors.cluster.NeighborHood;
 import org.elasticsearch.index.codec.vectors.diskbbq.CentroidAssignments;
 import org.elasticsearch.index.codec.vectors.diskbbq.CentroidSlices;
 import org.elasticsearch.index.codec.vectors.diskbbq.CentroidSupplier;
@@ -88,10 +89,14 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
     private static final int CENTROID_GRAPH_HNSW_M = 16;
     private static final int CENTROID_GRAPH_HNSW_BEAM_WIDTH = 250;
     private static final String SYSTEM_PROPERTY_IVF_REPLICA_LIMIT = "es.diskbbq.ivf.replica_limit";
+    private static final String SYSTEM_PROPERTY_IVF_REPLICA_INTERNAL_RESULT_NUM = "es.diskbbq.ivf.replica_internal_result_num";
+    private static final String SYSTEM_PROPERTY_IVF_REPLICA_RNG_FACTOR = "es.diskbbq.ivf.replica_rng_factor";
+    private static final String SYSTEM_PROPERTY_IVF_REPLICA_POSTING_LIMIT_MULTIPLIER = "es.diskbbq.ivf.replica_posting_limit_multiplier";
     private static final int HNSW_REPLICA_LIMIT = 8;
     private static final int REGULAR_IVF_REPLICA_LIMIT_ABLATION = 8;
-    private static final int HNSW_REPLICA_CANDIDATE_LIMIT = 64;
-    private static final float HNSW_REPLICA_RNG_FACTOR = 1.0f;
+    private static final int SPANN_INTERNAL_RESULT_NUM_DEFAULT = 64;
+    private static final float SPANN_RNG_FACTOR_DEFAULT = 1.0f;
+    private static final float SPANN_POSTING_LIMIT_MULTIPLIER_DEFAULT = 4.0f;
 
     private final int vectorPerCluster;
     private final int centroidsPerParentCluster;
@@ -383,20 +388,23 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
     ) throws IOException {
         KMeansResult centroidClusters = centroidSupplier.secondLevelClusters();
         float[][] centroids = materializeCentroids(centroidSupplier);
-        int[][] replicasByVector = buildReplicaAssignmentsByNeighborhood(
+        ReplicaAssignmentSettings replicaSettings = resolveReplicaAssignmentSettings(replicaLimit);
+        ReplicaAssignments replicasByVector = buildReplicaAssignmentsByNeighborhood(
             floatVectorValues,
             fieldInfo.getVectorSimilarityFunction(),
             assignments,
             centroids,
             replicaLimit,
-            HNSW_REPLICA_CANDIDATE_LIMIT,
-            HNSW_REPLICA_RNG_FACTOR
+            replicaSettings
         );
+        applyReplicaPostingCut(assignments, replicasByVector, centroids.length, replicaSettings.postingLimitMultiplier());
         int[] centroidVectorCount = new int[centroidSupplier.size()];
         for (int i = 0; i < assignments.length; i++) {
             centroidVectorCount[assignments[i]]++;
-            for (int replica : replicasByVector[i]) {
-                centroidVectorCount[replica]++;
+            for (int replica : replicasByVector.replicaOrds()[i]) {
+                if (replica != NO_SOAR_ASSIGNMENT) {
+                    centroidVectorCount[replica]++;
+                }
             }
         }
         int maxPostingListSize = 0;
@@ -410,8 +418,10 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         for (int i = 0; i < assignments.length; i++) {
             int primary = assignments[i];
             assignmentsByCluster[primary][centroidVectorCount[primary]++] = i;
-            for (int replica : replicasByVector[i]) {
-                assignmentsByCluster[replica][centroidVectorCount[replica]++] = i;
+            for (int replica : replicasByVector.replicaOrds()[i]) {
+                if (replica != NO_SOAR_ASSIGNMENT) {
+                    assignmentsByCluster[replica][centroidVectorCount[replica]++] = i;
+                }
             }
         }
         final PackedLongValues.Builder offsets = PackedLongValues.monotonicBuilder(PackedInts.COMPACT);
@@ -461,6 +471,83 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             printClusterQualityStatistics(assignmentsByCluster);
         }
         return new CentroidOffsetAndLength(offsets.build(), lengths.build());
+    }
+
+    private void applyReplicaPostingCut(
+        int[] primaryAssignments,
+        ReplicaAssignments replicaAssignments,
+        int numCentroids,
+        float postingLimitMultiplier
+    ) {
+        if (postingLimitMultiplier <= 0f || numCentroids <= 0) {
+            return;
+        }
+        int postingSizeLimit = Math.max(
+            1,
+            (int) Math.ceil(((double) primaryAssignments.length / (double) numCentroids) * postingLimitMultiplier)
+        );
+        int[] postingCounts = new int[numCentroids];
+        int[][] replicaOrds = replicaAssignments.replicaOrds();
+        float[][] replicaScores = replicaAssignments.replicaScores();
+        for (int i = 0; i < primaryAssignments.length; i++) {
+            postingCounts[primaryAssignments[i]]++;
+            for (int replica : replicaOrds[i]) {
+                if (replica != NO_SOAR_ASSIGNMENT) {
+                    postingCounts[replica]++;
+                }
+            }
+        }
+        int totalDropped = 0;
+        for (int centroidOrd = 0; centroidOrd < numCentroids; centroidOrd++) {
+            int overflow = postingCounts[centroidOrd] - postingSizeLimit;
+            if (overflow <= 0) {
+                continue;
+            }
+            ArrayList<ReplicaEdge> edges = new ArrayList<>();
+            for (int vectorOrd = 0; vectorOrd < replicaOrds.length; vectorOrd++) {
+                int[] replicas = replicaOrds[vectorOrd];
+                for (int slot = 0; slot < replicas.length; slot++) {
+                    if (replicas[slot] == centroidOrd) {
+                        edges.add(new ReplicaEdge(vectorOrd, slot, replicaScores[vectorOrd][slot]));
+                    }
+                }
+            }
+            edges.sort((a, b) -> Float.compare(a.score(), b.score()));
+            int droppedForCentroid = 0;
+            for (ReplicaEdge edge : edges) {
+                if (overflow <= 0) {
+                    break;
+                }
+                if (replicaOrds[edge.vectorOrd()][edge.slot()] != centroidOrd) {
+                    continue;
+                }
+                replicaOrds[edge.vectorOrd()][edge.slot()] = NO_SOAR_ASSIGNMENT;
+                replicaScores[edge.vectorOrd()][edge.slot()] = Float.NEGATIVE_INFINITY;
+                postingCounts[centroidOrd]--;
+                overflow--;
+                droppedForCentroid++;
+                totalDropped++;
+            }
+            if (overflow > 0) {
+                logger.debug(
+                    "SPANN-style posting cut could not fully trim centroid [{}], remaining overflow [{}], limit [{}]",
+                    centroidOrd,
+                    overflow,
+                    postingSizeLimit
+                );
+            }
+            if (droppedForCentroid > 0 && logger.isDebugEnabled()) {
+                logger.debug(
+                    "SPANN-style posting cut trimmed [{}] replicas from centroid [{}] to limit [{}]",
+                    droppedForCentroid,
+                    centroidOrd,
+                    postingSizeLimit
+                );
+            }
+        }
+        if (totalDropped > 0 && logger.isInfoEnabled()) {
+            logger.info("SPANN-style posting cut removed [{}] replica assignments (postingSizeLimit={})", totalDropped, postingSizeLimit);
+        }
     }
 
     @Override
@@ -1040,23 +1127,131 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             42L,
             numCentroids
         ).build(numCentroids);
-        centroidOutput.writeVInt(graph.numLevels());
-        centroidOutput.writeVInt(graph.entryNode());
-        centroidOutput.writeVInt(graph.maxConn());
-        for (int level = 0; level < graph.numLevels(); level++) {
-            var nodesIterator = graph.getNodesOnLevel(level);
-            centroidOutput.writeVInt(nodesIterator.size());
-            while (nodesIterator.hasNext()) {
-                int node = nodesIterator.nextInt();
-                centroidOutput.writeVInt(node);
-                NeighborArray neighbors = graph.getNeighbors(level, node);
-                centroidOutput.writeVInt(neighbors.size());
-                int[] neighborNodes = neighbors.nodes();
-                for (int i = 0; i < neighbors.size(); i++) {
-                    centroidOutput.writeVInt(neighborNodes[i]);
-                }
+        writeGraphSectionLikeLucene(numCentroids, graph, centroidOutput);
+    }
+
+    private static void writeGraphSectionLikeLucene(int numCentroids, OnHeapHnswGraph graph, IndexOutput out) throws IOException {
+        out.writeVInt(graph.numLevels());
+        out.writeVInt(graph.entryNode());
+        out.writeVInt(graph.maxConn());
+        int[][] levelNodes = new int[graph.numLevels()][];
+        long totalOrdinals = numCentroids;
+        for (int level = 1; level < graph.numLevels(); level++) {
+            int[] nodes = sortedNodes(graph, level);
+            levelNodes[level] = nodes;
+            totalOrdinals += nodes.length;
+            out.writeVInt(nodes.length);
+            for (int i = 0; i < nodes.length; i++) {
+                int delta = i == 0 ? nodes[i] : nodes[i] - nodes[i - 1];
+                out.writeVInt(delta);
             }
         }
+        long[] adjacencyOffsets = new long[Math.toIntExact(totalOrdinals)];
+        int[] neighborScratch = new int[graph.maxConn() * 2];
+        long currentAdjacencyOffset = 0L;
+        int ordinalIndex = 0;
+        for (int node = 0; node < numCentroids; node++) {
+            neighborScratch = ensureNeighborScratch(neighborScratch, graph.getNeighbors(0, node).size());
+            adjacencyOffsets[ordinalIndex++] = currentAdjacencyOffset;
+            currentAdjacencyOffset += encodedNeighborListSize(graph.getNeighbors(0, node), neighborScratch);
+        }
+        for (int level = 1; level < graph.numLevels(); level++) {
+            int[] nodes = levelNodes[level];
+            for (int node : nodes) {
+                neighborScratch = ensureNeighborScratch(neighborScratch, graph.getNeighbors(level, node).size());
+                adjacencyOffsets[ordinalIndex++] = currentAdjacencyOffset;
+                currentAdjacencyOffset += encodedNeighborListSize(graph.getNeighbors(level, node), neighborScratch);
+            }
+        }
+        out.writeVInt(adjacencyOffsets.length);
+        for (long adjacencyOffset : adjacencyOffsets) {
+            out.writeLong(adjacencyOffset);
+        }
+        for (int node = 0; node < numCentroids; node++) {
+            neighborScratch = ensureNeighborScratch(neighborScratch, graph.getNeighbors(0, node).size());
+            writeDeltaEncodedNeighborList(graph.getNeighbors(0, node), out, neighborScratch);
+        }
+        for (int level = 1; level < graph.numLevels(); level++) {
+            int[] nodes = levelNodes[level];
+            for (int node : nodes) {
+                neighborScratch = ensureNeighborScratch(neighborScratch, graph.getNeighbors(level, node).size());
+                writeDeltaEncodedNeighborList(graph.getNeighbors(level, node), out, neighborScratch);
+            }
+        }
+    }
+
+    private static int[] sortedNodes(OnHeapHnswGraph graph, int level) {
+        var iterator = graph.getNodesOnLevel(level);
+        int[] nodes = new int[iterator.size()];
+        int consumed = iterator.consume(nodes);
+        assert consumed == nodes.length;
+        Arrays.sort(nodes);
+        return nodes;
+    }
+
+    private static long encodedNeighborListSize(NeighborArray neighbors, int[] scratch) {
+        int uniqueCount = toSortedUniqueDeltaEncoded(neighbors, scratch);
+        long size = vIntLength(uniqueCount);
+        for (int i = 0; i < uniqueCount; i++) {
+            size += vIntLength(scratch[i]);
+        }
+        return size;
+    }
+
+    private static void writeDeltaEncodedNeighborList(NeighborArray neighbors, IndexOutput out, int[] scratch) throws IOException {
+        int uniqueCount = toSortedUniqueDeltaEncoded(neighbors, scratch);
+        out.writeVInt(uniqueCount);
+        for (int i = 0; i < uniqueCount; i++) {
+            out.writeVInt(scratch[i]);
+        }
+    }
+
+    private static int toSortedUniqueDeltaEncoded(NeighborArray neighbors, int[] scratch) {
+        int size = neighbors.size();
+        int[] raw = neighbors.nodes();
+        for (int i = 0; i < size; i++) {
+            scratch[i] = raw[i];
+        }
+        Arrays.sort(scratch, 0, size);
+        if (size == 0) {
+            return 0;
+        }
+        int uniqueCount = 1;
+        int previous = scratch[0];
+        scratch[0] = previous;
+        for (int i = 1; i < size; i++) {
+            int current = scratch[i];
+            if (current == previous) {
+                continue;
+            }
+            scratch[uniqueCount++] = current - previous;
+            previous = current;
+        }
+        return uniqueCount;
+    }
+
+    private static int[] ensureNeighborScratch(int[] scratch, int required) {
+        if (required <= scratch.length) {
+            return scratch;
+        }
+        return Arrays.copyOf(scratch, required);
+    }
+
+    private static int vIntLength(int value) {
+        assert value >= 0;
+        if ((value & ~0x7F) == 0) {
+            return 1;
+        }
+        if ((value & ~0x3FFF) == 0) {
+            return 2;
+        }
+        if ((value & ~0x1FFFFF) == 0) {
+            return 3;
+        }
+        if ((value & ~0xFFFFFFF) == 0) {
+            return 4;
+        }
+        return 5;
     }
 
     private static class CentroidScorerSupplier implements RandomVectorScorerSupplier {
@@ -1354,77 +1549,115 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         return centroids;
     }
 
-    private int[][] buildReplicaAssignmentsByNeighborhood(
+    private ReplicaAssignments buildReplicaAssignmentsByNeighborhood(
         FloatVectorValues vectors,
         VectorSimilarityFunction similarityFunction,
         int[] assignments,
         float[][] centroids,
         int replicaLimit,
-        int candidateLimit,
-        float rngFactor
+        ReplicaAssignmentSettings settings
     ) throws IOException {
         if (centroids.length <= 1 || replicaLimit <= 0) {
-            return new int[assignments.length][0];
+            return ReplicaAssignments.empty(assignments.length);
         }
         int cappedReplicaLimit = Math.min(replicaLimit, centroids.length - 1);
-        int clustersPerNeighborhood = Math.min(candidateLimit, centroids.length - 1);
-        NeighborHood[] neighborhoods = centroids.length > clustersPerNeighborhood
-            ? NeighborHood.computeNeighborhoods(centroids, clustersPerNeighborhood)
-            : null;
+        OnHeapHnswGraph centroidGraph = HnswGraphBuilder.create(
+            new CentroidScorerSupplier(centroids, similarityFunction),
+            CENTROID_GRAPH_HNSW_M,
+            CENTROID_GRAPH_HNSW_BEAM_WIDTH,
+            42L,
+            centroids.length
+        ).build(centroids.length);
+
         int[][] replicas = new int[assignments.length][];
+        float[][] replicaScores = new float[assignments.length][];
         for (int i = 0; i < assignments.length; i++) {
             int primaryCentroid = assignments[i];
             float[] vector = vectors.vectorValue(i);
-            int[] candidates;
-            if (neighborhoods != null) {
-                candidates = neighborhoods[primaryCentroid].neighbors();
-            } else {
-                candidates = new int[centroids.length - 1];
-                int candidateIndex = 0;
-                for (int centroidOrd = 0; centroidOrd < centroids.length; centroidOrd++) {
-                    if (centroidOrd != primaryCentroid) {
-                        candidates[candidateIndex++] = centroidOrd;
-                    }
-                }
+            ScoreDoc[] candidates = collectCandidateCentroidsFromGraph(
+                vector,
+                centroids,
+                similarityFunction,
+                centroidGraph,
+                settings.internalResultNum()
+            );
+            if (candidates.length == 0) {
+                replicas[i] = new int[0];
+                replicaScores[i] = new float[0];
+                continue;
             }
-            int[] orderedCandidates = new int[candidates.length];
-            float[] orderedScores = new float[candidates.length];
-            int orderedSize = 0;
-            for (int candidate : candidates) {
-                if (candidate == primaryCentroid) {
+
+            int[] selected = new int[Math.min(cappedReplicaLimit, candidates.length)];
+            float[] selectedScores = new float[selected.length];
+            int selectedSize = 0;
+            for (ScoreDoc candidate : candidates) {
+                int centroidOrd = candidate.doc;
+                if (centroidOrd == primaryCentroid) {
                     continue;
                 }
-                float candidateScore = similarityFunction.compare(vector, centroids[candidate]);
-                int insertAt = orderedSize;
-                while (insertAt > 0 && orderedScores[insertAt - 1] < candidateScore) {
-                    orderedScores[insertAt] = orderedScores[insertAt - 1];
-                    orderedCandidates[insertAt] = orderedCandidates[insertAt - 1];
-                    insertAt--;
-                }
-                orderedScores[insertAt] = candidateScore;
-                orderedCandidates[insertAt] = candidate;
-                orderedSize++;
-            }
-            int[] selected = new int[Math.min(cappedReplicaLimit, orderedSize)];
-            int selectedSize = 0;
-            for (int j = 0; j < orderedSize && selectedSize < cappedReplicaLimit; j++) {
-                int candidate = orderedCandidates[j];
-                float candidateScore = orderedScores[j];
+                float candidateDistance = ESVectorUtil.squareDistance(vector, centroids[centroidOrd]);
                 boolean accepted = true;
-                for (int k = 0; k < selectedSize; k++) {
-                    float interClusterScore = similarityFunction.compare(centroids[candidate], centroids[selected[k]]);
-                    if (rngFactor * interClusterScore > candidateScore) {
+                for (int j = 0; j < selectedSize; j++) {
+                    int selectedCentroid = selected[j];
+                    float interCentroidDistance = ESVectorUtil.squareDistance(centroids[centroidOrd], centroids[selectedCentroid]);
+                    if (settings.rngFactor() * interCentroidDistance < candidateDistance) {
                         accepted = false;
                         break;
                     }
                 }
                 if (accepted) {
-                    selected[selectedSize++] = candidate;
+                    selected[selectedSize] = centroidOrd;
+                    selectedScores[selectedSize] = -candidateDistance;
+                    selectedSize++;
+                    if (selectedSize == selected.length) {
+                        break;
+                    }
                 }
             }
             replicas[i] = selectedSize == selected.length ? selected : Arrays.copyOf(selected, selectedSize);
+            replicaScores[i] = selectedSize == selectedScores.length ? selectedScores : Arrays.copyOf(selectedScores, selectedSize);
         }
-        return replicas;
+        return new ReplicaAssignments(replicas, replicaScores);
+    }
+
+    private static ScoreDoc[] collectCandidateCentroidsFromGraph(
+        float[] vector,
+        float[][] centroids,
+        VectorSimilarityFunction similarityFunction,
+        OnHeapHnswGraph graph,
+        int internalResultNum
+    ) throws IOException {
+        int candidateCount = Math.max(1, Math.min(internalResultNum, centroids.length));
+        UpdateableRandomVectorScorer scorer = new UpdateableRandomVectorScorer() {
+            @Override
+            public float score(int node) {
+                return similarityFunction.compare(vector, centroids[node]);
+            }
+
+            @Override
+            public float bulkScore(int[] nodes, float[] scores, int numNodes) {
+                float max = Float.NEGATIVE_INFINITY;
+                for (int i = 0; i < numNodes; i++) {
+                    float s = score(nodes[i]);
+                    scores[i] = s;
+                    max = Math.max(max, s);
+                }
+                return max;
+            }
+
+            @Override
+            public int maxOrd() {
+                return centroids.length;
+            }
+
+            @Override
+            public void setScoringOrdinal(int node) {
+                // no-op; scorer is bound to the query vector
+            }
+        };
+        var collector = HnswGraphSearcher.search(scorer, candidateCount, graph, null, Integer.MAX_VALUE);
+        var topDocs = collector.topDocs();
+        return topDocs == null ? new ScoreDoc[0] : topDocs.scoreDocs;
     }
 
     private int resolveReplicaLimit() {
@@ -1447,6 +1680,65 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             return defaultReplicaLimit;
         }
     }
+
+    private ReplicaAssignmentSettings resolveReplicaAssignmentSettings(int replicaLimit) {
+        int internalResultNum = parseIntProperty(SYSTEM_PROPERTY_IVF_REPLICA_INTERNAL_RESULT_NUM, SPANN_INTERNAL_RESULT_NUM_DEFAULT);
+        float rngFactor = parseFloatProperty(SYSTEM_PROPERTY_IVF_REPLICA_RNG_FACTOR, SPANN_RNG_FACTOR_DEFAULT);
+        float postingLimitMultiplier = parseFloatProperty(
+            SYSTEM_PROPERTY_IVF_REPLICA_POSTING_LIMIT_MULTIPLIER,
+            SPANN_POSTING_LIMIT_MULTIPLIER_DEFAULT
+        );
+        if (logger.isDebugEnabled()) {
+            logger.debug(
+                "SPANN-style replica assignment config: replicaLimit={}, internalResultNum={}, rngFactor={}, postingLimitMultiplier={}",
+                replicaLimit,
+                internalResultNum,
+                rngFactor,
+                postingLimitMultiplier
+            );
+        }
+        return new ReplicaAssignmentSettings(Math.max(1, internalResultNum), Math.max(0f, rngFactor), Math.max(0f, postingLimitMultiplier));
+    }
+
+    private static int parseIntProperty(String propertyName, int defaultValue) {
+        String value = System.getProperty(propertyName);
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
+    }
+
+    private static float parseFloatProperty(String propertyName, float defaultValue) {
+        String value = System.getProperty(propertyName);
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return Float.parseFloat(value);
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
+    }
+
+    private record ReplicaAssignments(int[][] replicaOrds, float[][] replicaScores) {
+        private static ReplicaAssignments empty(int size) {
+            int[][] replicaOrds = new int[size][];
+            float[][] replicaScores = new float[size][];
+            for (int i = 0; i < size; i++) {
+                replicaOrds[i] = new int[0];
+                replicaScores[i] = new float[0];
+            }
+            return new ReplicaAssignments(replicaOrds, replicaScores);
+        }
+    }
+
+    private record ReplicaAssignmentSettings(int internalResultNum, float rngFactor, float postingLimitMultiplier) {}
+
+    private record ReplicaEdge(int vectorOrd, int slot, float score) {}
 
     private KMeansResult calculateCentroids(HierarchicalKMeans hierarchicalKMeans, ClusteringFloatVectorValues floatVectorValues)
         throws IOException {

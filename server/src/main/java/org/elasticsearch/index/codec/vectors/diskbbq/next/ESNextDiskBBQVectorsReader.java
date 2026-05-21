@@ -27,6 +27,7 @@ import org.apache.lucene.search.TopKnnCollector;
 import org.apache.lucene.search.VectorScorer;
 import org.apache.lucene.search.knn.KnnSearchStrategy;
 import org.apache.lucene.store.IndexInput;
+import org.apache.lucene.store.RandomAccessInput;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.LongValues;
@@ -88,6 +89,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
     public static final String SYSTEM_PROPERTY_GRAPH_MIN_BEAM_WIDTH = "es.diskbbq.ivf.centroid_hnsw.graph_min_beam_width";
     public static final String SYSTEM_PROPERTY_GRAPH_VISIT_LIMIT_MULTIPLIER = "es.diskbbq.ivf.centroid_hnsw.graph_visit_limit_multiplier";
     public static final String SYSTEM_PROPERTY_GRAPH_BRUTE_FORCE = "es.diskbbq.ivf.centroid_hnsw.graph_bruteforce";
+    public static final int DEFAULT_GRAPH_SPANN_INTERNAL_RESULT_NUM = 64;
+    public static final String SYSTEM_PROPERTY_GRAPH_SPANN_INTERNAL_RESULT_NUM = "es.diskbbq.ivf.centroid_hnsw.spann_internal_result_num";
     private final Map<Integer, GraphSectionData> preloadedGraphSections;
     private final ESVectorUtil.SliceAddressArenaPool sliceAddressArenaPool;
 
@@ -333,26 +336,34 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         if (graphSectionData.numCentroids() == 0) {
             return new EmptyCentroidIterator();
         }
-        FixedBitSet remainingAcceptOrds = buildGraphAcceptOrds(
+        GraphAcceptState graphAcceptState = buildGraphAcceptState(
             acceptCentroids,
             acceptParents,
             graphSectionData.parentOrds(),
             graphSectionData.numCentroids()
         );
-        int filtered = remainingAcceptOrds.cardinality();
+        int filtered = graphAcceptState.acceptedCount();
         if (filtered == 0) {
             return new EmptyCentroidIterator();
         }
-        long totalAcceptedVectors = 0L;
-        int ord = remainingAcceptOrds.nextSetBit(0);
-        while (ord != DocIdSetIterator.NO_MORE_DOCS) {
-            totalAcceptedVectors += graphSectionData.postingLengths()[ord];
-            int nextOrd = ord + 1;
-            ord = nextOrd < remainingAcceptOrds.length() ? remainingAcceptOrds.nextSetBit(nextOrd) : DocIdSetIterator.NO_MORE_DOCS;
-        }
-        long targetVisitedVectors = Math.max(1L, (long) Math.ceil(totalAcceptedVectors * visitRatio));
+        long totalAcceptedVectorsApprox = Math.max(1L, Math.round(graphSectionData.avgPostingLength() * filtered));
+        long targetVisitedVectors = Math.max(1L, (long) Math.ceil(totalAcceptedVectorsApprox * visitRatio));
         GraphSearchTuning tuning = GraphSearchTuning.fromSystemProperties();
-        TopKnnCollector collector = new TopKnnCollector((int) (1.5 * (visitRatio * graphSectionData.numCentroids)) + 1, Integer.MAX_VALUE);
+        int spannInternalResultNum = Math.max(
+            1,
+            parseIntProperty(SYSTEM_PROPERTY_GRAPH_SPANN_INTERNAL_RESULT_NUM, DEFAULT_GRAPH_SPANN_INTERNAL_RESULT_NUM)
+        );
+        int initialCollectorK = (int) (1.5 * (visitRatio * graphSectionData.numCentroids)) + 1;
+        if (initialCollectorK > spannInternalResultNum && logger.isDebugEnabled()) {
+            logger.debug(
+                "SPANN-style query budget exceeded before continuation: initialCollectorK [{}], spannInternalResultNum [{}], visitRatio [{}], acceptedCentroids [{}]",
+                initialCollectorK,
+                spannInternalResultNum,
+                visitRatio,
+                filtered
+            );
+        }
+        TopKnnCollector collector = new TopKnnCollector(initialCollectorK, Integer.MAX_VALUE);
         HnswGraph graph = graphSectionData.graphTemplate().newGraph();
         GraphCentroidQuantizedValues quantizedValues = graphSectionData.quantizedValues().copy();
         RandomVectorScorer scorer = CENTROID_GRAPH_FLAT_SCORER.getRandomVectorScorer(
@@ -363,11 +374,11 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         ScoreDoc[] results;
         if (parseBooleanProperty(SYSTEM_PROPERTY_GRAPH_BRUTE_FORCE, false)) {
             try (Closeable ignored = ESVectorUtil.activateSliceAddressArenaPool(sliceAddressArenaPool)) {
-                results = scoreAcceptedCentroids(remainingAcceptOrds, scorer);
+                results = scoreAcceptedCentroids(graphAcceptState.acceptOrds(), graphSectionData.numCentroids(), scorer);
             }
         } else {
             try (Closeable ignored = ESVectorUtil.activateSliceAddressArenaPool(sliceAddressArenaPool)) {
-                HnswGraphSearcher.search(scorer, collector, graph, remainingAcceptOrds, filtered);
+                HnswGraphSearcher.search(scorer, collector, graph, graphAcceptState.acceptOrds(), filtered);
             }
             var topDocs = collector.topDocs();
             results = topDocs == null ? new ScoreDoc[0] : topDocs.scoreDocs;
@@ -379,10 +390,12 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             graphSectionData.parentOrds(),
             scorer,
             graph,
-            remainingAcceptOrds,
+            graphAcceptState.acceptOrds(),
+            graphSectionData.numCentroids(),
             filtered,
             tuning.visitLimitMultiplier(),
             targetVisitedVectors,
+            spannInternalResultNum,
             sliceAddressArenaPool
         );
     }
@@ -391,12 +404,21 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         return Math.min(maxAllowedVisits, Math.max(beamWidth, beamWidth * visitLimitMultiplier));
     }
 
-    private static FixedBitSet buildGraphAcceptOrds(
+    private static GraphAcceptState buildGraphAcceptState(
         FixedBitSet acceptCentroids,
         FixedBitSet acceptParents,
         int[] parentOrds,
         int numCentroids
     ) {
+        if (acceptCentroids == null && acceptParents == null) {
+            return new GraphAcceptState(null, numCentroids);
+        }
+        if (acceptParents == null) {
+            return new GraphAcceptState(acceptCentroids, acceptCentroids.cardinality());
+        }
+        if (acceptCentroids == null && parentOrds.length == numCentroids && acceptParents.length() == numCentroids) {
+            return new GraphAcceptState(acceptParents, acceptParents.cardinality());
+        }
         FixedBitSet acceptOrds = new FixedBitSet(numCentroids);
         for (int index = 0; index < numCentroids; index++) {
             boolean accepted = true;
@@ -415,16 +437,15 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                 acceptOrds.set(index);
             }
         }
-        return acceptOrds;
+        return new GraphAcceptState(acceptOrds, acceptOrds.cardinality());
     }
 
-    private static ScoreDoc[] scoreAcceptedCentroids(FixedBitSet acceptCentroids, RandomVectorScorer scorer) throws IOException {
-        NeighborQueue neighborQueue = new NeighborQueue(acceptCentroids.cardinality(), true);
-        int ord = acceptCentroids.nextSetBit(0);
-        while (ord != DocIdSetIterator.NO_MORE_DOCS) {
-            neighborQueue.add(ord, scorer.score(ord));
-            int nextOrd = ord + 1;
-            ord = nextOrd < acceptCentroids.length() ? acceptCentroids.nextSetBit(nextOrd) : DocIdSetIterator.NO_MORE_DOCS;
+    private static ScoreDoc[] scoreAcceptedCentroids(Bits acceptCentroids, int size, RandomVectorScorer scorer) throws IOException {
+        NeighborQueue neighborQueue = new NeighborQueue(size, true);
+        for (int ord = 0; ord < size; ord++) {
+            if (acceptCentroids == null || acceptCentroids.get(ord)) {
+                neighborQueue.add(ord, scorer.score(ord));
+            }
         }
         ArrayList<ScoreDoc> scoreDocs = new ArrayList<>(neighborQueue.size());
         while (neighborQueue.size() > 0) {
@@ -433,6 +454,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         }
         return scoreDocs.toArray(ScoreDoc[]::new);
     }
+
+    private record GraphAcceptState(Bits acceptOrds, int acceptedCount) {}
 
     private GraphSectionData readGraphSectionData(FieldInfo fieldInfo, NextFieldEntry fieldEntry) throws IOException {
         if (fieldEntry.centroidGraphOffset() < 0 || fieldEntry.centroidGraphLength() <= 0) {
@@ -464,15 +487,19 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         long[] postingOffsets = new long[numCentroids];
         long[] postingLengths = new long[numCentroids];
         int[] parentOrds = new int[numCentroids];
+        long totalPostingLength = 0L;
         for (int i = 0; i < numCentroids; i++) {
             postingOffsets[i] = graphInput.readLong();
             postingLengths[i] = graphInput.readLong();
+            totalPostingLength += postingLengths[i];
             parentOrds[i] = graphInput.readInt();
             if (versionMeta == ESNextDiskBBQVectorsFormat.VERSION_CENTROID_HNSW_CEX) {
                 graphInput.readInt(); // skip legacy quantization ord
             }
         }
-        HnswGraphTemplate graphTemplate = readSerializedGraphTemplate(graphInput, numCentroids);
+        GraphTemplate graphTemplate = versionMeta >= ESNextDiskBBQVectorsFormat.VERSION_CENTROID_HNSW_CEX_OFFHEAP_GRAPH
+            ? readOffHeapGraphTemplate(graphInput, numCentroids)
+            : readLegacyGraphTemplate(graphInput, numCentroids);
         GraphCentroidQuantizedValues quantizedValues = new GraphCentroidQuantizedValues(
             fieldInfo.getVectorDimension(),
             numCentroids,
@@ -482,10 +509,19 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             vectorByteLength,
             vectorData
         );
-        return new GraphSectionData(numCentroids, quantizedValues, postingOffsets, postingLengths, parentOrds, graphTemplate);
+        double avgPostingLength = numCentroids == 0 ? 0.0d : (double) totalPostingLength / (double) numCentroids;
+        return new GraphSectionData(
+            numCentroids,
+            quantizedValues,
+            postingOffsets,
+            postingLengths,
+            parentOrds,
+            graphTemplate,
+            avgPostingLength
+        );
     }
 
-    private static HnswGraphTemplate readSerializedGraphTemplate(IndexInput input, int numCentroids) throws IOException {
+    private static GraphTemplate readLegacyGraphTemplate(IndexInput input, int numCentroids) throws IOException {
         long graphDataStart = input.getFilePointer();
         int numLevels = input.readVInt();
         int entryNode = input.readVInt();
@@ -513,7 +549,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         }
         long graphDataLength = input.getFilePointer() - graphDataStart;
         IndexInput graphData = input.slice("centroid-graph-hnsw", graphDataStart, graphDataLength);
-        return new HnswGraphTemplate(
+        return new LegacyGraphTemplate(
             numCentroids,
             maxConn,
             entryNode,
@@ -524,16 +560,55 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         );
     }
 
+    private static GraphTemplate readOffHeapGraphTemplate(IndexInput input, int numCentroids) throws IOException {
+        int numLevels = input.readVInt();
+        int entryNode = input.readVInt();
+        int maxConn = input.readVInt();
+        int[][] nodesByLevel = new int[numLevels][];
+        long[] levelNodeIndexOffsets = new long[numLevels];
+        long totalOrdinals = numCentroids;
+        levelNodeIndexOffsets[0] = 0L;
+        for (int level = 1; level < numLevels; level++) {
+            int nodeCount = input.readVInt();
+            int[] nodes = new int[nodeCount];
+            int cumulative = 0;
+            for (int i = 0; i < nodeCount; i++) {
+                cumulative += input.readVInt();
+                nodes[i] = cumulative;
+            }
+            nodesByLevel[level] = nodes;
+            levelNodeIndexOffsets[level] = totalOrdinals;
+            totalOrdinals += nodeCount;
+        }
+        int offsetCount = input.readVInt();
+        if (offsetCount != totalOrdinals) {
+            throw new IllegalStateException(
+                "centroid graph offsets count mismatch, expected [" + totalOrdinals + "] but got [" + offsetCount + "]"
+            );
+        }
+        long offsetsStart = input.getFilePointer();
+        IndexInput offsetsInput = input.slice("centroid-graph-offsets", offsetsStart, (long) offsetCount * Long.BYTES);
+        input.seek(offsetsStart + (long) offsetCount * Long.BYTES);
+        long graphDataStart = input.getFilePointer();
+        IndexInput graphData = input.slice("centroid-graph-hnsw", graphDataStart, input.length() - graphDataStart);
+        return new OffHeapGraphTemplate(numCentroids, maxConn, entryNode, nodesByLevel, levelNodeIndexOffsets, offsetsInput, graphData);
+    }
+
     private record GraphSectionData(
         int numCentroids,
         GraphCentroidQuantizedValues quantizedValues,
         long[] postingOffsets,
         long[] postingLengths,
         int[] parentOrds,
-        HnswGraphTemplate graphTemplate
+        GraphTemplate graphTemplate,
+        double avgPostingLength
     ) {}
 
-    private static class HnswGraphTemplate {
+    private interface GraphTemplate {
+        HnswGraph newGraph() throws IOException;
+    }
+
+    private static class LegacyGraphTemplate implements GraphTemplate {
         private final int size;
         private final int maxConn;
         private final int entryNode;
@@ -542,7 +617,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         private final int[][] neighborCountsByLevel;
         private final IndexInput graphData;
 
-        private HnswGraphTemplate(
+        private LegacyGraphTemplate(
             int size,
             int maxConn,
             int entryNode,
@@ -560,14 +635,58 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             this.graphData = graphData;
         }
 
-        private HnswGraph newGraph() throws IOException {
-            return new SerializedHnswGraph(
+        @Override
+        public HnswGraph newGraph() throws IOException {
+            return new LegacySerializedHnswGraph(
                 size,
                 maxConn,
                 entryNode,
                 levelNodes,
                 neighborOffsetsByLevel,
                 neighborCountsByLevel,
+                graphData.clone()
+            );
+        }
+    }
+
+    private static class OffHeapGraphTemplate implements GraphTemplate {
+        private final int size;
+        private final int maxConn;
+        private final int entryNode;
+        private final int[][] nodesByLevel;
+        private final long[] levelNodeIndexOffsets;
+        private final IndexInput offsetsInput;
+        private final IndexInput graphData;
+
+        private OffHeapGraphTemplate(
+            int size,
+            int maxConn,
+            int entryNode,
+            int[][] nodesByLevel,
+            long[] levelNodeIndexOffsets,
+            IndexInput offsetsInput,
+            IndexInput graphData
+        ) {
+            this.size = size;
+            this.maxConn = maxConn;
+            this.entryNode = entryNode;
+            this.nodesByLevel = nodesByLevel;
+            this.levelNodeIndexOffsets = levelNodeIndexOffsets;
+            this.offsetsInput = offsetsInput;
+            this.graphData = graphData;
+        }
+
+        @Override
+        public HnswGraph newGraph() throws IOException {
+            IndexInput clonedOffsets = offsetsInput.clone();
+            RandomAccessInput offsetsRandomAccess = clonedOffsets.randomAccessSlice(0L, clonedOffsets.length());
+            return new OffHeapSerializedHnswGraph(
+                size,
+                maxConn,
+                entryNode,
+                nodesByLevel,
+                levelNodeIndexOffsets,
+                offsetsRandomAccess,
                 graphData.clone()
             );
         }
@@ -591,14 +710,20 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         private final int[] parentOrds;
         private final RandomVectorScorer scorer;
         private final HnswGraph graph;
-        private final FixedBitSet remainingAcceptOrds;
+        private final Bits acceptOrds;
+        private final Bits remainingAcceptView;
+        private final int numCentroids;
+        private final FixedBitSet consumedCentroidOrds;
         private final FixedBitSet queuedCentroidOrds;
         private final NeighborQueue candidateQueue;
         private final int visitLimitMultiplier;
         private final long targetVisitedVectors;
+        private final int spannInternalResultNum;
         private final ESVectorUtil.SliceAddressArenaPool sliceAddressArenaPool;
         private int remainingAcceptedCentroids;
         private long visitedVectors;
+        private int consumedCentroids;
+        private boolean spannOverexplorationLogged;
 
         private GraphCentroidIterator(
             ScoreDoc[] scoreDocs,
@@ -607,10 +732,12 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             int[] parentOrds,
             RandomVectorScorer scorer,
             HnswGraph graph,
-            FixedBitSet remainingAcceptOrds,
+            Bits acceptOrds,
+            int numCentroids,
             int remainingAcceptedCentroids,
             int visitLimitMultiplier,
             long targetVisitedVectors,
+            int spannInternalResultNum,
             ESVectorUtil.SliceAddressArenaPool sliceAddressArenaPool
         ) {
             this.postingOffsets = postingOffsets;
@@ -618,13 +745,29 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             this.parentOrds = parentOrds;
             this.scorer = scorer;
             this.graph = graph;
-            this.remainingAcceptOrds = remainingAcceptOrds;
-            this.queuedCentroidOrds = new FixedBitSet(remainingAcceptOrds.length());
+            this.acceptOrds = acceptOrds;
+            this.numCentroids = numCentroids;
+            this.consumedCentroidOrds = new FixedBitSet(numCentroids);
+            this.remainingAcceptView = new Bits() {
+                @Override
+                public boolean get(int index) {
+                    return isAcceptedAndRemaining(index);
+                }
+
+                @Override
+                public int length() {
+                    return numCentroids;
+                }
+            };
+            this.queuedCentroidOrds = new FixedBitSet(numCentroids);
             this.candidateQueue = new NeighborQueue(Math.max(1, remainingAcceptedCentroids), true);
             this.remainingAcceptedCentroids = remainingAcceptedCentroids;
             this.visitLimitMultiplier = visitLimitMultiplier;
             this.targetVisitedVectors = targetVisitedVectors;
+            this.spannInternalResultNum = spannInternalResultNum;
             this.sliceAddressArenaPool = sliceAddressArenaPool;
+            this.consumedCentroids = 0;
+            this.spannOverexplorationLogged = false;
             enqueueScoreDocs(scoreDocs);
         }
 
@@ -645,14 +788,14 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                     int continueVisitLimit = computeGraphVisitLimit(remainingAcceptedCentroids, continueK, visitLimitMultiplier);
                     TopKnnCollector continueCollector = new TopKnnCollector(continueK, continueVisitLimit, KnnSearchStrategy.Hnsw.DEFAULT);
                     try (Closeable ignored = ESVectorUtil.activateSliceAddressArenaPool(sliceAddressArenaPool)) {
-                        HnswGraphSearcher.search(scorer, continueCollector, graph, remainingAcceptOrds, remainingAcceptedCentroids);
+                        HnswGraphSearcher.search(scorer, continueCollector, graph, remainingAcceptView, remainingAcceptedCentroids);
                     }
                     var continueTopDocs = continueCollector.topDocs();
                     ScoreDoc[] moreScoreDocs = continueTopDocs == null ? new ScoreDoc[0] : continueTopDocs.scoreDocs;
                     int added = enqueueScoreDocs(moreScoreDocs);
                     if (added == 0) {
                         try (Closeable ignored = ESVectorUtil.activateSliceAddressArenaPool(sliceAddressArenaPool)) {
-                            added = enqueueScoreDocs(scoreAcceptedCentroids(remainingAcceptOrds, scorer));
+                            added = enqueueScoreDocs(scoreAcceptedCentroids(remainingAcceptView, numCentroids, scorer));
                         }
                         if (added == 0) {
                             return false;
@@ -671,12 +814,23 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                 int centroidOrd = candidateQueue.decodeNodeId(centroidOrdinalAndScore);
                 float score = candidateQueue.decodeScore(centroidOrdinalAndScore);
                 queuedCentroidOrds.clear(centroidOrd);
-                if (remainingAcceptOrds.get(centroidOrd) == false) {
+                if (isAcceptedAndRemaining(centroidOrd) == false) {
                     continue;
                 }
-                remainingAcceptOrds.clear(centroidOrd);
+                consumedCentroidOrds.set(centroidOrd);
                 remainingAcceptedCentroids--;
+                consumedCentroids++;
                 visitedVectors += postingLengths[centroidOrd];
+                if (spannOverexplorationLogged == false && consumedCentroids > spannInternalResultNum && logger.isDebugEnabled()) {
+                    logger.debug(
+                        "SPANN-style query exploration exceeded internal_result_num [{}], consumedCentroids [{}], remainingAcceptedCentroids [{}], targetVisitedVectors [{}]",
+                        spannInternalResultNum,
+                        consumedCentroids,
+                        remainingAcceptedCentroids,
+                        targetVisitedVectors
+                    );
+                    spannOverexplorationLogged = true;
+                }
                 return new PostingMetadata(postingOffsets[centroidOrd], postingLengths[centroidOrd], parentOrds[centroidOrd], score);
             }
             return null;
@@ -686,13 +840,20 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             int added = 0;
             for (ScoreDoc scoreDoc : docs) {
                 int centroidOrd = scoreDoc.doc;
-                if (remainingAcceptOrds.get(centroidOrd) && queuedCentroidOrds.get(centroidOrd) == false) {
+                if (isAcceptedAndRemaining(centroidOrd) && queuedCentroidOrds.get(centroidOrd) == false) {
                     candidateQueue.add(centroidOrd, scoreDoc.score);
                     queuedCentroidOrds.set(centroidOrd);
                     added++;
                 }
             }
             return added;
+        }
+
+        private boolean isAcceptedAndRemaining(int centroidOrd) {
+            if (consumedCentroidOrds.get(centroidOrd)) {
+                return false;
+            }
+            return acceptOrds == null || acceptOrds.get(centroidOrd);
         }
     }
 
@@ -768,7 +929,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         return Boolean.parseBoolean(value);
     }
 
-    private static class SerializedHnswGraph extends HnswGraph {
+    private static class LegacySerializedHnswGraph extends HnswGraph {
         private final int size;
         private final int maxConn;
         private final int entryNode;
@@ -779,7 +940,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         private int currentNeighborCount = 0;
         private int currentNeighborIndex = 0;
 
-        private SerializedHnswGraph(
+        private LegacySerializedHnswGraph(
             int size,
             int maxConn,
             int entryNode,
@@ -818,7 +979,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
                 currentNeighborIndex++;
                 return graphData.readVInt();
             }
-            return Integer.MAX_VALUE;
+            return DocIdSetIterator.NO_MORE_DOCS;
         }
 
         @Override
@@ -838,6 +999,102 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
 
         @Override
         public NodesIterator getNodesOnLevel(int level) {
+            return new IntArrayNodesIterator(levelNodes[level]);
+        }
+
+        @Override
+        public int neighborCount() {
+            return currentNeighborCount;
+        }
+    }
+
+    private static class OffHeapSerializedHnswGraph extends HnswGraph {
+        private final int size;
+        private final int maxConn;
+        private final int entryNode;
+        private final int[][] levelNodes;
+        private final long[] levelNodeIndexOffsets;
+        private final RandomAccessInput offsetsData;
+        private final IndexInput graphData;
+        private int[] currentNeighbors;
+        private int currentNeighborCount = 0;
+        private int currentNeighborIndex = 0;
+
+        private OffHeapSerializedHnswGraph(
+            int size,
+            int maxConn,
+            int entryNode,
+            int[][] levelNodes,
+            long[] levelNodeIndexOffsets,
+            RandomAccessInput offsetsData,
+            IndexInput graphData
+        ) {
+            this.size = size;
+            this.maxConn = maxConn;
+            this.entryNode = entryNode;
+            this.levelNodes = levelNodes;
+            this.levelNodeIndexOffsets = levelNodeIndexOffsets;
+            this.offsetsData = offsetsData;
+            this.graphData = graphData;
+            this.currentNeighbors = new int[maxConn * 2];
+        }
+
+        @Override
+        public void seek(int level, int target) throws IOException {
+            int targetIndex = level == 0 ? target : Arrays.binarySearch(levelNodes[level], target);
+            if (targetIndex < 0) {
+                currentNeighborCount = 0;
+                currentNeighborIndex = 0;
+                return;
+            }
+            long ordinalIndex = levelNodeIndexOffsets[level] + targetIndex;
+            long offset = offsetsData.readLong(ordinalIndex * Long.BYTES);
+            graphData.seek(offset);
+            currentNeighborCount = graphData.readVInt();
+            currentNeighborIndex = 0;
+            if (currentNeighborCount > currentNeighbors.length) {
+                currentNeighbors = Arrays.copyOf(currentNeighbors, currentNeighborCount);
+            }
+            int sum = 0;
+            for (int i = 0; i < currentNeighborCount; i++) {
+                sum += graphData.readVInt();
+                currentNeighbors[i] = sum;
+            }
+        }
+
+        @Override
+        public int size() {
+            return size;
+        }
+
+        @Override
+        public int nextNeighbor() {
+            if (currentNeighborIndex < currentNeighborCount) {
+                return currentNeighbors[currentNeighborIndex++];
+            }
+            return DocIdSetIterator.NO_MORE_DOCS;
+        }
+
+        @Override
+        public int numLevels() {
+            return levelNodes.length;
+        }
+
+        @Override
+        public int maxConn() {
+            return maxConn;
+        }
+
+        @Override
+        public int entryNode() {
+            return entryNode;
+        }
+
+        @Override
+        public NodesIterator getNodesOnLevel(int level) {
+            if (level == 0) {
+                return new DenseNodesIterator(size);
+            }
             return new IntArrayNodesIterator(levelNodes[level]);
         }
 
