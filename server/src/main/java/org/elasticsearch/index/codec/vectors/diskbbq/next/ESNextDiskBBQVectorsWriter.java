@@ -89,6 +89,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
     private final String sliceField;
     private final IvfFlushConfigSource flushConfigSource;
     private final IvfMergeConfigResolver mergeConfigResolver;
+    private final boolean noSoar;
 
     public ESNextDiskBBQVectorsWriter(
         SegmentWriteState state,
@@ -105,7 +106,8 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         int flatVectorThreshold,
         String sliceField,
         IvfFlushConfigSource flushConfigSource,
-        IvfMergeConfigResolver mergeConfigResolver
+        IvfMergeConfigResolver mergeConfigResolver,
+        boolean noSoar
     ) throws IOException {
         super(
             state,
@@ -130,6 +132,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         this.sliceField = sliceField;
         this.flushConfigSource = flushConfigSource != null ? flushConfigSource : IvfFlushConfigSource.empty();
         this.mergeConfigResolver = mergeConfigResolver != null ? mergeConfigResolver : IvfMergeConfigResolver.useCodecDefault();
+        this.noSoar = noSoar;
         if (sliceField != null) {
             Sort sort = state.segmentInfo.getIndexSort();
             if (sort == null || sort.getSort().length == 0) {
@@ -842,6 +845,34 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         }
     }
 
+    private HierarchicalKMeans buildSerialKMeans(int dimension) {
+        if (noSoar) {
+            return HierarchicalKMeans.ofSerial(
+                dimension,
+                HierarchicalKMeans.MAX_ITERATIONS_DEFAULT,
+                HierarchicalKMeans.SAMPLES_PER_CLUSTER_DEFAULT,
+                HierarchicalKMeans.MAXK,
+                NO_SOAR_ASSIGNMENT
+            );
+        }
+        return HierarchicalKMeans.ofSerial(dimension);
+    }
+
+    private HierarchicalKMeans buildConcurrentKMeans(int dimension) {
+        if (noSoar) {
+            return HierarchicalKMeans.ofConcurrent(
+                dimension,
+                mergeExec,
+                numMergeWorkers,
+                HierarchicalKMeans.MAX_ITERATIONS_DEFAULT,
+                HierarchicalKMeans.SAMPLES_PER_CLUSTER_DEFAULT,
+                HierarchicalKMeans.MAXK,
+                NO_SOAR_ASSIGNMENT
+            );
+        }
+        return HierarchicalKMeans.ofConcurrent(dimension, mergeExec, numMergeWorkers);
+    }
+
     private KMeansResult buildSecondLevelClusters(FieldInfo fieldInfo, ClusteringFloatVectorValues floatVectorValues, boolean isMerge)
         throws IOException {
         // we use the HierarchicalKMeans to partition the space of all vectors across merging segments
@@ -896,9 +927,9 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
         // preliminary tests suggest recall is good using only centroids but need to do further evaluation
         HierarchicalKMeans hierarchicalKMeans;
         if (mergeExec != null) {
-            hierarchicalKMeans = HierarchicalKMeans.ofConcurrent(floatVectorValues.dimension(), mergeExec, numMergeWorkers);
+            hierarchicalKMeans = buildConcurrentKMeans(floatVectorValues.dimension());
         } else {
-            hierarchicalKMeans = HierarchicalKMeans.ofSerial(floatVectorValues.dimension());
+            hierarchicalKMeans = buildSerialKMeans(floatVectorValues.dimension());
         }
         if (sliceField == null) { // no slice
             KMeansResult kMeansResult = calculateCentroids(hierarchicalKMeans, floatVectorValues);
@@ -1037,7 +1068,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter {
             // for sliced indexed, we don't cluster the data during flush so we can search our vectors by docId range
             return buildFlatCentroidAssignments(fieldInfo, floatVectorValues);
         }
-        HierarchicalKMeans hierarchicalKMeans = HierarchicalKMeans.ofSerial(floatVectorValues.dimension());
+        HierarchicalKMeans hierarchicalKMeans = buildSerialKMeans(floatVectorValues.dimension());
         KMeansResult kMeansResult = calculateCentroids(hierarchicalKMeans, floatVectorValues);
         if (logger.isDebugEnabled()) {
             logger.debug("final centroid count: {}", kMeansResult.centroids().length);

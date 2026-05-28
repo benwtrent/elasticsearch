@@ -80,7 +80,8 @@ public record TestConfiguration(
     int flatVectorThreshold,
     int secondaryClusterSize,
     String directoryType,
-    DatasetConfig datasetConfig
+    DatasetConfig datasetConfig,
+    boolean noSoar
 ) {
 
     static final ParseField DATASET_FIELD = new ParseField("dataset");
@@ -123,6 +124,7 @@ public record TestConfiguration(
     static final ParseField SEARCH_PARAMS = new ParseField("search_params");
     static final ParseField FLAT_VECTOR_THRESHOLD = new ParseField("flat_vector_threshold");
     static final ParseField DIRECTORY_TYPE_FIELD = new ParseField("directory_type");
+    static final ParseField NO_SOAR_FIELD = new ParseField("no_soar");
 
     /** By default, in ES the default writer buffer size is 10% of the heap space
      * (see {@code IndexingMemoryController.INDEX_BUFFER_SIZE_SETTING}).
@@ -194,6 +196,7 @@ public record TestConfiguration(
         PARSER.declareInt(Builder::setFlatVectorThreshold, FLAT_VECTOR_THRESHOLD);
         PARSER.declareInt(Builder::setSecondaryClusterSize, SECONDARY_CLUSTER_SIZE);
         PARSER.declareString(Builder::setDirectoryType, DIRECTORY_TYPE_FIELD);
+        PARSER.declareBoolean(Builder::setNoSoar, NO_SOAR_FIELD);
     }
 
     public int numberOfSearchRuns() {
@@ -274,6 +277,11 @@ public record TestConfiguration(
                 "directory_type",
                 "string",
                 "Directory type: default (mmap), frozen (searchable snapshot), or custom types registered by external wrappers."
+            ),
+            new ParameterHelp(
+                "no_soar",
+                "boolean",
+                "IVF: when true, disables SOAR secondary cluster assignments during indexing and removes the search multiplier"
             )
         );
 
@@ -420,6 +428,7 @@ public record TestConfiguration(
         private int secondaryClusterSize = -1;
         private int flatIndexThreshold = -1; // use format's default threshold
         private String directoryType = "default";
+        private boolean noSoar = false;
 
         /**
          * Elasticsearch does not set this explicitly, and in Lucene this setting is
@@ -637,6 +646,11 @@ public record TestConfiguration(
 
         public Builder setDirectoryType(String directoryType) {
             this.directoryType = directoryType.toLowerCase(Locale.ROOT);
+            return this;
+        }
+
+        public Builder setNoSoar(boolean noSoar) {
+            this.noSoar = noSoar;
             return this;
         }
 
@@ -916,7 +930,8 @@ public record TestConfiguration(
                 flatVectorThreshold,
                 secondaryClusterSize,
                 directoryType,
-                datasetConfig
+                datasetConfig,
+                noSoar
             );
         }
 
@@ -978,6 +993,7 @@ public record TestConfiguration(
             }
             builder.field(FLAT_VECTOR_THRESHOLD.getPreferredName(), flatVectorThreshold);
             builder.field(DIRECTORY_TYPE_FIELD.getPreferredName(), directoryType);
+            builder.field(NO_SOAR_FIELD.getPreferredName(), noSoar);
             return builder.endObject();
         }
 

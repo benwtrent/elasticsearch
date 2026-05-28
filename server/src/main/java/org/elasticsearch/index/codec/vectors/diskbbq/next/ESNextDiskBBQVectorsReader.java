@@ -59,8 +59,22 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
     implements
         VectorPreconditioner {
 
+    private final boolean noSoar;
+
     public ESNextDiskBBQVectorsReader(SegmentReadState state, GenericFlatVectorReaders.LoadFlatVectorsReader getFormatReader)
         throws IOException {
+        this(state, getFormatReader, false);
+    }
+
+    /**
+     * @param noSoar when {@code true} the reader skips the SOAR 2× max-visited multiplier,
+     *               since the index was built without secondary cluster assignments
+     */
+    public ESNextDiskBBQVectorsReader(
+        SegmentReadState state,
+        GenericFlatVectorReaders.LoadFlatVectorsReader getFormatReader,
+        boolean noSoar
+    ) throws IOException {
         super(
             state,
             getFormatReader,
@@ -73,6 +87,15 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             ESNextDiskBBQVectorsFormat.VERSION_DIRECT_IO,
             ESNextDiskBBQVectorsFormat.DYNAMIC_VISIT_RATIO
         );
+        this.noSoar = noSoar;
+    }
+
+    @Override
+    protected long getMaxVisited(float visitRatio, int numVectors) {
+        if (noSoar) {
+            return (long) (visitRatio * numVectors);
+        }
+        return super.getMaxVisited(visitRatio, numVectors);
     }
 
     CentroidIterator getPostingListPrefetchIterator(CentroidIterator centroidIterator, IndexInput postingListSlice) throws IOException {
