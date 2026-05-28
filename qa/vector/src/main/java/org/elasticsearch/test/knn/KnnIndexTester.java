@@ -186,6 +186,9 @@ public class KnnIndexTester {
                 if (args.queryQuantizeBits() != null && args.queryQuantizeBits() != defaultQueryQuantizeBits(args.quantizeBits())) {
                     suffix.add("q" + args.queryQuantizeBits());
                 }
+                if (args.noSoar()) {
+                    suffix.add("no_soar");
+                }
             }
             case HNSW -> {
                 suffix.add(Integer.toString(args.hnswM()));
