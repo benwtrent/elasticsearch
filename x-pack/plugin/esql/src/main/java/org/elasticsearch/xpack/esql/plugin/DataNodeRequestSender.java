@@ -28,6 +28,7 @@ import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.compute.operator.DriverCompletionInfo;
 import org.elasticsearch.compute.operator.FailureCollector;
 import org.elasticsearch.index.Index;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.logging.LogManager;
@@ -94,6 +95,7 @@ abstract class DataNodeRequestSender {
     private final String clusterAlias;
     private final OriginalIndices originalIndices;
     private final QueryBuilder requestFilter;
+    private final String sliceRouting;
 
     private final boolean allowPartialResults;
     private final Semaphore concurrentRequests;
@@ -114,6 +116,7 @@ abstract class DataNodeRequestSender {
         CancellableTask rootTask,
         OriginalIndices originalIndices,
         QueryBuilder requestFilter,
+        String sliceRouting,
         String clusterAlias,
         boolean allowPartialResults,
         int concurrentRequests,
@@ -126,6 +129,7 @@ abstract class DataNodeRequestSender {
         this.rootTask = rootTask;
         this.originalIndices = originalIndices;
         this.requestFilter = requestFilter;
+        this.sliceRouting = sliceRouting;
         this.clusterAlias = clusterAlias;
         this.allowPartialResults = allowPartialResults;
         this.concurrentRequests = concurrentRequests > 0 ? new Semaphore(concurrentRequests) : null;
@@ -530,13 +534,20 @@ abstract class DataNodeRequestSender {
             }
             return new TargetShards(shards, totalShards, skippedShards);
         });
+        boolean routingFromSlice = SliceIndexing.SLICE_FEATURE_FLAG.isEnabled();
+        // SearchRequest.searchSlice(null) resets routingFromSlice=false, which causes the validator to throw when
+        // any target index has slice.enabled=true. Use SLICE_ALL ("_all") when routing is unresolvable (non-equality
+        // predicates like LIKE/RLIKE, conflicting AND, or no _slice filter) so routingFromSlice stays true.
+        String searchSlice = routingFromSlice ? (sliceRouting != null ? sliceRouting : SliceIndexing.SLICE_ALL) : null;
         var searchShardsRequest = new SearchShardsRequest(
             originalIndices.indices(),
             originalIndices.indicesOptions(),
             requestFilter,
-            null,
-            null,
-            true, // unavailable_shards will be handled by the sender
+            null,                                     // routing
+            searchSlice,
+            routingFromSlice,
+            null,                                     // preference
+            true,                                     // unavailable_shards will be handled by the sender
             clusterAlias
         );
         transportService.sendChildRequest(

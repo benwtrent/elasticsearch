@@ -29,6 +29,7 @@ import org.elasticsearch.geometry.Circle;
 import org.elasticsearch.geometry.Polygon;
 import org.elasticsearch.geometry.ShapeType;
 import org.elasticsearch.index.IndexMode;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.mapper.MappedFieldType.FieldExtractPreference;
 import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.ExistsQueryBuilder;
@@ -3425,6 +3426,66 @@ public class PhysicalPlanOptimizerTests extends ESTestCase {
         var tq = as(source.query(), WildcardQueryBuilder.class);
         assertThat(tq.fieldName(), is("_tier"));
         assertThat(tq.value(), is("data_*"));
+    }
+
+    /*
+     * LimitExec[10000[INTEGER]]
+     * \_ExchangeExec[[],false]
+     *   \_ProjectExec[[..., _slice{m}#1]]
+     *     \_FieldExtractExec[...]<[],[]>
+     *       \_EsQueryExec[test], query[{"term":{"_slice":{"value":"s1","boost":1.0}}}]
+     */
+    public void testPushDownMetadataSliceInEquality() {
+        assumeTrue(
+            "_slice metadata only available when slice_indexing feature flag is enabled",
+            SliceIndexing.SLICE_FEATURE_FLAG.isEnabled()
+        );
+        var plan = physicalPlan("""
+            from test metadata _slice
+            | where _slice == "s1"
+            """);
+
+        var optimized = optimizedPlan(plan);
+        var limit = as(optimized, LimitExec.class);
+        var exchange = asRemoteExchange(limit.child());
+        var project = as(exchange.child(), ProjectExec.class);
+        var extract = as(project.child(), FieldExtractExec.class);
+        var source = source(extract.child());
+
+        var tq = as(source.query(), TermQueryBuilder.class);
+        assertThat(tq.fieldName(), is("_slice"));
+        assertThat(tq.value(), is("s1"));
+    }
+
+    /*
+     * LimitExec[10000[INTEGER]]
+     * \_ExchangeExec[[],false]
+     *   \_ProjectExec[[..., _slice{m}#1]]
+     *     \_FieldExtractExec[...]<[],[]>
+     *       \_EsQueryExec[test], query={"bool":{"must_not":[{"term":{"_slice":{"value":"s1"}}}]}}
+     */
+    public void testPushDownMetadataSliceInNotEquality() {
+        assumeTrue(
+            "_slice metadata only available when slice_indexing feature flag is enabled",
+            SliceIndexing.SLICE_FEATURE_FLAG.isEnabled()
+        );
+        var plan = physicalPlan("""
+            from test metadata _slice
+            | where _slice != "s1"
+            """);
+
+        var optimized = optimizedPlan(plan);
+        var limit = as(optimized, LimitExec.class);
+        var exchange = asRemoteExchange(limit.child());
+        var project = as(exchange.child(), ProjectExec.class);
+        var extract = as(project.child(), FieldExtractExec.class);
+        var source = source(extract.child());
+
+        var bq = as(source.query(), BoolQueryBuilder.class);
+        assertThat(bq.mustNot().size(), is(1));
+        var tq = as(bq.mustNot().get(0), TermQueryBuilder.class);
+        assertThat(tq.fieldName(), is("_slice"));
+        assertThat(tq.value(), is("s1"));
     }
 
     public void testDontPushDownMetadataVersionAndId() {

@@ -17,6 +17,7 @@ import org.elasticsearch.compute.operator.PlanTimeProfile;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.IndexMode;
+import org.elasticsearch.index.SliceIndexing;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.query.CoordinatorRewriteContext;
 import org.elasticsearch.index.query.QueryBuilder;
@@ -28,6 +29,7 @@ import org.elasticsearch.xpack.esql.capabilities.TranslationAware;
 import org.elasticsearch.xpack.esql.core.expression.AttributeSet;
 import org.elasticsearch.xpack.esql.core.expression.Expression;
 import org.elasticsearch.xpack.esql.core.expression.FoldContext;
+import org.elasticsearch.xpack.esql.core.expression.Literal;
 import org.elasticsearch.xpack.esql.core.expression.MetadataAttribute;
 import org.elasticsearch.xpack.esql.core.querydsl.query.Query;
 import org.elasticsearch.xpack.esql.core.tree.Source;
@@ -37,6 +39,9 @@ import org.elasticsearch.xpack.esql.core.util.Queries;
 import org.elasticsearch.xpack.esql.datasources.FormatReaderRegistry;
 import org.elasticsearch.xpack.esql.datasources.spi.ExternalSplit;
 import org.elasticsearch.xpack.esql.expression.predicate.Predicates;
+import org.elasticsearch.xpack.esql.expression.predicate.logical.Or;
+import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.Equals;
+import org.elasticsearch.xpack.esql.expression.predicate.operator.comparison.In;
 import org.elasticsearch.xpack.esql.io.stream.PlanStreamWrapperQueryBuilder;
 import org.elasticsearch.xpack.esql.optimizer.ExternalOptimizerContext;
 import org.elasticsearch.xpack.esql.optimizer.LocalLogicalOptimizerContext;
@@ -452,6 +457,9 @@ public class PlannerUtils {
 
     /**
      * Extracts a filter that can be used to skip unmatched shards on the coordinator.
+     * When the {@code slice_indexing} feature flag is enabled, also includes any {@code _slice}
+     * equality filters so that conflicting AND constraints (e.g. {@code _slice == "a" AND _slice == "b"})
+     * produce a can-match query that returns zero results, skipping all shards.
      */
     public static QueryBuilder canMatchFilter(
         EsqlFlags flags,
@@ -459,7 +467,24 @@ public class PlannerUtils {
         TransportVersion minTransportVersion,
         PhysicalPlan plan
     ) {
-        return detectFilter(flags, configuration, minTransportVersion, plan, CoordinatorRewriteContext.SUPPORTED_FIELDS::contains);
+        var coordinatorFilter = detectFilter(
+            flags,
+            configuration,
+            minTransportVersion,
+            plan,
+            CoordinatorRewriteContext.SUPPORTED_FIELDS::contains
+        );
+        if (SliceIndexing.SLICE_FEATURE_FLAG.isEnabled() == false) {
+            return coordinatorFilter;
+        }
+        var sliceFilter = detectFilter(flags, configuration, minTransportVersion, plan, SliceIndexing.PARAM_NAME::equals);
+        if (sliceFilter == null) {
+            return coordinatorFilter;
+        }
+        if (coordinatorFilter == null) {
+            return sliceFilter;
+        }
+        return Queries.combine(FILTER, List.of(coordinatorFilter, sliceFilter));
     }
 
     /**
@@ -515,6 +540,113 @@ public class PlannerUtils {
         });
 
         return Queries.combine(FILTER, requestFilters);
+    }
+
+    /**
+     * Extracts {@code _slice} shard routing values from a plan so that ES|QL can inform
+     * {@link org.elasticsearch.action.search.SearchShardsRequest} which slices to target.
+     *
+     * <ul>
+     *   <li>Single equality ({@code _slice == "v"}): returns {@code "v"}.</li>
+     *   <li>OR of equalities ({@code _slice == "a" OR _slice == "b"}): returns {@code "a,b"}.</li>
+     *   <li>AND intersection ({@code _slice == "a" AND _slice == "b"}): returns {@code null} —
+     *       no document can satisfy both, so the can-match filter (produced by
+     *       {@link #canMatchFilter}) handles the zero-result optimization by skipping all shards.</li>
+     *   <li>Non-equality constraint (wildcard, prefix, range): returns {@code null} — routing
+     *       cannot be determined; Lucene doc-value iterators handle the filtering.</li>
+     * </ul>
+     *
+     * Returns {@code null} when the feature flag is disabled or no {@code _slice} equality
+     * constraint exists directly above an {@link EsRelation}.
+     */
+    @Nullable
+    public static String sliceRoutingFromPlan(PhysicalPlan plan) {
+        if (SliceIndexing.SLICE_FEATURE_FLAG.isEnabled() == false) {
+            return null;
+        }
+        var result = new Holder<String>();
+        plan.forEachDown(FragmentExec.class, fe -> {
+            fe.fragment().forEachUp(Filter.class, f -> {
+                if (result.get() != null || (f.child() instanceof EsRelation) == false) return;
+
+                // Intersect routing values across top-level AND conjuncts that reference _slice.
+                // Conjuncts referencing only other fields are ignored.
+                // A non-equality _slice conjunct (wildcard, prefix, range) makes routing unknowable.
+                List<String> routing = null;
+                for (Expression exp : Predicates.splitAnd(f.condition())) {
+                    if (exp.references().stream().noneMatch(attr -> SliceIndexing.PARAM_NAME.equals(attr.name()))) {
+                        continue;
+                    }
+                    List<String> values = extractSliceEqualities(exp);
+                    if (values == null) {
+                        return; // non-equality constraint — routing cannot be determined
+                    }
+                    if (routing == null) {
+                        routing = new ArrayList<>(values);
+                    } else {
+                        routing.retainAll(values); // AND: intersect the routing sets
+                    }
+                }
+
+                if (routing != null && routing.isEmpty() == false) {
+                    result.setIfAbsent(String.join(",", routing));
+                }
+                // routing == null → no _slice constraint; result stays null
+                // routing.isEmpty()→ conflicting AND; can-match handles zero results; result stays null
+            });
+        });
+        return result.get();
+    }
+
+    /**
+     * Recursively extracts the set of exact equality values for the {@code _slice} field from an
+     * expression. Returns {@code null} when the expression contains a non-equality constraint
+     * (wildcard, prefix, range, etc.) that cannot be used for shard routing.
+     *
+     * <ul>
+     *   <li>{@code Equals(_slice, "v")} → {@code ["v"]}</li>
+     *   <li>{@code Or(left, right)} → {@code extractSliceEqualities(left) + extractSliceEqualities(right)}
+     *       (returns {@code null} if either side is null)</li>
+     *   <li>Anything else → {@code null}</li>
+     * </ul>
+     */
+    @Nullable
+    private static List<String> extractSliceEqualities(Expression exp) {
+        if (exp instanceof Equals eq) {
+            if (eq.left() instanceof MetadataAttribute ma
+                && SliceIndexing.PARAM_NAME.equals(ma.name())
+                && eq.right() instanceof Literal lit) {
+                return List.of(String.valueOf(lit.value()));
+            }
+            if (eq.right() instanceof MetadataAttribute ma
+                && SliceIndexing.PARAM_NAME.equals(ma.name())
+                && eq.left() instanceof Literal lit) {
+                return List.of(String.valueOf(lit.value()));
+            }
+            return null;
+        }
+        // The optimizer folds OR-of-equalities into In(_slice, [v1, v2, ...]) before this point
+        if (exp instanceof In in && in.value() instanceof MetadataAttribute ma && SliceIndexing.PARAM_NAME.equals(ma.name())) {
+            var values = new ArrayList<String>();
+            for (Expression item : in.list()) {
+                if (item instanceof Literal lit) {
+                    values.add(String.valueOf(lit.value()));
+                } else {
+                    return null; // non-literal in the list — routing cannot be determined
+                }
+            }
+            return values;
+        }
+        if (exp instanceof Or or) {
+            // Fallback for any Or not yet folded into In
+            var left = extractSliceEqualities(or.left());
+            var right = extractSliceEqualities(or.right());
+            if (left == null || right == null) return null;
+            var combined = new ArrayList<>(left);
+            combined.addAll(right);
+            return combined;
+        }
+        return null; // wildcard, prefix, range, or other non-equality expression
     }
 
     /**
