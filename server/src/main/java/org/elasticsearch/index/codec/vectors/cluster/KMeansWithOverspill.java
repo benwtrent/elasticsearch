@@ -34,16 +34,18 @@ public record KMeansWithOverspill<V>(KMeansResult<V> result, OverspillAssignment
     public static <V> KMeansWithOverspill<V> merge(List<KMeansWithOverspill<V>> results, CentroidOps<V> ops) {
         int numCentroids = 0;
         int numAssignments = 0;
+        boolean hasOverspill = false;
         for (KMeansWithOverspill<V> result : results) {
             numCentroids += result.centroids().length;
             numAssignments += result.assignments().length;
+            hasOverspill |= result.overspill().size() > 0;
         }
 
         V[] centroids = ops.newCentroidArrayShallow(numCentroids);
         int[] assignments = new int[numAssignments];
-        int[] spillAssignmentOffsets = new int[numAssignments];
-        int[] spillCentroidOffsets = new int[numAssignments];
-        OverspillAssignments[] overspills = new OverspillAssignments[numAssignments];
+        int[] spillAssignmentOffsets = new int[results.size()];
+        int[] spillCentroidOffsets = new int[results.size()];
+        OverspillAssignments[] overspills = new OverspillAssignments[results.size()];
 
         int centroidOffset = 0;
         int assignmentOffset = 0;
@@ -56,11 +58,14 @@ public record KMeansWithOverspill<V>(KMeansResult<V> result, OverspillAssignment
                 assignments[assignmentOffset + i] = resultAssignments[i] + centroidOffset;
             }
 
-            OverspillAssignments overspill = result.overspill();
-            if (overspill.size() > 0) {
+            OverspillAssignments resultOverspill = result.overspill();
+            boolean extendsPriorNoneRun = spillAssignmentIdx > 0
+                && resultOverspill == OverspillAssignments.NONE
+                && overspills[spillAssignmentIdx - 1] == OverspillAssignments.NONE;
+            if (extendsPriorNoneRun == false) {
                 spillAssignmentOffsets[spillAssignmentIdx] = assignmentOffset;
                 spillCentroidOffsets[spillAssignmentIdx] = centroidOffset;
-                overspills[spillAssignmentIdx] = overspill;
+                overspills[spillAssignmentIdx] = resultOverspill;
                 spillAssignmentIdx++;
             }
 
@@ -68,12 +73,13 @@ public record KMeansWithOverspill<V>(KMeansResult<V> result, OverspillAssignment
             assignmentOffset += resultAssignments.length;
         }
 
-        OverspillAssignments overspill = spillAssignmentIdx == 0
+        OverspillAssignments overspill = hasOverspill == false
             ? OverspillAssignments.NONE
             : new MergedOverspillAssignments(
                 Arrays.copyOf(spillAssignmentOffsets, spillAssignmentIdx),
                 Arrays.copyOf(spillCentroidOffsets, spillAssignmentIdx),
-                Arrays.copyOf(overspills, spillAssignmentIdx)
+                Arrays.copyOf(overspills, spillAssignmentIdx),
+                numAssignments
             );
 
         return new KMeansWithOverspill<>(new KMeansResult<>(centroids, assignments), overspill);
@@ -86,14 +92,14 @@ public record KMeansWithOverspill<V>(KMeansResult<V> result, OverspillAssignment
         private final OverspillAssignments[] assignments;
         private final int size;
 
-        private MergedOverspillAssignments(int[] assignmentOffsets, int[] centroidOffsets, OverspillAssignments[] assignments) {
+        private MergedOverspillAssignments(int[] assignmentOffsets, int[] centroidOffsets, OverspillAssignments[] assignments, int size) {
             assert assignmentOffsets.length == assignments.length;
             assert centroidOffsets.length == assignmentOffsets.length;
 
             this.assignmentOffsets = assignmentOffsets;
             this.centroidOffsets = centroidOffsets;
             this.assignments = assignments;
-            size = assignmentOffsets[assignmentOffsets.length - 1] + assignments[assignmentOffsets.length - 1].size();
+            this.size = size;
         }
 
         @Override
