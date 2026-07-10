@@ -185,6 +185,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             maxSliceSize = input.readVInt();
         }
         float rescoreOversample = Float.intBitsToFloat(input.readInt());
+        // POC: forward-link overspill uses a 1x visit budget instead of SOAR's 2x; see ForwardLinkOverspill.
+        boolean forwardLinkEnabled = input.readByte() != 0;
         return new NextFieldEntry(
             rawVectorFormat,
             useDirectIOReads,
@@ -204,7 +206,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             preconditionerLength,
             numSlices,
             maxSliceSize,
-            rescoreOversample
+            rescoreOversample,
+            forwardLinkEnabled
         );
     }
 
@@ -304,6 +307,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
         final int numSlices;
         final int maxSliceSize;
         private final float rescoreOversample;
+        private final boolean forwardLinkEnabled;
 
         NextFieldEntry(
             String rawVectorFormat,
@@ -324,7 +328,8 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             long preconditionerLength,
             int numSlices,
             int maxSliceSize,
-            float rescoreOversample
+            float rescoreOversample,
+            boolean forwardLinkEnabled
         ) {
             super(
                 rawVectorFormat,
@@ -347,6 +352,7 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             this.numSlices = numSlices;
             this.maxSliceSize = maxSliceSize;
             this.rescoreOversample = rescoreOversample;
+            this.forwardLinkEnabled = forwardLinkEnabled;
         }
 
         public CentroidIndexFormat centroidIndexFormat() {
@@ -369,6 +375,10 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
             return rescoreOversample;
         }
 
+        public boolean forwardLinkEnabled() {
+            return forwardLinkEnabled;
+        }
+
         @Override
         public int numSlices() {
             return numSlices;
@@ -377,6 +387,13 @@ public class ESNextDiskBBQVectorsReader extends IVFVectorsReader<ESNextDiskBBQVe
 
     @Override
     protected long maxVectorsToVisit(NextFieldEntry entry, float visitRatio, int numVectors) {
+        // Experimentally verified: 2x (matching SOAR) is clearly worse than 1x at matched actual
+        // visit% here, because visitRatio also independently drives candidate-centroid breadth
+        // (FlatCentroidIndex#getIterator); at matched actual-visit-cost, wider breadth + smaller
+        // per-centroid cap (1x) beats narrower breadth + bigger per-centroid cap (2x). Keep 1x.
+        if (entry.forwardLinkEnabled()) {
+            return (long) (visitRatio * numVectors);
+        }
         return switch (entry.centroidIndexFormat()) {
             case FLAT -> super.maxVectorsToVisit(entry, visitRatio, numVectors);
         };

@@ -39,11 +39,13 @@ import org.elasticsearch.index.codec.vectors.OptimizedScalarQuantizer;
 import org.elasticsearch.index.codec.vectors.cluster.CentroidOps;
 import org.elasticsearch.index.codec.vectors.cluster.ClusteringFloatVectorValues;
 import org.elasticsearch.index.codec.vectors.cluster.ClusteringFloatVectorValuesSlice;
+import org.elasticsearch.index.codec.vectors.cluster.ForwardLinkOverspill;
 import org.elasticsearch.index.codec.vectors.cluster.HierarchicalKMeans;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansFloatVectorValues;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansNeighbors;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansResult;
 import org.elasticsearch.index.codec.vectors.cluster.KMeansWithOverspill;
+import org.elasticsearch.index.codec.vectors.cluster.NeighborHood;
 import org.elasticsearch.index.codec.vectors.diskbbq.CentroidAssignments;
 import org.elasticsearch.index.codec.vectors.diskbbq.CentroidIndex;
 import org.elasticsearch.index.codec.vectors.diskbbq.CentroidIndexFormat;
@@ -100,6 +102,8 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter<FlatCentroidInd
     private final String sliceField;
     private final IvfFlushConfigSource flushConfigSource;
     private final IvfMergeConfigResolver mergeConfigResolver;
+    // POC: non-null enables forward-link overspill in place of SOAR; see ForwardLinkOverspill.
+    private final ForwardLinkOverspill.Params forwardLinkParams;
 
     public ESNextDiskBBQVectorsWriter(
         SegmentWriteState state,
@@ -117,7 +121,8 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter<FlatCentroidInd
         int flatVectorThreshold,
         String sliceField,
         IvfFlushConfigSource flushConfigSource,
-        IvfMergeConfigResolver mergeConfigResolver
+        IvfMergeConfigResolver mergeConfigResolver,
+        ForwardLinkOverspill.Params forwardLinkParams
     ) throws IOException {
         super(
             state,
@@ -143,6 +148,7 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter<FlatCentroidInd
         this.sliceField = sliceField;
         this.flushConfigSource = flushConfigSource != null ? flushConfigSource : IvfFlushConfigSource.empty();
         this.mergeConfigResolver = mergeConfigResolver != null ? mergeConfigResolver : IvfMergeConfigResolver.useCodecDefault();
+        this.forwardLinkParams = forwardLinkParams;
         if (sliceField != null) {
             Sort sort = state.segmentInfo.getIndexSort();
             if (sort == null || sort.getSort().length == 0) {
@@ -719,6 +725,8 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter<FlatCentroidInd
             }
         }
         metaOutput.writeInt(Float.floatToIntBits(segmentConfig.rescoreOversample()));
+        // POC: forward-link overspill uses a 1x visit budget instead of SOAR's 2x; see ForwardLinkOverspill.
+        metaOutput.writeByte(forwardLinkParams != null ? (byte) 1 : (byte) 0);
     }
 
     @Override
@@ -834,18 +842,43 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter<FlatCentroidInd
                 printClusterQualityStatistics(clusterSizes);
             }
 
+            OverspillAssignments overspill = forwardLinkParams != null
+                ? computeForwardLinkOverspillOnMerge(floatVectorValues, kMeansResult)
+                : kMeansResult.overspill();
+
             // TODO: swap out SOAR for SRAIR when HNSW graphs are used for the centroids
-            return new CentroidInformation(
-                fieldInfo.getVectorDimension(),
-                kMeansResult.centroids(),
-                kMeansResult.assignments(),
-                kMeansResult.overspill()
-            );
+            return new CentroidInformation(fieldInfo.getVectorDimension(), kMeansResult.centroids(), kMeansResult.assignments(), overspill);
         } finally {
             // CentroidData owns the IndexInput backing the streaming centroid view; close once
             // the clustering pass has consumed it (and on any failure mid-way).
             org.apache.lucene.util.IOUtils.closeWhileHandlingException(segmentCentroidData);
         }
+    }
+
+    /**
+     * POC: recomputes forward-link overspill for a merged clustering, discarding the SOAR overspill
+     * that {@link TieredMergeStrategy.MergeAction#execute} already computed. Neighborhoods aren't
+     * carried by {@link KMeansWithOverspill}, so they're recomputed from the final merged centroids
+     * (mirrors the null-neighborhoods guard in {@link HierarchicalKMeans}'s own SOAR-only path).
+     */
+    private OverspillAssignments computeForwardLinkOverspillOnMerge(
+        KMeansFloatVectorValues floatVectorValues,
+        KMeansWithOverspill<float[]> kMeansResult
+    ) throws IOException {
+        float[][] centroids = kMeansResult.centroids();
+        if (centroids.length <= HierarchicalKMeans.MAXK) {
+            return OverspillAssignments.NONE;
+        }
+        NeighborHood[] neighborhoods = mergeExec != null
+            ? NeighborHood.computeNeighborhoods(CentroidOps.FLOAT, mergeExec, numMergeWorkers, centroids, HierarchicalKMeans.MAXK)
+            : NeighborHood.computeNeighborhoods(CentroidOps.FLOAT, centroids, HierarchicalKMeans.MAXK);
+        return ForwardLinkOverspill.computeOverspill(
+            CentroidOps.FLOAT,
+            floatVectorValues,
+            kMeansResult.result(),
+            neighborhoods,
+            forwardLinkParams
+        );
     }
 
     private CentroidInformation calculateCentroidsFullRebuildSliced(
@@ -993,17 +1026,21 @@ public class ESNextDiskBBQVectorsWriter extends IVFVectorsWriter<FlatCentroidInd
         }
         HierarchicalKMeans<float[]> hierarchicalKMeans = HierarchicalKMeans.ofSerial(CentroidOps.FLOAT, floatVectorValues.dimension());
         KMeansNeighbors<float[]> kMeansResult = hierarchicalKMeans.cluster(floatVectorValues, vectorPerCluster);
-        OverspillAssignments soarOverspill = hierarchicalKMeans.computeSoar(
-            floatVectorValues,
-            kMeansResult.result(),
-            kMeansResult.neighborHoods()
-        );
+        OverspillAssignments overspill = forwardLinkParams != null
+            ? ForwardLinkOverspill.computeOverspill(
+                CentroidOps.FLOAT,
+                floatVectorValues,
+                kMeansResult.result(),
+                kMeansResult.neighborHoods(),
+                forwardLinkParams
+            )
+            : hierarchicalKMeans.computeSoar(floatVectorValues, kMeansResult.result(), kMeansResult.neighborHoods());
         if (logger.isDebugEnabled()) {
             logger.debug("final centroid count: {}", kMeansResult.centroids().length);
         }
 
         // TODO: swap out SOAR for SRAIR when HNSW graphs are used for the centroids
-        return new CentroidInformation(fieldInfo.getVectorDimension(), kMeansResult.centroids(), kMeansResult.assignments(), soarOverspill);
+        return new CentroidInformation(fieldInfo.getVectorDimension(), kMeansResult.centroids(), kMeansResult.assignments(), overspill);
     }
 
     static void writeQuantizedValue(IndexOutput indexOutput, byte[] binaryValue, OptimizedScalarQuantizer.QuantizationResult corrections)

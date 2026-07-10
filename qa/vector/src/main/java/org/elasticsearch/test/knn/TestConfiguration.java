@@ -18,6 +18,7 @@ import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.index.VectorSimilarityFunction;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.core.PathUtils;
+import org.elasticsearch.index.codec.vectors.cluster.ForwardLinkOverspill;
 import org.elasticsearch.index.codec.vectors.diskbbq.next.ESNextDiskBBQVectorsFormat;
 import org.elasticsearch.monitor.jvm.JvmInfo;
 import org.elasticsearch.test.knn.data.DatasetConfig;
@@ -83,7 +84,8 @@ public record TestConfiguration(
     String directoryType,
     DatasetConfig datasetConfig,
     int numDeletedDocs,
-    long deleteSeed
+    long deleteSeed,
+    ForwardLinkOverspill.Params forwardLinkParams
 ) {
 
     static final ParseField DATASET_FIELD = new ParseField("dataset");
@@ -126,6 +128,14 @@ public record TestConfiguration(
     static final ParseField SEARCH_PARAMS = new ParseField("search_params");
     static final ParseField FLAT_VECTOR_THRESHOLD = new ParseField("flat_vector_threshold");
     static final ParseField AUTO_CALIBRATE_FIELD = new ParseField("auto_calibrate");
+    // POC forward-link overspill params; all four must be set together (see ForwardLinkOverspill).
+    static final ParseField OVERSPILLED_NN_K_FIELD = new ParseField("overspilled_nn_k");
+    static final ParseField OVERSPILL_PRIMARY_SUBSET_PERCENT_FIELD = new ParseField("overspill_primary_subset_percent");
+    static final ParseField OVERSPILL_NEAREST_CENTROID_COUNT_FIELD = new ParseField("overspill_nearest_centroid_count");
+    static final ParseField OVERSPILL_LIMIT_MULTIPLE_FIELD = new ParseField("overspill_limit_multiple");
+    // POC forward-link overspill trim-mode params; optional, default to PRIORITY trimming.
+    static final ParseField OVERSPILL_TRIM_MODE_FIELD = new ParseField("overspill_trim_mode");
+    static final ParseField OVERSPILL_SCORE_DECAY_FIELD = new ParseField("overspill_score_decay");
     static final ParseField DIRECTORY_TYPE_FIELD = new ParseField("directory_type");
     static final ParseField NUM_DELETED_DOCS_FIELD = new ParseField("num_deleted_docs");
     static final ParseField DELETE_SEED_FIELD = new ParseField("delete_seed");
@@ -200,6 +210,12 @@ public record TestConfiguration(
         PARSER.declareInt(Builder::setFlatVectorThreshold, FLAT_VECTOR_THRESHOLD);
         PARSER.declareInt(Builder::setSecondaryClusterSize, SECONDARY_CLUSTER_SIZE);
         PARSER.declareBoolean(Builder::setAutoCalibrate, AUTO_CALIBRATE_FIELD);
+        PARSER.declareInt(Builder::setOverspilledNnK, OVERSPILLED_NN_K_FIELD);
+        PARSER.declareFloat(Builder::setOverspillPrimarySubsetPercent, OVERSPILL_PRIMARY_SUBSET_PERCENT_FIELD);
+        PARSER.declareInt(Builder::setOverspillNearestCentroidCount, OVERSPILL_NEAREST_CENTROID_COUNT_FIELD);
+        PARSER.declareFloat(Builder::setOverspillLimitMultiple, OVERSPILL_LIMIT_MULTIPLE_FIELD);
+        PARSER.declareString(Builder::setOverspillTrimMode, OVERSPILL_TRIM_MODE_FIELD);
+        PARSER.declareFloat(Builder::setOverspillScoreDecay, OVERSPILL_SCORE_DECAY_FIELD);
         PARSER.declareString(Builder::setDirectoryType, DIRECTORY_TYPE_FIELD);
         PARSER.declareInt(Builder::setNumDeletedDocs, NUM_DELETED_DOCS_FIELD);
         PARSER.declareLong(Builder::setDeleteSeed, DELETE_SEED_FIELD);
@@ -441,6 +457,12 @@ public record TestConfiguration(
         private int secondaryClusterSize = -1;
         private boolean autoCalibrate = false;
         private int flatIndexThreshold = -1; // use format's default threshold
+        private Integer overspilledNnK = null;
+        private Float overspillPrimarySubsetPercent = null;
+        private Integer overspillNearestCentroidCount = null;
+        private Float overspillLimitMultiple = null;
+        private String overspillTrimMode = null;
+        private Float overspillScoreDecay = null;
         private String directoryType = "default";
         private int numDeletedDocs = 0;
         private long deleteSeed = 1751900822751L;
@@ -661,6 +683,36 @@ public record TestConfiguration(
 
         public Builder setAutoCalibrate(boolean autoCalibrate) {
             this.autoCalibrate = autoCalibrate;
+            return this;
+        }
+
+        public Builder setOverspilledNnK(int overspilledNnK) {
+            this.overspilledNnK = overspilledNnK;
+            return this;
+        }
+
+        public Builder setOverspillPrimarySubsetPercent(float overspillPrimarySubsetPercent) {
+            this.overspillPrimarySubsetPercent = overspillPrimarySubsetPercent;
+            return this;
+        }
+
+        public Builder setOverspillNearestCentroidCount(int overspillNearestCentroidCount) {
+            this.overspillNearestCentroidCount = overspillNearestCentroidCount;
+            return this;
+        }
+
+        public Builder setOverspillLimitMultiple(float overspillLimitMultiple) {
+            this.overspillLimitMultiple = overspillLimitMultiple;
+            return this;
+        }
+
+        public Builder setOverspillTrimMode(String overspillTrimMode) {
+            this.overspillTrimMode = overspillTrimMode;
+            return this;
+        }
+
+        public Builder setOverspillScoreDecay(float overspillScoreDecay) {
+            this.overspillScoreDecay = overspillScoreDecay;
             return this;
         }
 
@@ -891,6 +943,7 @@ public record TestConfiguration(
             if (autoCalibrate && indexType != KnnIndexTester.IndexType.IVF) {
                 throw new IllegalArgumentException("auto_calibrate is only supported when index_type is ivf");
             }
+            ForwardLinkOverspill.Params forwardLinkParams = buildForwardLinkParams();
             if (numDeletedDocs < 0) {
                 throw new IllegalArgumentException("num_deleted_docs must be >= 0, but got: " + numDeletedDocs);
             }
@@ -969,7 +1022,62 @@ public record TestConfiguration(
                 directoryType,
                 datasetConfig,
                 numDeletedDocs,
-                deleteSeed
+                deleteSeed,
+                forwardLinkParams
+            );
+        }
+
+        /**
+         * POC forward-link overspill config: all four of {@code overspilled_nn_k},
+         * {@code overspill_primary_subset_percent}, {@code overspill_nearest_centroid_count}, and
+         * {@code overspill_limit_multiple} must be set together, or none at all.
+         */
+        private ForwardLinkOverspill.Params buildForwardLinkParams() {
+            int setCount = (overspilledNnK != null ? 1 : 0) + (overspillPrimarySubsetPercent != null ? 1 : 0)
+                + (overspillNearestCentroidCount != null ? 1 : 0) + (overspillLimitMultiple != null ? 1 : 0);
+            if (setCount == 0) {
+                return null;
+            }
+            if (setCount < 4) {
+                throw new IllegalArgumentException(
+                    Strings.format(
+                        "%s, %s, %s, and %s must all be set together for forward-link overspill",
+                        OVERSPILLED_NN_K_FIELD.getPreferredName(),
+                        OVERSPILL_PRIMARY_SUBSET_PERCENT_FIELD.getPreferredName(),
+                        OVERSPILL_NEAREST_CENTROID_COUNT_FIELD.getPreferredName(),
+                        OVERSPILL_LIMIT_MULTIPLE_FIELD.getPreferredName()
+                    )
+                );
+            }
+            if (indexType != KnnIndexTester.IndexType.IVF) {
+                throw new IllegalArgumentException("forward-link overspill is only supported when index_type is ivf");
+            }
+            if (overspillTrimMode == null && overspillScoreDecay != null) {
+                throw new IllegalArgumentException(
+                    Strings.format(
+                        "%s requires %s to be set",
+                        OVERSPILL_SCORE_DECAY_FIELD.getPreferredName(),
+                        OVERSPILL_TRIM_MODE_FIELD.getPreferredName()
+                    )
+                );
+            }
+            if (overspillTrimMode == null) {
+                return new ForwardLinkOverspill.Params(
+                    overspilledNnK,
+                    overspillPrimarySubsetPercent,
+                    overspillNearestCentroidCount,
+                    overspillLimitMultiple
+                );
+            }
+            ForwardLinkOverspill.TrimMode trimMode = ForwardLinkOverspill.TrimMode.valueOf(overspillTrimMode.toUpperCase(Locale.ROOT));
+            float scoreDecay = overspillScoreDecay != null ? overspillScoreDecay : 1.0f;
+            return new ForwardLinkOverspill.Params(
+                overspilledNnK,
+                overspillPrimarySubsetPercent,
+                overspillNearestCentroidCount,
+                overspillLimitMultiple,
+                trimMode,
+                scoreDecay
             );
         }
 
@@ -1031,6 +1139,16 @@ public record TestConfiguration(
             }
             builder.field(FLAT_VECTOR_THRESHOLD.getPreferredName(), flatVectorThreshold);
             builder.field(AUTO_CALIBRATE_FIELD.getPreferredName(), autoCalibrate);
+            if (overspilledNnK != null) {
+                builder.field(OVERSPILLED_NN_K_FIELD.getPreferredName(), overspilledNnK);
+                builder.field(OVERSPILL_PRIMARY_SUBSET_PERCENT_FIELD.getPreferredName(), overspillPrimarySubsetPercent);
+                builder.field(OVERSPILL_NEAREST_CENTROID_COUNT_FIELD.getPreferredName(), overspillNearestCentroidCount);
+                builder.field(OVERSPILL_LIMIT_MULTIPLE_FIELD.getPreferredName(), overspillLimitMultiple);
+                if (overspillTrimMode != null) {
+                    builder.field(OVERSPILL_TRIM_MODE_FIELD.getPreferredName(), overspillTrimMode);
+                    builder.field(OVERSPILL_SCORE_DECAY_FIELD.getPreferredName(), overspillScoreDecay);
+                }
+            }
             builder.field(DIRECTORY_TYPE_FIELD.getPreferredName(), directoryType);
             if (numDeletedDocs > 0) {
                 builder.field(NUM_DELETED_DOCS_FIELD.getPreferredName(), numDeletedDocs);

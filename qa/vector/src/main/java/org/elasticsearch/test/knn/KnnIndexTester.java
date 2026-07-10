@@ -232,7 +232,8 @@ public class KnnIndexTester {
                     flatVectorThreshold,
                     args.datasetConfig().isSliced() ? KnnIndexer.PARTITION_ID_FIELD : null,
                     IvfFlushConfigSource.empty(),
-                    mergeConfigResolver
+                    mergeConfigResolver,
+                    args.forwardLinkParams()
                 );
             }
             case GPU_HNSW -> {
